@@ -6,7 +6,7 @@ export type Language = 'en' | 'zh-CN' | 'zh-TW';
 export const translations: Record<Language, Record<string, string>> = {
     'en': {
         // App Header
-        'app.title': 'ETHERIA',
+        'app.title': 'Roman Bath',
         'app.activePath': 'Active Path',
         'app.systemNode': 'System Node // Latency: Nominal',
         'app.reset': 'Reset',
@@ -150,7 +150,7 @@ export const translations: Record<Language, Record<string, string>> = {
     },
     'zh-CN': {
         // App Header
-        'app.title': 'ETHERIA',
+        'app.title': '罗马大浴场',
         'app.activePath': '当前路径',
         'app.systemNode': '系统节点 // 延迟: 正常',
         'app.reset': '重置',
@@ -294,7 +294,7 @@ export const translations: Record<Language, Record<string, string>> = {
     },
     'zh-TW': {
         // App Header
-        'app.title': 'ETHERIA',
+        'app.title': '羅馬大浴場',
         'app.activePath': '當前路徑',
         'app.systemNode': '系統節點 // 延遲: 正常',
         'app.reset': '重置',

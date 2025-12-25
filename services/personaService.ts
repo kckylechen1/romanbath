@@ -5,8 +5,43 @@
 
 import { Persona } from '../types';
 
-const PERSONAS_KEY = 'etheria_personas';
-const ACTIVE_PERSONA_KEY = 'etheria_active_persona';
+const STORAGE_PREFIX = 'romanbath';
+const LEGACY_STORAGE_PREFIXES = ['etheria'] as const;
+
+const PERSONAS_KEY = `${STORAGE_PREFIX}_personas`;
+const LEGACY_PERSONAS_KEYS = LEGACY_STORAGE_PREFIXES.map(prefix => `${prefix}_personas`);
+
+const ACTIVE_PERSONA_KEY = `${STORAGE_PREFIX}_active_persona`;
+const LEGACY_ACTIVE_PERSONA_KEYS = LEGACY_STORAGE_PREFIXES.map(prefix => `${prefix}_active_persona`);
+
+const getItemWithLegacyFallback = (primaryKey: string, legacyKeys: string[]): string | null => {
+    const current = localStorage.getItem(primaryKey);
+    if (current !== null) return current;
+
+    for (const legacyKey of legacyKeys) {
+        const legacyValue = localStorage.getItem(legacyKey);
+        if (legacyValue !== null) {
+            localStorage.setItem(primaryKey, legacyValue);
+            return legacyValue;
+        }
+    }
+
+    return null;
+};
+
+const setItemForAllKeys = (primaryKey: string, legacyKeys: string[], value: string): void => {
+    localStorage.setItem(primaryKey, value);
+    for (const legacyKey of legacyKeys) {
+        localStorage.setItem(legacyKey, value);
+    }
+};
+
+const removeItemForAllKeys = (primaryKey: string, legacyKeys: string[]): void => {
+    localStorage.removeItem(primaryKey);
+    for (const legacyKey of legacyKeys) {
+        localStorage.removeItem(legacyKey);
+    }
+};
 
 // Generate unique ID
 const generateId = (): string => {
@@ -16,7 +51,7 @@ const generateId = (): string => {
 // Get all saved personas
 export const getPersonas = (): Persona[] => {
     try {
-        const stored = localStorage.getItem(PERSONAS_KEY);
+        const stored = getItemWithLegacyFallback(PERSONAS_KEY, LEGACY_PERSONAS_KEYS);
         if (stored) {
             return JSON.parse(stored);
         }
@@ -29,7 +64,7 @@ export const getPersonas = (): Persona[] => {
 // Save all personas
 export const savePersonas = (personas: Persona[]): void => {
     try {
-        localStorage.setItem(PERSONAS_KEY, JSON.stringify(personas));
+        setItemForAllKeys(PERSONAS_KEY, LEGACY_PERSONAS_KEYS, JSON.stringify(personas));
     } catch (e) {
         console.error('Failed to save personas:', e);
     }
@@ -97,7 +132,7 @@ export const getPersonaById = (id: string): Persona | null => {
 // Get the active persona ID
 export const getActivePersonaId = (): string | null => {
     try {
-        return localStorage.getItem(ACTIVE_PERSONA_KEY);
+        return getItemWithLegacyFallback(ACTIVE_PERSONA_KEY, LEGACY_ACTIVE_PERSONA_KEYS);
     } catch (e) {
         return null;
     }
@@ -107,9 +142,9 @@ export const getActivePersonaId = (): string | null => {
 export const setActivePersonaId = (id: string | null): void => {
     try {
         if (id) {
-            localStorage.setItem(ACTIVE_PERSONA_KEY, id);
+            setItemForAllKeys(ACTIVE_PERSONA_KEY, LEGACY_ACTIVE_PERSONA_KEYS, id);
         } else {
-            localStorage.removeItem(ACTIVE_PERSONA_KEY);
+            removeItemForAllKeys(ACTIVE_PERSONA_KEY, LEGACY_ACTIVE_PERSONA_KEYS);
         }
     } catch (e) {
         console.error('Failed to set active persona:', e);

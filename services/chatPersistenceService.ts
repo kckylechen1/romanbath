@@ -5,8 +5,43 @@
 
 import { Message, ChatPersistenceState, AppSettings } from '../types';
 
-const CHAT_STATE_KEY = 'etheria_chat_state';
-const APP_SETTINGS_KEY = 'etheria_app_settings';
+const STORAGE_PREFIX = 'romanbath';
+const LEGACY_STORAGE_PREFIXES = ['etheria'] as const;
+
+const CHAT_STATE_KEY = `${STORAGE_PREFIX}_chat_state`;
+const LEGACY_CHAT_STATE_KEYS = LEGACY_STORAGE_PREFIXES.map(prefix => `${prefix}_chat_state`);
+
+const APP_SETTINGS_KEY = `${STORAGE_PREFIX}_app_settings`;
+const LEGACY_APP_SETTINGS_KEYS = LEGACY_STORAGE_PREFIXES.map(prefix => `${prefix}_app_settings`);
+
+const getItemWithLegacyFallback = (primaryKey: string, legacyKeys: string[]): string | null => {
+    const current = localStorage.getItem(primaryKey);
+    if (current !== null) return current;
+
+    for (const legacyKey of legacyKeys) {
+        const legacyValue = localStorage.getItem(legacyKey);
+        if (legacyValue !== null) {
+            localStorage.setItem(primaryKey, legacyValue);
+            return legacyValue;
+        }
+    }
+
+    return null;
+};
+
+const setItemForAllKeys = (primaryKey: string, legacyKeys: string[], value: string): void => {
+    localStorage.setItem(primaryKey, value);
+    for (const legacyKey of legacyKeys) {
+        localStorage.setItem(legacyKey, value);
+    }
+};
+
+const removeItemForAllKeys = (primaryKey: string, legacyKeys: string[]): void => {
+    localStorage.removeItem(primaryKey);
+    for (const legacyKey of legacyKeys) {
+        localStorage.removeItem(legacyKey);
+    }
+};
 
 // Default app settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -24,7 +59,7 @@ export const saveChatState = (characterId: string, messages: Message[]): void =>
             messages,
             lastUpdated: Date.now(),
         };
-        localStorage.setItem(CHAT_STATE_KEY, JSON.stringify(state));
+        setItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS, JSON.stringify(state));
     } catch (e) {
         console.error('Failed to save chat state:', e);
     }
@@ -33,7 +68,7 @@ export const saveChatState = (characterId: string, messages: Message[]): void =>
 // Load saved chat state
 export const loadChatState = (): ChatPersistenceState | null => {
     try {
-        const stored = localStorage.getItem(CHAT_STATE_KEY);
+        const stored = getItemWithLegacyFallback(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS);
         if (stored) {
             const state = JSON.parse(stored) as ChatPersistenceState;
             // Validate the state has required fields
@@ -50,7 +85,7 @@ export const loadChatState = (): ChatPersistenceState | null => {
 // Clear saved chat state
 export const clearChatState = (): void => {
     try {
-        localStorage.removeItem(CHAT_STATE_KEY);
+        removeItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS);
     } catch (e) {
         console.error('Failed to clear chat state:', e);
     }
@@ -64,7 +99,7 @@ export const hasSavedChat = (): boolean => {
 // Get app settings
 export const getAppSettings = (): AppSettings => {
     try {
-        const stored = localStorage.getItem(APP_SETTINGS_KEY);
+        const stored = getItemWithLegacyFallback(APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS);
         if (stored) {
             return { ...DEFAULT_APP_SETTINGS, ...JSON.parse(stored) };
         }
@@ -79,7 +114,7 @@ export const saveAppSettings = (settings: Partial<AppSettings>): void => {
     try {
         const current = getAppSettings();
         const updated = { ...current, ...settings };
-        localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(updated));
+        setItemForAllKeys(APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS, JSON.stringify(updated));
     } catch (e) {
         console.error('Failed to save app settings:', e);
     }

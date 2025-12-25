@@ -512,8 +512,15 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
         };
 
         // Try to load from localStorage first
-        const storedKey = localStorage.getItem(`etheria_api_key_${config.mainApi}`);
+        const primaryStorageKey = `romanbath_api_key_${config.mainApi}`;
+        const legacyStorageKey = `etheria_api_key_${config.mainApi}`;
+
+        const storedKey = localStorage.getItem(primaryStorageKey) ?? localStorage.getItem(legacyStorageKey);
         if (storedKey && !config.apiKey) {
+            // Migrate legacy key name to the new prefix for forward compatibility
+            if (!localStorage.getItem(primaryStorageKey)) {
+                localStorage.setItem(primaryStorageKey, storedKey);
+            }
             console.log(`Loading ${config.mainApi} API key from localStorage`);
             handleChange('apiKey', storedKey);
             return;
@@ -604,10 +611,14 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
         handleChange('apiKey', value);
 
         // Save to localStorage for persistence
+        const primaryStorageKey = `romanbath_api_key_${config.mainApi}`;
+        const legacyStorageKey = `etheria_api_key_${config.mainApi}`;
         if (value) {
-            localStorage.setItem(`etheria_api_key_${config.mainApi}`, value);
+            localStorage.setItem(primaryStorageKey, value);
+            localStorage.setItem(legacyStorageKey, value);
         } else {
-            localStorage.removeItem(`etheria_api_key_${config.mainApi}`);
+            localStorage.removeItem(primaryStorageKey);
+            localStorage.removeItem(legacyStorageKey);
         }
 
         // Save to SillyTavern secrets for the current provider
@@ -706,7 +717,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
 
                 <div className="p-4 border-t border-white/5 hidden md:block">
                     <div className="text-[10px] text-gray-600 font-mono text-center opacity-60">
-                        ETHERIA v2.5 (Lorebook)
+                        Roman Bath (Lorebook)
                     </div>
                 </div>
             </div>
