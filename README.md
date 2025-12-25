@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" alt="Etheria Tavern Banner" width="100%" />
+  <img src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" alt="Roman Bath Banner" width="100%" />
   
-  # ✨ Etheria Tavern
+  # 🏛️ 罗马大浴场 Roman Bath
   
   **A Modern, Glassmorphic Frontend for SillyTavern**
   
@@ -15,7 +15,7 @@
 
 ## 📖 About
 
-Etheria Tavern is a modern, sleek frontend redesign for [SillyTavern](https://github.com/SillyTavern/SillyTavern). It provides a premium glassmorphic UI experience while connecting to your existing SillyTavern backend for AI-powered roleplay conversations.
+**罗马大浴场 (Roman Bath)** is a modern, sleek frontend redesign for [SillyTavern](https://github.com/SillyTavern/SillyTavern). It provides a premium glassmorphic UI experience while connecting to your existing SillyTavern backend for AI-powered roleplay conversations.
 
 ### ✨ Features
 
@@ -50,8 +50,8 @@ Etheria Tavern is a modern, sleek frontend redesign for [SillyTavern](https://gi
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/etheria-tavern.git
-   cd etheria-tavern
+   git clone https://github.com/kckylechen1/romanbath.git
+   cd romanbath
    ```
 
 2. **Install dependencies**
@@ -79,7 +79,7 @@ Etheria Tavern is a modern, sleek frontend redesign for [SillyTavern](https://gi
 
 ### Connecting to SillyTavern
 
-By default, Etheria Tavern connects to SillyTavern at `http://localhost:8000`. Make sure:
+By default, Roman Bath connects to SillyTavern at `http://localhost:8000`. Make sure:
 
 1. SillyTavern is running (`npm start` in your SillyTavern directory)
 2. CORS is enabled in SillyTavern's settings
@@ -111,7 +111,7 @@ You can also use AI providers directly without SillyTavern:
 ## 📁 Project Structure
 
 ```
-etheria-tavern/
+romanbath/
 ├── components/           # React components
 │   ├── ApiProviderSelector.tsx
 │   ├── CharacterList.tsx
