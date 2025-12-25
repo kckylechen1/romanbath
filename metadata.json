@@ -1,0 +1,7 @@
+{
+  "name": "Etheria Tavern",
+  "description": "A modern, glassmorphic redesign of the classic roleplay chat interface. Features dynamic character personas, immersive backgrounds, and real-time streaming responses powered by Gemini 2.5 Flash.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
