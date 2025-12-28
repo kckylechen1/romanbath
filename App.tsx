@@ -9,11 +9,13 @@ import { saveChat, loadChat, getChatList, createNewChatFileName, stripChatExtens
 import CharacterList from './components/CharacterList';
 import MessageBubble from './components/MessageBubble';
 import SettingsPanel from './components/SettingsPanel';
-import { Send, Menu, Settings as SettingsIcon, Maximize2, Minimize2, Trash2, Sparkles, X, Mic, Globe, Clock, MessageCircle, Plus, History } from 'lucide-react';
+import { useToast } from './components/Toast';
+import { Send, Menu, Settings as SettingsIcon, Maximize2, Minimize2, Trash2, Sparkles, X, Mic, Globe, Clock, MessageCircle, Plus, History, AlertCircle } from 'lucide-react';
 import { LanguageProvider, useLanguage } from './i18n';
 
 const AppContent: React.FC = () => {
     const { t, language, setLanguage } = useLanguage();
+    const toast = useToast();
     const [characters, setCharacters] = useState<Character[]>([]);
     const [selectedCharacter, setSelectedCharacter] = useState<Character>({
         id: 'default',
@@ -435,11 +437,35 @@ const AppContent: React.FC = () => {
                     : msg
             ));
 
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error generating response:", error);
+
+            // Parse error message for user-friendly display
+            let errorTitle = t('error.generation') || 'Generation Failed';
+            let errorMessage = error?.message || 'Unknown error occurred';
+
+            // Handle specific error types
+            if (errorMessage.includes('API key')) {
+                errorTitle = t('error.apiKey') || 'API Key Error';
+                errorMessage = t('error.apiKeyMessage') || 'Please check your API key in settings.';
+            } else if (errorMessage.includes('rate limit') || errorMessage.includes('429')) {
+                errorTitle = t('error.rateLimit') || 'Rate Limited';
+                errorMessage = t('error.rateLimitMessage') || 'Too many requests. Please wait a moment.';
+            } else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+                errorTitle = t('error.network') || 'Network Error';
+                errorMessage = t('error.networkMessage') || 'Could not connect to the server.';
+            } else if (errorMessage.includes('timeout')) {
+                errorTitle = t('error.timeout') || 'Request Timeout';
+                errorMessage = t('error.timeoutMessage') || 'The request took too long. Try again.';
+            }
+
+            // Show toast notification
+            toast.error(errorTitle, errorMessage);
+
+            // Update message bubble with error
             setMessages(prev => prev.map(msg =>
                 msg.id === botMsgId
-                    ? { ...msg, content: "ERROR: Connection severed. The ether is silent.", isThinking: false }
+                    ? { ...msg, content: `⚠️ ${errorTitle}: ${errorMessage}`, isThinking: false }
                     : msg
             ));
         } finally {
@@ -626,8 +652,8 @@ const AppContent: React.FC = () => {
                                 <button
                                     onClick={() => setShowChatHistory(!showChatHistory)}
                                     className={`hidden md:flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors rounded-lg border ${showChatHistory
-                                            ? 'text-blue-300 bg-blue-500/10 border-blue-500/20'
-                                            : 'text-slate-400 hover:text-blue-300 border-transparent hover:bg-blue-500/10 hover:border-blue-500/20'
+                                        ? 'text-blue-300 bg-blue-500/10 border-blue-500/20'
+                                        : 'text-slate-400 hover:text-blue-300 border-transparent hover:bg-blue-500/10 hover:border-blue-500/20'
                                         }`}
                                     title="Chat history"
                                 >
@@ -665,8 +691,8 @@ const AppContent: React.FC = () => {
                                                             setShowChatHistory(false);
                                                         }}
                                                         className={`w-full text-left p-3 rounded-lg transition-colors ${currentChatFileName === stripChatExtension(chat.file_name)
-                                                                ? 'bg-blue-500/10 border border-blue-500/20'
-                                                                : 'hover:bg-white/5'
+                                                            ? 'bg-blue-500/10 border border-blue-500/20'
+                                                            : 'hover:bg-white/5'
                                                             }`}
                                                     >
                                                         <div className="flex items-center justify-between">
@@ -804,6 +830,9 @@ const AppContent: React.FC = () => {
                 )}
 
             </div>
+
+            {/* Toast Notifications */}
+            <toast.ToastContainer />
         </div>
     );
 };

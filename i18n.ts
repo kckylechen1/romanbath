@@ -147,6 +147,18 @@ export const translations: Record<Language, Record<string, string>> = {
         'chat.continue': 'Continue',
         'chat.autoSave': 'Auto-save chats',
         'chat.autoRestore': 'Auto-restore last chat',
+
+        // Error Messages
+        'error.generation': 'Generation Failed',
+        'error.apiKey': 'API Key Error',
+        'error.apiKeyMessage': 'Please check your API key in settings.',
+        'error.rateLimit': 'Rate Limited',
+        'error.rateLimitMessage': 'Too many requests. Please wait a moment.',
+        'error.network': 'Network Error',
+        'error.networkMessage': 'Could not connect to the server.',
+        'error.timeout': 'Request Timeout',
+        'error.timeoutMessage': 'The request took too long. Try again.',
+        'error.unknown': 'Unknown Error',
     },
     'zh-CN': {
         // App Header
@@ -291,6 +303,18 @@ export const translations: Record<Language, Record<string, string>> = {
         'chat.continue': '继续对话',
         'chat.autoSave': '自动保存聊天',
         'chat.autoRestore': '自动恢复上次聊天',
+
+        // Error Messages
+        'error.generation': '生成失败',
+        'error.apiKey': 'API 密钥错误',
+        'error.apiKeyMessage': '请检查设置中的 API 密钥。',
+        'error.rateLimit': '请求过于频繁',
+        'error.rateLimitMessage': '请求太多了，请稍等片刻。',
+        'error.network': '网络错误',
+        'error.networkMessage': '无法连接到服务器。',
+        'error.timeout': '请求超时',
+        'error.timeoutMessage': '请求时间过长，请重试。',
+        'error.unknown': '未知错误',
     },
     'zh-TW': {
         // App Header
@@ -435,6 +459,18 @@ export const translations: Record<Language, Record<string, string>> = {
         'chat.continue': '繼續對話',
         'chat.autoSave': '自動儲存聊天',
         'chat.autoRestore': '自動恢復上次聊天',
+
+        // Error Messages
+        'error.generation': '生成失敗',
+        'error.apiKey': 'API 金鑰錯誤',
+        'error.apiKeyMessage': '請檢查設定中的 API 金鑰。',
+        'error.rateLimit': '請求過於頻繁',
+        'error.rateLimitMessage': '請求太多了，請稍等片刻。',
+        'error.network': '網路錯誤',
+        'error.networkMessage': '無法連線到伺服器。',
+        'error.timeout': '請求逾時',
+        'error.timeoutMessage': '請求時間過長，請重試。',
+        'error.unknown': '未知錯誤',
     }
 };
 
