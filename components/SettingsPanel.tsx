@@ -68,6 +68,7 @@ const BufferedInput: React.FC<BufferedProps> = ({ value, onSave, label, classNam
     const [localValue, setLocalValue] = useState(value ?? '');
     const [isDirty, setIsDirty] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isTyping, setIsTyping] = useState(false); // Track if user is actively typing
 
     // Only sync from external value if we're not dirty (user hasn't made changes)
     useEffect(() => {
@@ -81,22 +82,43 @@ const BufferedInput: React.FC<BufferedProps> = ({ value, onSave, label, classNam
         try {
             await onSave(localValue);
             setIsDirty(false);
+            setIsTyping(false);
         } finally {
             setIsSaving(false);
         }
     };
+
+    // Determine if we should show as text (to display placeholder) or password
+    const isEmpty = localValue === '' || localValue === undefined || localValue === null;
+    const shouldShowAsPassword = type === 'password' && (isTyping || !isEmpty);
+    const inputType = shouldShowAsPassword ? 'password' : (type === 'password' ? 'text' : type);
 
     return (
         <div className="space-y-2">
             {label && <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider">{label}</label>}
             <input
                 {...props}
-                type={type}
+                type={inputType}
                 value={localValue}
                 onChange={(e) => {
                     const val = type === 'number' ? parseFloat(e.target.value) : e.target.value;
                     setLocalValue(val);
                     setIsDirty(true);
+                    if (type === 'password') {
+                        setIsTyping(true);
+                    }
+                }}
+                onFocus={() => {
+                    // When focusing on a password field with existing content, show as password
+                    if (type === 'password' && !isEmpty) {
+                        setIsTyping(true);
+                    }
+                }}
+                onBlur={() => {
+                    // When leaving the field, if it's empty, show placeholder again
+                    if (type === 'password' && isEmpty) {
+                        setIsTyping(false);
+                    }
                 }}
                 className={className}
             />
@@ -588,7 +610,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
     };
 
     const handleProviderSelect = (provider: ApiProvider) => {
-        const newConfig = { ...config, mainApi: provider.id };
+        // Clear API key first, then let useEffect load the correct one for this provider
+        const newConfig = {
+            ...config,
+            mainApi: provider.id,
+            apiKey: '' // Clear current key, useEffect will load from localStorage if available
+        };
 
         setConnectionStatus('idle');
         setConnectionMessage('');
@@ -621,16 +648,114 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
             localStorage.removeItem(legacyStorageKey);
         }
 
-        // Save to SillyTavern secrets for the current provider
+        // Save to SillyTavern secrets for cloud providers (not local)
         if (value && ['perplexity', 'openai', 'openrouter', 'google', 'koboldhorde'].includes(config.mainApi)) {
             const success = await saveSecret(config.mainApi, value);
             if (success) {
-                setConnectionStatus('success');
-                setConnectionMessage('API Key saved successfully');
+                setConnectionStatus('loading');
+                setConnectionMessage('Testing connection...');
+
+                // Test the API connection
+                const testResult = await testApiConnection(config.mainApi, value, config.apiUrl, config.modelName);
+                if (testResult.success) {
+                    setConnectionStatus('success');
+                    setConnectionMessage(testResult.message || 'Connected successfully');
+                } else {
+                    setConnectionStatus('error');
+                    setConnectionMessage(testResult.message || 'Connection failed');
+                }
             } else {
                 setConnectionStatus('error');
                 setConnectionMessage('Failed to save API Key');
             }
+        }
+
+        // For local API, just test connection directly (no backend secret storage)
+        if (value && config.mainApi === 'local') {
+            setConnectionStatus('loading');
+            setConnectionMessage('Testing connection...');
+
+            const testResult = await testApiConnection('local', value, config.apiUrl, config.modelName);
+            if (testResult.success) {
+                setConnectionStatus('success');
+                setConnectionMessage(testResult.message || 'Connected successfully');
+            } else {
+                setConnectionStatus('error');
+                setConnectionMessage(testResult.message || 'Connection failed');
+            }
+        }
+    };
+
+    // Test API connection by sending a minimal request
+    const testApiConnection = async (
+        provider: string,
+        apiKey: string,
+        apiUrl?: string,
+        modelName?: string
+    ): Promise<{ success: boolean; message: string }> => {
+        try {
+            let testUrl = '';
+            let headers: Record<string, string> = {};
+            let body: any = null;
+            let method = 'GET';
+
+            switch (provider) {
+                case 'openai':
+                    testUrl = 'https://api.openai.com/v1/models';
+                    headers = { 'Authorization': `Bearer ${apiKey}` };
+                    break;
+                case 'openrouter':
+                    testUrl = 'https://openrouter.ai/api/v1/models';
+                    headers = { 'Authorization': `Bearer ${apiKey}` };
+                    break;
+                case 'google':
+                    testUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+                    break;
+                case 'perplexity':
+                    // Perplexity doesn't have a models endpoint, test with a minimal chat request
+                    testUrl = 'https://api.perplexity.ai/chat/completions';
+                    headers = {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    };
+                    body = JSON.stringify({
+                        model: 'sonar',
+                        messages: [{ role: 'user', content: 'Hi' }],
+                        max_tokens: 1
+                    });
+                    method = 'POST';
+                    break;
+                case 'local':
+                    // Test local proxy through Vite's proxy to bypass CORS
+                    // The proxy rewrites /local-api/* to localhost:8045/*
+                    testUrl = '/local-api/v1/models';
+                    headers = { 'Authorization': `Bearer ${apiKey}` };
+                    break;
+                default:
+                    return { success: true, message: 'API Key saved (no test available)' };
+            }
+
+            const response = await fetch(testUrl, {
+                method,
+                headers,
+                body
+            });
+
+            if (response.ok) {
+                return { success: true, message: 'API connection verified ✓' };
+            } else if (response.status === 401 || response.status === 403) {
+                return { success: false, message: 'Invalid API Key' };
+            } else if (response.status === 429) {
+                // Rate limited but key is valid
+                return { success: true, message: 'API Key valid (rate limited)' };
+            } else {
+                return { success: false, message: `API error: ${response.status}` };
+            }
+        } catch (error: any) {
+            if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+                return { success: false, message: 'Network error - cannot reach API' };
+            }
+            return { success: false, message: error.message || 'Connection test failed' };
         }
     };
 
@@ -766,7 +891,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
                                 </div>
 
                                 {/* Only show API URL + optional key for local APIs that don't require a key */}
-                                {config.mainApi !== 'koboldhorde' && !PROVIDERS.find(p => p.id === config.mainApi)?.requiresKey && (
+                                {config.mainApi !== 'koboldhorde' && config.mainApi !== 'local' && !PROVIDERS.find(p => p.id === config.mainApi)?.requiresKey && (
                                     <div className="space-y-4">
                                         <BufferedInput
                                             label="API URL"
@@ -783,6 +908,51 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
                                             placeholder="Enter API Key if required"
                                             className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-slate-500/40 font-mono"
                                         />
+                                    </div>
+                                )}
+
+                                {/* Local Proxy Settings */}
+                                {config.mainApi === 'local' && (
+                                    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
+                                            <h4 className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+                                                <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
+                                                本地反代 (Local Proxy)
+                                            </h4>
+                                            <p className="text-xs text-slate-400 mt-1">
+                                                连接到本地 OpenAI 兼容 API，支持 Gemini、Claude 等模型
+                                            </p>
+                                        </div>
+                                        <BufferedInput
+                                            label="API URL"
+                                            value={config.apiUrl}
+                                            onSave={(val) => handleChange('apiUrl', val)}
+                                            placeholder="http://localhost:8045/v1"
+                                            className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-slate-500/40 font-mono"
+                                        />
+                                        <BufferedInput
+                                            label="API Key"
+                                            type="password"
+                                            value={config.apiKey}
+                                            onSave={handleApiKeyChange}
+                                            placeholder="Enter your API Key"
+                                            className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-slate-500/40 font-mono"
+                                        />
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-2">
+                                                Model
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={config.modelName || ''}
+                                                onChange={(e) => handleChange('modelName', e.target.value)}
+                                                placeholder="gemini-2.5-pro"
+                                                className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-slate-500/40 font-mono"
+                                            />
+                                            <p className="text-[10px] text-gray-500">
+                                                输入模型名称，如 gemini-2.5-pro, gemini-3-flash, claude-3-sonnet 等
+                                            </p>
+                                        </div>
                                     </div>
                                 )}
 
@@ -865,7 +1035,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
                                     </div>
                                 )}
 
-                                {(PROVIDERS.find(p => p.id === config.mainApi)?.requiresKey) && (
+                                {(PROVIDERS.find(p => p.id === config.mainApi)?.requiresKey) && config.mainApi !== 'local' && (
                                     <BufferedInput
                                         label={
                                             <>

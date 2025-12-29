@@ -51,7 +51,7 @@ const OllamaIcon = () => (
     </svg>
 );
 
-export type ApiProviderId = 'openai' | 'koboldhorde' | 'kobold' | 'textgenerationwebui' | 'openrouter' | 'google' | 'ollama' | 'perplexity' | 'custom';
+export type ApiProviderId = 'local' | 'openai' | 'koboldhorde' | 'kobold' | 'textgenerationwebui' | 'openrouter' | 'google' | 'ollama' | 'perplexity' | 'custom';
 
 export interface ApiProvider {
     id: ApiProviderId;
@@ -65,6 +65,15 @@ export interface ApiProvider {
 }
 
 export const PROVIDERS: ApiProvider[] = [
+    {
+        id: 'local',
+        name: '本地反代 (Local Proxy)',
+        icon: <Cpu size={18} className="text-emerald-400" />,
+        defaultUrl: 'http://localhost:8045/v1',
+        description: 'OpenAI 兼容本地代理',
+        requiresKey: true,
+        docsUrl: ''
+    },
     {
         id: 'openai',
         name: 'OpenAI',

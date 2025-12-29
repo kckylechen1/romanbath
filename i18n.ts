@@ -159,6 +159,13 @@ export const translations: Record<Language, Record<string, string>> = {
         'error.timeout': 'Request Timeout',
         'error.timeoutMessage': 'The request took too long. Try again.',
         'error.unknown': 'Unknown Error',
+
+        // Character Import
+        'character.contacts': 'Contacts',
+        'character.importCard': 'Import Character',
+        'character.importing': 'Importing...',
+        'character.importSuccess': 'Character imported successfully',
+        'character.importFailed': 'Import failed',
     },
     'zh-CN': {
         // App Header
@@ -315,6 +322,13 @@ export const translations: Record<Language, Record<string, string>> = {
         'error.timeout': '请求超时',
         'error.timeoutMessage': '请求时间过长，请重试。',
         'error.unknown': '未知错误',
+
+        // Character Import
+        'character.contacts': '联系人',
+        'character.importCard': '导入角色卡',
+        'character.importing': '导入中...',
+        'character.importSuccess': '角色导入成功',
+        'character.importFailed': '导入失败',
     },
     'zh-TW': {
         // App Header
@@ -471,6 +485,13 @@ export const translations: Record<Language, Record<string, string>> = {
         'error.timeout': '請求逾時',
         'error.timeoutMessage': '請求時間過長，請重試。',
         'error.unknown': '未知錯誤',
+
+        // Character Import
+        'character.contacts': '聯絡人',
+        'character.importCard': '匯入角色卡',
+        'character.importing': '匯入中...',
+        'character.importSuccess': '角色匯入成功',
+        'character.importFailed': '匯入失敗',
     }
 };
 

@@ -282,7 +282,54 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
       m.role === 'system' ? m.content : `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`
     ).join('\n') || '');
 
-    if (mainApi === 'koboldhorde') {
+    if (mainApi === 'local') {
+      // Call local OpenAI-compatible proxy through Vite's proxy to bypass CORS
+      // The Vite proxy rewrites /local-api/* to localhost:8045/*
+      const apiUrl = '/local-api/v1';
+
+      // Try multiple sources for API key
+      const localApiKey = settings.apiKey || settings.localApiKey || '';
+      const model = settings.modelName || 'gemini-2.5-pro';
+
+      // Use provided messages array
+      const chatMessages: ChatMessage[] = options.messages || [
+        { role: 'user', content: prompt }
+      ];
+
+      const localHeaders: HeadersInit = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localApiKey}`,
+      };
+
+      const localBody = {
+        model: model,
+        messages: chatMessages,
+        max_tokens: settings.maxOutputTokens || settings.amount_gen || 4096,
+        temperature: settings.textgenerationwebui_settings?.temp || settings.temperature || 1.0,
+        stream: false,
+      };
+
+      console.log('Calling local proxy via Vite proxy, model:', model);
+
+      const response = await fetch(`${apiUrl}/chat/completions`, {
+        method: 'POST',
+        headers: localHeaders,
+        body: JSON.stringify(localBody),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Local proxy error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log('Local proxy response:', data);
+
+      if (data.choices && data.choices.length > 0) {
+        return data.choices[0].message?.content || data.choices[0].text || '';
+      }
+      return '';
+    } else if (mainApi === 'koboldhorde') {
       endpoint = '/api/horde/generate-text';
       body = {
         prompt: prompt,
@@ -518,4 +565,88 @@ const pollHordeTask = async (taskId: string, headers: HeadersInit): Promise<stri
     attempts++;
   }
   throw new Error("Horde generation timed out");
+};
+
+/**
+ * Import a character card file (PNG, JSON, YAML, CharX, etc.)
+ * @param file The file to import
+ * @returns The imported character's filename or null on failure
+ */
+export const importCharacterCard = async (file: File): Promise<{ success: boolean; fileName?: string; error?: string }> => {
+  try {
+    const token = await getCsrfToken();
+
+    // Determine file type from extension
+    const extension = file.name.split('.').pop()?.toLowerCase() || '';
+    const supportedFormats = ['png', 'json', 'yaml', 'yml', 'charx'];
+
+    if (!supportedFormats.includes(extension)) {
+      return {
+        success: false,
+        error: `Unsupported file format: ${extension}. Supported formats: ${supportedFormats.join(', ')}`
+      };
+    }
+
+    // Create FormData for file upload
+    const formData = new FormData();
+    formData.append('avatar', file);
+    formData.append('file_type', extension);
+
+    const headers: HeadersInit = {};
+    if (token) {
+      headers['X-CSRF-Token'] = token;
+    }
+
+    let response = await fetch('/api/characters/import', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: formData,
+    });
+
+    // Retry on 403 CSRF error
+    if (response.status === 403) {
+      console.log('Got 403, refreshing CSRF token and retrying...');
+      resetCsrfToken();
+      const newToken = await getCsrfToken(true);
+      if (newToken) {
+        headers['X-CSRF-Token'] = newToken;
+      }
+      response = await fetch('/api/characters/import', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: formData,
+      });
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Import failed:', response.status, errorText);
+      return {
+        success: false,
+        error: `Import failed: ${response.statusText}`
+      };
+    }
+
+    const data = await response.json();
+
+    if (data.error) {
+      return {
+        success: false,
+        error: data.message || 'Import failed'
+      };
+    }
+
+    return {
+      success: true,
+      fileName: data.file_name
+    };
+  } catch (error) {
+    console.error('Error importing character card:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
+  }
 };

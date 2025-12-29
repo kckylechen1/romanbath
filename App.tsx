@@ -70,6 +70,8 @@ const AppContent: React.FC = () => {
                 username: newConfig.userName,
                 main_api: newConfig.mainApi,
                 api_server_textgenerationwebui: newConfig.apiUrl,
+                apiUrl: newConfig.apiUrl,      // For local API
+                apiKey: newConfig.apiKey,      // For local API
                 modelName: newConfig.modelName, // Sync selected model
                 koboldhorde_settings: {
                     ...rawStSettings.koboldhorde_settings,
@@ -98,6 +100,12 @@ const AppContent: React.FC = () => {
             await saveSettings(updatedSettings);
         }
     };
+
+    // Function to refresh character list (used after import)
+    const refreshCharacters = useCallback(async () => {
+        const chars = await getCharacters();
+        setCharacters(chars);
+    }, []);
 
     // Initialize Speech Recognition
     useEffect(() => {
@@ -576,6 +584,7 @@ const AppContent: React.FC = () => {
                             selectedId={selectedCharacter.id}
                             onSelect={setSelectedCharacter}
                             isCollapsed={!leftSidebarOpen}
+                            onCharacterImported={refreshCharacters}
                         />
                     </div>
                 </aside>
@@ -592,6 +601,7 @@ const AppContent: React.FC = () => {
                             selectedId={selectedCharacter.id}
                             onSelect={setSelectedCharacter}
                             isCollapsed={false}
+                            onCharacterImported={refreshCharacters}
                         />
                     </div>
                 )}

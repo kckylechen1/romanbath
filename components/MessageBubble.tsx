@@ -1,6 +1,7 @@
 import React from 'react';
 import { Message, Role, Character } from '../types';
 import { Bot, User } from 'lucide-react';
+import MarkdownRenderer from './MarkdownRenderer';
 
 interface MessageBubbleProps {
   message: Message;
@@ -8,138 +9,94 @@ interface MessageBubbleProps {
   userName?: string;
 }
 
-// Format message content to style actions, dialogues, and remove citations
+// Format message content to style actions, dialogues, and add visual separation
 const formatMessageContent = (content: string): React.ReactNode => {
   // Step 1: Remove citation markers like [1], [2][3], etc.
   let cleanContent = content.replace(/\[\d+\]/g, '');
 
-  // Step 2: Split by double newlines first to preserve paragraph structure
-  const paragraphs = cleanContent.split(/\n\n+/);
+  // Step 2: Split content into segments (action, dialogue, or narrative)
+  // This regex matches complete action (*...*) or dialogue patterns
+  const segmentRegex = /(\*[^*]+\*)|("[^"]+"|"[^"]+"|'[^']+'|'[^']+'|「[^」]+」|『[^』]+』)/g;
+
+  const segments: { type: 'action' | 'dialogue' | 'text'; content: string }[] = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = segmentRegex.exec(cleanContent)) !== null) {
+    // Add text before the match
+    if (match.index > lastIndex) {
+      const textBefore = cleanContent.slice(lastIndex, match.index).trim();
+      if (textBefore) {
+        segments.push({ type: 'text', content: textBefore });
+      }
+    }
+
+    const matchedText = match[0];
+    if (matchedText.startsWith('*') && matchedText.endsWith('*')) {
+      segments.push({ type: 'action', content: matchedText });
+    } else {
+      segments.push({ type: 'dialogue', content: matchedText });
+    }
+
+    lastIndex = segmentRegex.lastIndex;
+  }
+
+  // Add remaining text
+  if (lastIndex < cleanContent.length) {
+    const remaining = cleanContent.slice(lastIndex).trim();
+    if (remaining) {
+      segments.push({ type: 'text', content: remaining });
+    }
+  }
+
+  // Step 3: Render segments with visual separation between different types
   const result: React.ReactNode[] = [];
-  let key = 0;
+  let prevType: string | null = null;
 
-  paragraphs.forEach((paragraph, pIndex) => {
-    if (!paragraph.trim()) return;
+  segments.forEach((segment, index) => {
+    // Add spacing between different segment types (action <-> dialogue transitions)
+    const needsSpacing = prevType !== null &&
+      ((prevType === 'action' && segment.type === 'dialogue') ||
+        (prevType === 'dialogue' && segment.type === 'action'));
 
-    // Process each paragraph
-    const parts: React.ReactNode[] = [];
+    const marginTop = needsSpacing ? '0.8em' : (index > 0 ? '0.4em' : 0);
 
-    // Regex to match:
-    // - *action text* (asterisks)
-    // - "dialogue" or "dialogue" (English quotes)
-    // - 「dialogue」(Japanese brackets)
-    // - "dialogue" or 'dialogue' (Chinese quotes)
-    // - 『dialogue』(Japanese double brackets)
-    const regex = /(\*[^*]+\*)|(\"[^\"]+\")|(\"[^\"]+\")|('.*?')|('.*?')|(「[^」]+」)|(『[^』]+』)/g;
-
-    let lastIndex = 0;
-    let match;
-    const content = paragraph;
-
-    while ((match = regex.exec(content)) !== null) {
-      // Add text before the match
-      if (match.index > lastIndex) {
-        const textBefore = content.slice(lastIndex, match.index);
-        if (textBefore.trim()) {
-          parts.push(
-            <span key={key++} className="text-slate-200">{textBefore}</span>
-          );
-        }
-      }
-
-      const matchedText = match[0];
-
-      if (matchedText.startsWith('*') && matchedText.endsWith('*')) {
-        // Action text - style in amber/gold italic
-        parts.push(
-          <span
-            key={key++}
-            className="italic text-amber-400"
-            style={{ fontStyle: 'italic' }}
-          >
-            {matchedText}
-          </span>
-        );
-      } else {
-        // Dialogue text (any type of quotes) - style in bright cyan
-        parts.push(
-          <span
-            key={key++}
-            className="text-cyan-400 font-medium"
-          >
-            {matchedText}
-          </span>
-        );
-      }
-
-      lastIndex = regex.lastIndex;
-    }
-
-    // Add remaining text after last match
-    if (lastIndex < content.length) {
-      const remaining = content.slice(lastIndex);
-      if (remaining.trim()) {
-        parts.push(
-          <span key={key++} className="text-slate-200">{remaining}</span>
-        );
-      }
-    }
-
-    // If no matches found, just add the paragraph with proper styling
-    if (parts.length === 0 && paragraph.trim()) {
-      parts.push(
-        <span key={key++} className="text-slate-200">{paragraph}</span>
-      );
-    }
-
-    // Add paragraph with spacing
-    if (parts.length > 0) {
+    if (segment.type === 'action') {
       result.push(
-        <p key={`p-${pIndex}`} style={{ marginBottom: pIndex < paragraphs.length - 1 ? '0.75em' : 0 }}>
-          {parts}
+        <p
+          key={index}
+          className="italic text-amber-400"
+          style={{ marginTop, marginBottom: 0 }}
+        >
+          {segment.content}
+        </p>
+      );
+    } else if (segment.type === 'dialogue') {
+      result.push(
+        <p
+          key={index}
+          className="text-cyan-400 font-medium"
+          style={{ marginTop, marginBottom: 0 }}
+        >
+          {segment.content}
+        </p>
+      );
+    } else {
+      result.push(
+        <p
+          key={index}
+          className="text-slate-200"
+          style={{ marginTop, marginBottom: 0 }}
+        >
+          {segment.content}
         </p>
       );
     }
+
+    prevType = segment.type;
   });
 
-  // Handle single-line content (no paragraph breaks)
-  if (result.length === 0 && cleanContent.trim()) {
-    // Process the entire content as a single paragraph
-    const parts: React.ReactNode[] = [];
-    const regex = /(\*[^*]+\*)|(\"[^\"]+\")|(\"[^\"]+\")|('.*?')|('.*?')|(「[^」]+」)|(『[^』]+』)/g;
-    let lastIndex = 0;
-    let match;
-
-    while ((match = regex.exec(cleanContent)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push(
-          <span key={key++} className="text-slate-200">{cleanContent.slice(lastIndex, match.index)}</span>
-        );
-      }
-
-      const matchedText = match[0];
-      if (matchedText.startsWith('*') && matchedText.endsWith('*')) {
-        parts.push(
-          <span key={key++} className="italic text-amber-400" style={{ fontStyle: 'italic' }}>{matchedText}</span>
-        );
-      } else {
-        parts.push(
-          <span key={key++} className="text-cyan-400 font-medium">{matchedText}</span>
-        );
-      }
-      lastIndex = regex.lastIndex;
-    }
-
-    if (lastIndex < cleanContent.length) {
-      parts.push(
-        <span key={key++} className="text-slate-200">{cleanContent.slice(lastIndex)}</span>
-      );
-    }
-
-    return parts.length > 0 ? parts : <span className="text-slate-200">{cleanContent}</span>;
-  }
-
-  return result;
+  return result.length > 0 ? result : <span className="text-slate-200">{content}</span>;
 };
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message, character, userName }) => {
@@ -176,13 +133,25 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, character, userN
             `}
           >
             <div className="whitespace-pre-wrap font-sans">
-              {isUser ? message.content : formatMessageContent(message.content)}
-              {message.isThinking && (
-                <span className="inline-flex ml-2 gap-1">
+              {isUser ? (
+                message.content
+              ) : message.isThinking ? (
+                <span className="inline-flex gap-1">
                   <span className="w-1.5 h-1.5 bg-current rounded-full animate-bounce [animation-delay:-0.3s]"></span>
                   <span className="w-1.5 h-1.5 bg-current rounded-full animate-bounce [animation-delay:-0.15s]"></span>
                   <span className="w-1.5 h-1.5 bg-current rounded-full animate-bounce"></span>
                 </span>
+              ) : (
+                // Check if content has markdown indicators (code blocks, headers, lists)
+                message.content.includes('```') ||
+                  message.content.match(/^#{1,3}\s/m) ||
+                  message.content.match(/^\s*[-*]\s/m) ||
+                  message.content.match(/^\s*\d+\.\s/m) ? (
+                  <MarkdownRenderer content={message.content} />
+                ) : (
+                  // Use existing formatMessageContent for simple roleplay text
+                  formatMessageContent(message.content)
+                )
               )}
             </div>
           </div>
