@@ -5,9 +5,13 @@ import { Character, ChatConfig, LorebookEntry } from '../types';
 let chatSession: Chat | null = null;
 let genAI: GoogleGenAI | null = null;
 
+const getGeminiApiKey = (): string => {
+  return process.env.GOOGLE_API_KEY || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+};
+
 export const initializeGenAI = () => {
   if (!genAI) {
-    genAI = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    genAI = new GoogleGenAI({ apiKey: getGeminiApiKey() });
   }
   return genAI;
 };
@@ -125,5 +129,5 @@ export const sendMessageStream = async function* (message: string) {
 };
 
 export const hasApiKey = (): boolean => {
-  return !!process.env.API_KEY;
+  return !!getGeminiApiKey();
 };

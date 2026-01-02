@@ -47,6 +47,7 @@ const AppContent: React.FC = () => {
     const [savedChatCharacterName, setSavedChatCharacterName] = useState<string>('');
     const [appSettings, setAppSettings] = useState<AppSettings>(getAppSettings());
     const hasInitializedRef = useRef(false);
+    const restoreInProgressRef = useRef(false);
 
     // SillyTavern Chat State
     const [currentChatFileName, setCurrentChatFileName] = useState<string | null>(null);
@@ -205,7 +206,7 @@ const AppContent: React.FC = () => {
 
     useEffect(() => {
         // Only start new chat if we're not in initial load with restore pending
-        if (hasInitializedRef.current) {
+        if (hasInitializedRef.current && !restoreInProgressRef.current) {
             startNewChat();
         }
         setMobileMenuOpen(false);
@@ -249,7 +250,7 @@ const AppContent: React.FC = () => {
         }
         // Also save to localStorage for quick restore
         if (messages.length > 0 && selectedCharacter.id !== 'default' && appSettings.autoRestoreChat) {
-            debouncedSaveChatState(selectedCharacter.id, messages);
+            debouncedSaveChatState(selectedCharacter.id, messages, currentChatFileName || undefined);
         }
     }, [messages, currentChatFileName, debouncedSaveToBackend, selectedCharacter.id, appSettings.autoRestoreChat]);
 
@@ -261,7 +262,7 @@ const AppContent: React.FC = () => {
     // Load most recent chat for character on selection
     useEffect(() => {
         const loadRecentChat = async () => {
-            if (selectedCharacter.id === 'default' || !hasInitializedRef.current) return;
+            if (selectedCharacter.id === 'default' || !hasInitializedRef.current || restoreInProgressRef.current) return;
 
             const history = await getChatList(selectedCharacter.id);
             setChatHistory(history);
@@ -288,6 +289,12 @@ const AppContent: React.FC = () => {
         }
     }, [selectedCharacter.id]);
 
+    useEffect(() => {
+        if (restoreInProgressRef.current && currentChatFileName) {
+            restoreInProgressRef.current = false;
+        }
+    }, [currentChatFileName]);
+
     // Check for saved chat on initial load
     useEffect(() => {
         if (hasInitializedRef.current) return;
@@ -311,8 +318,10 @@ const AppContent: React.FC = () => {
         if (savedChat) {
             const savedCharacter = characters.find(c => c.id === savedChat.characterId);
             if (savedCharacter) {
+                restoreInProgressRef.current = true;
                 setSelectedCharacter(savedCharacter);
                 setMessages(savedChat.messages);
+                setCurrentChatFileName(savedChat.chatFileName || createNewChatFileName(savedCharacter.name));
             }
         }
         setShowRestorePrompt(false);

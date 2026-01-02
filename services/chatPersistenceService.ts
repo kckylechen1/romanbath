@@ -52,11 +52,12 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 };
 
 // Save chat state for a character
-export const saveChatState = (characterId: string, messages: Message[]): void => {
+export const saveChatState = (characterId: string, messages: Message[], chatFileName?: string): void => {
     try {
         const state: ChatPersistenceState = {
             characterId,
             messages,
+            ...(chatFileName ? { chatFileName } : {}),
             lastUpdated: Date.now(),
         };
         setItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS, JSON.stringify(state));
@@ -147,12 +148,17 @@ export const getTimeSinceLastChat = (): string | null => {
 // Auto-save debounce utility
 let saveTimeout: NodeJS.Timeout | null = null;
 
-export const debouncedSaveChatState = (characterId: string, messages: Message[], delay: number = 1000): void => {
+export const debouncedSaveChatState = (
+    characterId: string,
+    messages: Message[],
+    chatFileName?: string,
+    delay: number = 1000
+): void => {
     if (saveTimeout) {
         clearTimeout(saveTimeout);
     }
     saveTimeout = setTimeout(() => {
-        saveChatState(characterId, messages);
+        saveChatState(characterId, messages, chatFileName);
         saveTimeout = null;
     }, delay);
 };

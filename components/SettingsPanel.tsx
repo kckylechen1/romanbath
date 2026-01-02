@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ChatConfig, LorebookEntry, Persona } from '../types';
-import { getHordeModels, detectApiType, getGenericModels, saveSecret } from '../services/sillyTavernService';
+import { getHordeModels, detectApiType, getGenericModels, saveSecret, generateText } from '../services/sillyTavernService';
 import { getPersonas, createPersona, deletePersona, getActivePersonaId, setActivePersonaId, updatePersona } from '../services/personaService';
 import { getAppSettings, saveAppSettings } from '../services/chatPersistenceService';
 import ApiProviderSelector, { ApiProvider, PROVIDERS } from './ApiProviderSelector';
@@ -693,69 +693,62 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
         apiUrl?: string,
         modelName?: string
     ): Promise<{ success: boolean; message: string }> => {
-        try {
-            let testUrl = '';
-            let headers: Record<string, string> = {};
-            let body: any = null;
-            let method = 'GET';
+        const testViaBackend = async () => {
+            const testSettings = {
+                main_api: provider,
+                api_server_textgenerationwebui: apiUrl,
+                apiKey: apiKey,
+                modelName: modelName,
+                amount_gen: 1,
+                maxOutputTokens: 1,
+                thinkingBudget: 0,
+                temperature: 0.7,
+                textgenerationwebui_settings: {},
+            };
 
+            await generateText({ messages: [{ role: 'user', content: 'ping' }] }, testSettings);
+        };
+
+        try {
             switch (provider) {
                 case 'openai':
-                    testUrl = 'https://api.openai.com/v1/models';
-                    headers = { 'Authorization': `Bearer ${apiKey}` };
-                    break;
                 case 'openrouter':
-                    testUrl = 'https://openrouter.ai/api/v1/models';
-                    headers = { 'Authorization': `Bearer ${apiKey}` };
-                    break;
                 case 'google':
-                    testUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-                    break;
                 case 'perplexity':
-                    // Perplexity doesn't have a models endpoint, test with a minimal chat request
-                    testUrl = 'https://api.perplexity.ai/chat/completions';
-                    headers = {
-                        'Authorization': `Bearer ${apiKey}`,
-                        'Content-Type': 'application/json'
-                    };
-                    body = JSON.stringify({
-                        model: 'sonar',
-                        messages: [{ role: 'user', content: 'Hi' }],
-                        max_tokens: 1
-                    });
-                    method = 'POST';
-                    break;
-                case 'local':
+                    await testViaBackend();
+                    return { success: true, message: 'API connection verified ✓' };
+                case 'local': {
                     // Test local proxy through Vite's proxy to bypass CORS
                     // The proxy rewrites /local-api/* to localhost:8045/*
-                    testUrl = '/local-api/v1/models';
-                    headers = { 'Authorization': `Bearer ${apiKey}` };
-                    break;
+                    const response = await fetch('/local-api/v1/models', {
+                        method: 'GET',
+                        headers: { 'Authorization': `Bearer ${apiKey}` },
+                    });
+
+                    if (response.ok) {
+                        return { success: true, message: 'API connection verified ✓' };
+                    } else if (response.status === 401 || response.status === 403) {
+                        return { success: false, message: 'Invalid API Key' };
+                    } else if (response.status === 429) {
+                        return { success: true, message: 'API Key valid (rate limited)' };
+                    }
+                    return { success: false, message: `API error: ${response.status}` };
+                }
                 default:
                     return { success: true, message: 'API Key saved (no test available)' };
-            }
-
-            const response = await fetch(testUrl, {
-                method,
-                headers,
-                body
-            });
-
-            if (response.ok) {
-                return { success: true, message: 'API connection verified ✓' };
-            } else if (response.status === 401 || response.status === 403) {
-                return { success: false, message: 'Invalid API Key' };
-            } else if (response.status === 429) {
-                // Rate limited but key is valid
-                return { success: true, message: 'API Key valid (rate limited)' };
-            } else {
-                return { success: false, message: `API error: ${response.status}` };
             }
         } catch (error: any) {
             if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
                 return { success: false, message: 'Network error - cannot reach API' };
             }
-            return { success: false, message: error.message || 'Connection test failed' };
+            const message = error?.message || 'Connection test failed';
+            if (message.includes('401') || message.includes('403') || message.toLowerCase().includes('unauthorized')) {
+                return { success: false, message: 'Invalid API Key' };
+            }
+            if (message.includes('429')) {
+                return { success: true, message: 'API Key valid (rate limited)' };
+            }
+            return { success: false, message };
         }
     };
 

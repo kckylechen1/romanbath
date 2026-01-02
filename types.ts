@@ -44,6 +44,7 @@ export interface Persona {
 export interface ChatPersistenceState {
   characterId: string;
   messages: Message[];
+  chatFileName?: string;
   lastUpdated: number;
 }
 
