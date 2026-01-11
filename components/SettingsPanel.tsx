@@ -185,6 +185,7 @@ const BufferedTextArea: React.FC<BufferedProps> = ({ value, onSave, label, class
 };
 
 import { useLanguage } from '../i18n';
+import { useToast } from './Toast';
 
 // PersonaTab Component - Manages multiple user personas
 interface PersonaTabProps {
@@ -488,6 +489,7 @@ type Tab = 'api' | 'generation' | 'story' | 'lorebook' | 'character' | 'persona'
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, isOpen, onClose }) => {
     const { t } = useLanguage();
+    const toast = useToast();
     const [activeTab, setActiveTab] = useState<Tab>('generation');
     const [hordeModelsList, setHordeModelsList] = useState<string[]>([]);
     const [genericModelsList, setGenericModelsList] = useState<string[]>([]);
@@ -512,7 +514,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
 
     // Separate effect for Cloud Providers to react to API Key changes without re-fetching models unnecessarily
     useEffect(() => {
-        if (activeTab === 'api' && ['openrouter', 'openai', 'google'].includes(config.mainApi)) {
+        if (activeTab === 'api' && ['openrouter', 'openai', 'google', 'perplexity', 'custom'].includes(config.mainApi)) {
             if (config.apiKey) {
                 setConnectionStatus('success');
                 setConnectionMessage('Ready');
@@ -648,41 +650,39 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
             localStorage.removeItem(legacyStorageKey);
         }
 
-        // Save to SillyTavern secrets for cloud providers (not local)
-        if (value && ['perplexity', 'openai', 'openrouter', 'google', 'koboldhorde'].includes(config.mainApi)) {
-            const success = await saveSecret(config.mainApi, value);
-            if (success) {
-                setConnectionStatus('loading');
-                setConnectionMessage('Testing connection...');
+        if (!value) {
+            setConnectionStatus('idle');
+            setConnectionMessage('Waiting for API Key...');
+            return;
+        }
 
-                // Test the API connection
-                const testResult = await testApiConnection(config.mainApi, value, config.apiUrl, config.modelName);
-                if (testResult.success) {
+        const needsSecret = ['perplexity', 'openai', 'openrouter', 'google', 'koboldhorde', 'custom'].includes(config.mainApi);
+        if (needsSecret) {
+            const success = await saveSecret(config.mainApi, value);
+            if (!success) {
+                if (config.mainApi === 'custom') {
                     setConnectionStatus('success');
-                    setConnectionMessage(testResult.message || 'Connected successfully');
-                } else {
-                    setConnectionStatus('error');
-                    setConnectionMessage(testResult.message || 'Connection failed');
+                    setConnectionMessage('API Key saved locally');
+                    return;
                 }
-            } else {
+
                 setConnectionStatus('error');
                 setConnectionMessage('Failed to save API Key');
+                return;
             }
         }
 
-        // For local API, just test connection directly (no backend secret storage)
-        if (value && config.mainApi === 'local') {
-            setConnectionStatus('loading');
-            setConnectionMessage('Testing connection...');
+        setConnectionStatus('loading');
+        setConnectionMessage('Testing connection...');
 
-            const testResult = await testApiConnection('local', value, config.apiUrl, config.modelName);
-            if (testResult.success) {
-                setConnectionStatus('success');
-                setConnectionMessage(testResult.message || 'Connected successfully');
-            } else {
-                setConnectionStatus('error');
-                setConnectionMessage(testResult.message || 'Connection failed');
-            }
+        const testProvider = config.mainApi;
+        const testResult = await testApiConnection(testProvider, value, config.apiUrl, config.modelName);
+        if (testResult.success) {
+            setConnectionStatus('success');
+            setConnectionMessage(testResult.message || 'Connected successfully');
+        } else {
+            setConnectionStatus('error');
+            setConnectionMessage(testResult.message || 'Connection failed');
         }
     };
 
@@ -715,6 +715,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
                 case 'openrouter':
                 case 'google':
                 case 'perplexity':
+                case 'custom':
                     await testViaBackend();
                     return { success: true, message: 'API connection verified ✓' };
                 case 'local': {
@@ -749,6 +750,38 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
                 return { success: true, message: 'API Key valid (rate limited)' };
             }
             return { success: false, message };
+        }
+    };
+
+    const handleTestConnection = async () => {
+        const selectedProvider = PROVIDERS.find(p => p.id === config.mainApi);
+        const requiresKey = selectedProvider?.requiresKey ?? false;
+        if (requiresKey && !config.apiKey) {
+            setConnectionStatus('error');
+            setConnectionMessage('Missing API Key');
+            return;
+        }
+
+        setConnectionStatus('loading');
+        setConnectionMessage('Testing connection...');
+
+        const needsSecret = ['perplexity', 'openai', 'openrouter', 'google', 'koboldhorde', 'custom'].includes(config.mainApi);
+        if (needsSecret && config.apiKey) {
+            const success = await saveSecret(config.mainApi, config.apiKey);
+            if (!success) {
+                setConnectionStatus('error');
+                setConnectionMessage('Failed to save API Key');
+                return;
+            }
+        }
+
+        const testResult = await testApiConnection(config.mainApi, config.apiKey || '', config.apiUrl, config.modelName);
+        if (testResult.success) {
+            setConnectionStatus('success');
+            setConnectionMessage(testResult.message || 'Connected successfully');
+        } else {
+            setConnectionStatus('error');
+            setConnectionMessage(testResult.message || 'Connection failed');
         }
     };
 
@@ -1227,6 +1260,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
                                                 {connectionMessage || 'Enter your API key and save to connect.'}
                                             </p>
                                         </div>
+                                        <button
+                                            onClick={handleTestConnection}
+                                            disabled={connectionStatus === 'loading'}
+                                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white/5 border border-white/10 text-slate-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            Test API
+                                        </button>
                                     </div>
                                 </div>
 
@@ -1657,6 +1697,227 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onConfigChange, i
                                             }}
                                             className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-sm outline-none focus:border-slate-500/40"
                                         />
+                                    </div>
+                                </div>
+
+                                {/* --- NEW: ADVANCED CONTROL --- */}
+                                <div className="pt-6 mt-6 border-t border-white/10">
+                                    <div className="space-y-4">
+                                        <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                                            <Settings size={14} className="text-purple-400" />
+                                            Advanced Control
+                                        </h4>
+
+                                        {/* Logit Bias Section */}
+                                        <details className="group marker:content-none">
+                                            <summary className="flex items-center gap-2 text-xs font-medium text-slate-500 cursor-pointer hover:text-slate-300 transition-colors select-none py-2">
+                                                <ChevronDown size={14} className="group-open:rotate-180 transition-transform duration-200 text-slate-600" />
+                                                Logit Bias / Token Biasing
+                                                <div className="h-[1px] flex-1 bg-white/5 ml-2"></div>
+                                            </summary>
+
+                                            <div className="pt-4 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                                                <div className="text-xs text-gray-500 mb-2">
+                                                    Promote or ban specific tokens/words during generation. Enter tokens as comma-separated values (e.g., "hello, goodbye" for text, or "[123, 456]" for token IDs).
+                                                </div>
+
+                                                <BufferedInput
+                                                    label="Token Bias List"
+                                                    value={config.logitBias.map(b => `${b.sequence}:${b.bias}`).join(', ')}
+                                                    onSave={(val) => {
+                                                        const entries = String(val).split(',').map(s => s.trim()).filter(s => s.length > 0);
+                                                        const biasArray = entries.map(entry => {
+                                                            const [seq, bias] = entry.split(':');
+                                                            return { sequence: seq, bias: parseFloat(bias) || 0 };
+                                                        });
+                                                        handleChange('logitBias', biasArray);
+                                                    }}
+                                                    className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-sm font-mono outline-none focus:border-purple-500/40"
+                                                    placeholder="hello:1.5, goodbye:-2.0"
+                                                />
+
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <button
+                                                        onClick={() => {
+                                                            handleChange('logitBias', []);
+                                                            toast.success('Logit bias cleared');
+                                                        }}
+                                                        className="flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-red-400 bg-red-500/10 rounded-lg hover:bg-red-500/20 transition-colors"
+                                                    >
+                                                        <Trash2 size={12} />
+                                                        Clear All
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            const newEntry = { sequence: '', bias: 0 };
+                                                            handleChange('logitBias', [...config.logitBias, newEntry]);
+                                                            toast.success('New bias entry added');
+                                                        }}
+                                                        className="flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-emerald-400 bg-emerald-500/10 rounded-lg hover:bg-emerald-500/20 transition-colors"
+                                                    >
+                                                        <Plus size={12} />
+                                                        Add Entry
+                                                    </button>
+                                                </div>
+
+                                                {config.logitBias.length > 0 && (
+                                                    <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+                                                        {config.logitBias.map((item, index) => (
+                                                            <div key={index} className="flex items-center gap-2 p-2 bg-black/20 rounded-lg text-xs">
+                                                                <input
+                                                                    type="text"
+                                                                    value={item.sequence}
+                                                                    onChange={(e) => {
+                                                                        const updated = [...config.logitBias];
+                                                                        updated[index] = { ...updated[index], sequence: e.target.value };
+                                                                        handleChange('logitBias', updated);
+                                                                    }}
+                                                                    className="flex-1 bg-black/30 border border-white/10 rounded px-2 py-1 text-white font-mono focus:outline-none focus:border-purple-500/40"
+                                                                    placeholder="token or text"
+                                                                />
+                                                                <input
+                                                                    type="number"
+                                                                    step="0.1"
+                                                                    value={item.bias}
+                                                                    onChange={(e) => {
+                                                                        const updated = [...config.logitBias];
+                                                                        updated[index] = { ...updated[index], bias: parseFloat(e.target.value) || 0 };
+                                                                        handleChange('logitBias', updated);
+                                                                    }}
+                                                                    className="w-20 bg-black/30 border border-white/10 rounded px-2 py-1 text-white font-mono focus:outline-none focus:border-purple-500/40"
+                                                                    placeholder="bias"
+                                                                />
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const updated = config.logitBias.filter((_, i) => i !== index);
+                                                                        handleChange('logitBias', updated);
+                                                                    }}
+                                                                    className="p-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors"
+                                                                >
+                                                                    <X size={12} />
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </details>
+
+                                        {/* Banned Tokens Section */}
+                                        <details className="group marker:content-none">
+                                            <summary className="flex items-center gap-2 text-xs font-medium text-slate-500 cursor-pointer hover:text-slate-300 transition-colors select-none py-2">
+                                                <ChevronDown size={14} className="group-open:rotate-180 transition-transform duration-200 text-slate-600" />
+                                                Banned Tokens
+                                                <div className="h-[1px] flex-1 bg-white/5 ml-2"></div>
+                                            </summary>
+
+                                            <div className="pt-4 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                                                <div className="space-y-3">
+                                                    <label className="flex items-center justify-between cursor-pointer group">
+                                                        <div>
+                                                            <span className="text-xs font-semibold text-gray-300">Send Banned Tokens to API</span>
+                                                            <p className="text-[10px] text-gray-500 mt-0.5">Enable banned token filtering</p>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => handleChange('sendBannedTokens', !config.sendBannedTokens)}
+                                                            className={`relative w-12 h-6 rounded-full transition-colors ${config.sendBannedTokens ? 'bg-emerald-500' : 'bg-gray-700'
+                                                            }`}
+                                                        >
+                                                            <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-md transition-transform ${config.sendBannedTokens ? 'translate-x-6' : 'translate-x-1'
+                                                                }`} />
+                                                        </button>
+                                                    </label>
+                                                </div>
+
+                                                <BufferedInput
+                                                    label="Banned Tokens (Comma-Separated)"
+                                                    value={config.bannedTokens}
+                                                    onSave={(val) => handleChange('bannedTokens', val)}
+                                                    className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-sm font-mono outline-none focus:border-purple-500/40"
+                                                    placeholder="1234, 5678"
+                                                />
+
+                                                <BufferedInput
+                                                    label="Global Banned Tokens"
+                                                    value={config.globalBannedTokens}
+                                                    onSave={(val) => handleChange('globalBannedTokens', val)}
+                                                    className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-sm font-mono outline-none focus:border-purple-500/40"
+                                                    placeholder="These apply to all generations"
+                                                />
+                                            </div>
+                                        </details>
+
+                                        {/* Negative Prompt Section */}
+                                        <details className="group marker:content-none">
+                                            <summary className="flex items-center gap-2 text-xs font-medium text-slate-500 cursor-pointer hover:text-slate-300 transition-colors select-none py-2">
+                                                <ChevronDown size={14} className="group-open:rotate-180 transition-transform duration-200 text-slate-600" />
+                                                Negative Prompt
+                                                <div className="h-[1px] flex-1 bg-white/5 ml-2"></div>
+                                            </summary>
+
+                                            <div className="pt-4 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                                                <BufferedInput
+                                                    label="Negative Prompt"
+                                                    value={config.negativePrompt}
+                                                    onSave={(val) => handleChange('negativePrompt', val)}
+                                                    className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-sm outline-none focus:border-purple-500/40"
+                                                    placeholder="What to avoid: repetitive, boring, cliché..."
+                                                />
+                                            </div>
+                                        </details>
+
+                                        {/* Grammar / JSON Schema Section */}
+                                        <details className="group marker:content-none">
+                                            <summary className="flex items-center gap-2 text-xs font-medium text-slate-500 cursor-pointer hover:text-slate-300 transition-colors select-none py-2">
+                                                <ChevronDown size={14} className="group-open:rotate-180 transition-transform duration-200 text-slate-600" />
+                                                Grammar / JSON Schema
+                                                <div className="h-[1px] flex-1 bg-white/5 ml-2"></div>
+                                            </summary>
+
+                                            <div className="pt-4 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                                                <div className="space-y-2">
+                                                    <label className="flex items-center justify-between cursor-pointer group">
+                                                        <div>
+                                                            <span className="text-xs font-semibold text-gray-300">Enable JSON Schema</span>
+                                                            <p className="text-[10px] text-gray-500 mt-0.5">Force structured JSON output</p>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => handleChange('jsonSchemaAllowEmpty', !config.jsonSchemaAllowEmpty)}
+                                                            className={`relative w-12 h-6 rounded-full transition-colors ${config.jsonSchemaAllowEmpty ? 'bg-emerald-500' : 'bg-gray-700'
+                                                            }`}
+                                                        >
+                                                            <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-md transition-transform ${config.jsonSchemaAllowEmpty ? 'translate-x-6' : 'translate-x-1'
+                                                                }`} />
+                                                        </button>
+                                                    </label>
+                                                </div>
+
+                                                <BufferedInput
+                                                    label="Grammar String (GBNF)"
+                                                    value={config.grammarString}
+                                                    onSave={(val) => handleChange('grammarString', val)}
+                                                    className="w-full bg-black/30 border border-white/10 rounded-lg p-2 text-sm font-mono outline-none focus:border-purple-500/40"
+                                                    placeholder='root ::= "hello" | "world"'
+                                                />
+
+                                                <div className="space-y-2">
+                                                    <label className="text-xs font-semibold text-gray-300">JSON Schema</label>
+                                                    <textarea
+                                                        value={config.jsonSchema ? JSON.stringify(config.jsonSchema, null, 2) : ''}
+                                                        onChange={(e) => {
+                                                            try {
+                                                                const parsed = e.target.value ? JSON.parse(e.target.value) : null;
+                                                                handleChange('jsonSchema', parsed);
+                                                            } catch (err) {
+                                                                // Invalid JSON, don't update yet
+                                                            }
+                                                        }}
+                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded-lg p-3 text-sm font-mono text-gray-300 focus:outline-none focus:border-purple-500/40 resize-none custom-scrollbar"
+                                                        placeholder='{\n  "type": "object",\n  "properties": {...}\n}'
+                                                    />
+                                                </div>
+                                            </div>
+                                        </details>
                                     </div>
                                 </div>
                             </div>

@@ -31,6 +31,34 @@ export const DEFAULT_CONFIG: ChatConfig = {
   repPenRange: 2048,
   seed: -1,
 
+  // New: Advanced Generation Control
+  logitBias: [],
+  bannedTokens: "",
+  globalBannedTokens: "",
+  sendBannedTokens: true,
+  negativePrompt: "",
+  grammarString: "",
+  jsonSchema: null,
+  jsonSchemaAllowEmpty: false,
+
+  // New: Advanced Samplers
+  noRepeatNgramSize: 0,
+  repPenSlope: 1,
+  repPenDecay: 0,
+  smoothingFactor: 0.0,
+  smoothingCurve: 1.0,
+  numBeams: 1,
+  lengthPenalty: 1,
+  earlyStopping: false,
+  encoderRepPenalty: 1,
+  banEosToken: false,
+  skipSpecialTokens: true,
+  addBosToken: true,
+  guidanceScale: 1,
+  penaltyAlpha: 0,
+  maxTokensSecond: 0,
+  n: 1,
+
   // Response Style
   responseStyle: 'natural',
 

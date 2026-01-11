@@ -47,6 +47,12 @@ export default defineConfig(({ mode }) => {
       'process.env.API_KEY': JSON.stringify(geminiApiKey),
       'process.env.GEMINI_API_KEY': JSON.stringify(geminiApiKey)
     },
+    test: {
+      environment: 'jsdom',
+      clearMocks: true,
+      include: ['**/*.{test,spec}.{ts,tsx}'],
+      exclude: ['node_modules/**', 'dist/**', 'backend/**'],
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

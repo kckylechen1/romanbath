@@ -393,6 +393,11 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
         max_tokens: effectiveMaxTokens,
         temperature: settings.textgenerationwebui_settings?.temp || settings.temperature || 1.0,
         stream: false,
+        // New: Advanced Control Parameters
+        logit_bias: settings.logitBias?.length > 0 ? settings.logitBias : undefined,
+        grammar_string: settings.grammarString || undefined,
+        json_schema: settings.jsonSchemaAllowEmpty && settings.jsonSchema ? settings.jsonSchema : undefined,
+        negative_prompt: settings.negativePrompt || undefined,
       };
     } else {
       // Text Completion APIs (Ooba, Kobold, LlamaCpp, etc.)
@@ -409,6 +414,47 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
       const apiType = apiTypeMap[mainApi] || 'ooba';
 
       endpoint = '/api/backends/text-completions/generate';
+
+      // Process banned tokens if enabled
+      let customTokenBans: string[] = [];
+      let bannedStrings: string[] = [];
+
+      if (settings.sendBannedTokens) {
+        if (settings.bannedTokens) {
+          const bannedList = settings.bannedTokens.split(',').map(s => s.trim()).filter(s => s.length > 0);
+          bannedList.forEach(token => {
+            if (token.startsWith('[') && token.endsWith(']')) {
+              try {
+                customTokenBans.push(...JSON.parse(token));
+              } catch (e) {
+                console.warn('Failed to parse banned token:', token);
+              }
+            } else if (token.startsWith('"') && token.endsWith('"')) {
+              bannedStrings.push(token.slice(1, -1));
+            } else {
+              customTokenBans.push(...token.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)));
+            }
+          });
+        }
+
+        if (settings.globalBannedTokens) {
+          const globalBannedList = settings.globalBannedTokens.split(',').map(s => s.trim()).filter(s => s.length > 0);
+          globalBannedList.forEach(token => {
+            if (token.startsWith('[') && token.endsWith(']')) {
+              try {
+                customTokenBans.push(...JSON.parse(token));
+              } catch (e) {
+                console.warn('Failed to parse global banned token:', token);
+              }
+            } else if (token.startsWith('"') && token.endsWith('"')) {
+              bannedStrings.push(token.slice(1, -1));
+            } else {
+              customTokenBans.push(...token.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)));
+            }
+          });
+        }
+      }
+
       body = {
         prompt: prompt,
         api_type: apiType,
@@ -419,6 +465,13 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
         top_k: settings.textgenerationwebui_settings?.top_k || 0,
         rep_pen: settings.textgenerationwebui_settings?.rep_pen || 1.1,
         stream: false,
+        // New: Advanced Control Parameters
+        logit_bias: settings.logitBias?.length > 0 ? settings.logitBias : undefined,
+        grammar: settings.grammarString || undefined,
+        json_schema: settings.jsonSchemaAllowEmpty && settings.jsonSchema ? settings.jsonSchema : undefined,
+        banned_tokens: customTokenBans.length > 0 ? customTokenBans : undefined,
+        banned_strings: bannedStrings.length > 0 ? bannedStrings : undefined,
+        negative_prompt: settings.negativePrompt || undefined,
       };
     }
 
@@ -498,6 +551,7 @@ const SECRET_KEY_MAP: Record<string, string> = {
   'openai': 'api_key_openai',
   'openrouter': 'api_key_openrouter',
   'google': 'api_key_makersuite',
+  'custom': 'api_key_custom',
   'koboldhorde': 'api_key_horde',
 };
 
@@ -644,9 +698,18 @@ export const importCharacterCard = async (file: File): Promise<{ success: boolea
     };
   } catch (error) {
     console.error('Error importing character card:', error);
+
+    const message = error instanceof Error ? error.message : '';
+    const isNetworkError =
+      message.includes('Failed to fetch') ||
+      message.includes('NetworkError') ||
+      message.includes('ECONNREFUSED');
+
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred'
+      error: isNetworkError
+        ? '无法连接到 SillyTavern 后端（http://127.0.0.1:8000）'
+        : (error instanceof Error ? error.message : 'Unknown error occurred')
     };
   }
 };

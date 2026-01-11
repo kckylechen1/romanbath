@@ -88,6 +88,18 @@ export const translations: Record<Language, Record<string, string>> = {
         'sampler.dynatemp.exponent': 'Exponent',
         'sampler.dynatemp.desc': 'Adjusts randomness based on context',
 
+        // Advanced Control - New Features
+        'advanced.title': 'Advanced Control',
+        'advanced.logitBias': 'Logit Bias / Token Biasing',
+        'advanced.logitBias.desc': 'Promote or ban specific tokens/words',
+        'advanced.bannedTokens': 'Banned Tokens',
+        'advanced.sendBannedTokens': 'Send Banned Tokens',
+        'advanced.globalBannedTokens': 'Global Banned Tokens',
+        'advanced.negativePrompt': 'Negative Prompt',
+        'advanced.grammar': 'Grammar / JSON Schema',
+        'advanced.enableJsonSchema': 'Enable JSON Schema',
+        'advanced.grammarString': 'Grammar String (GBNF)',
+
         // Settings - Titles
         'settings.sampler': 'Sampler Settings',
         'settings.connection': 'Connection Manager',
@@ -251,6 +263,18 @@ export const translations: Record<Language, Record<string, string>> = {
         'sampler.dynatemp.exponent': '指数',
         'sampler.dynatemp.desc': '根据上下文自动调整随机性',
 
+        // Advanced Control - New Features
+        'advanced.title': '高级控制',
+        'advanced.logitBias': 'Logit 偏差 / Token 偏差',
+        'advanced.logitBias.desc': '提升或禁止特定词元/词语',
+        'advanced.bannedTokens': '禁用词元',
+        'advanced.sendBannedTokens': '发送禁用词元',
+        'advanced.globalBannedTokens': '全局禁用词元',
+        'advanced.negativePrompt': '负面提示词',
+        'advanced.grammar': '语法 / JSON Schema',
+        'advanced.enableJsonSchema': '启用 JSON Schema',
+        'advanced.grammarString': '语法字符串 (GBNF)',
+
         // Settings - Titles
         'settings.sampler': '采样设置',
         'settings.connection': '连接管理器',
@@ -413,6 +437,18 @@ export const translations: Record<Language, Record<string, string>> = {
         'sampler.dynatemp.max': '最高溫度',
         'sampler.dynatemp.exponent': '指數',
         'sampler.dynatemp.desc': '根據上下文自動調整隨機性',
+
+        // Advanced Control - New Features
+        'advanced.title': '高級控制',
+        'advanced.logitBias': 'Logit 偏差 / Token 偏差',
+        'advanced.logitBias.desc': '提升或禁止特定詞元/詞語',
+        'advanced.bannedTokens': '禁用詞元',
+        'advanced.sendBannedTokens': '發送禁用詞元',
+        'advanced.globalBannedTokens': '全域禁用詞元',
+        'advanced.negativePrompt': '負面提示詞',
+        'advanced.grammar': '語法 / JSON Schema',
+        'advanced.enableJsonSchema': '啟用 JSON Schema',
+        'advanced.grammarString': '語法字串 (GBNF)',
 
         // Settings - Titles
         'settings.sampler': '採樣設定',

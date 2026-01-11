@@ -86,6 +86,58 @@ export interface ChatConfig {
   repPenRange: number;
   seed: number;
 
+  // --- New: Advanced Generation Control ---
+  // Logit Bias / Token Biasing
+  logitBias: Array<{ sequence: string; bias: number }>;
+
+  // Banned Tokens Control
+  bannedTokens: string; // Comma-separated token IDs or text
+  globalBannedTokens: string; // Global bans across all generations
+  sendBannedTokens: boolean; // Whether to send bans to API
+
+  // Negative Prompt
+  negativePrompt: string; // What to avoid in generation
+
+  // Grammar / JSON Schema
+  grammarString: string; // GBNF grammar string
+  jsonSchema: object | null; // JSON schema for structured output
+  jsonSchemaAllowEmpty: boolean; // Allow empty schema
+
+  // --- New: Advanced Samplers ---
+  // No Repeat Ngram (alternative to DRY)
+  noRepeatNgramSize: number;
+
+  // Repetition Penalty Advanced
+  repPenSlope: number;
+  repPenDecay: number;
+
+  // Smoothing
+  smoothingFactor: number;
+  smoothingCurve: number;
+
+  // Beam Search
+  numBeams: number;
+  lengthPenalty: number;
+  earlyStopping: boolean;
+
+  // Encoder & Special Token Control
+  encoderRepPenalty: number;
+  banEosToken: boolean;
+  skipSpecialTokens: boolean;
+  addBosToken: boolean;
+
+  // Guidance Scale (CFG)
+  guidanceScale: number;
+
+  // Penalty Alpha
+  penaltyAlpha: number;
+
+  // Max Tokens per Second (for streaming)
+  maxTokensSecond: number;
+
+  // N-Generation (Swiping)
+  n: number;
+
   // --- Response Style Preset ---
   responseStyle: 'natural' | 'sexy' | 'flirty' | 'horny' | 'custom';
 

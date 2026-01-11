@@ -94,6 +94,28 @@ const AppContent: React.FC = () => {
                     tfs: newConfig.tfs,
                     rep_pen_range: newConfig.repPenRange,
                     stopping_strings: newConfig.stopSequences,
+                    logit_bias: newConfig.logitBias,
+                    grammar_string: newConfig.grammarString,
+                    json_schema: newConfig.jsonSchemaAllowEmpty && newConfig.jsonSchema ? newConfig.jsonSchema : undefined,
+                    banned_tokens: newConfig.sendBannedTokens ? newConfig.bannedTokens : undefined,
+                    banned_strings: newConfig.sendBannedTokens && newConfig.globalBannedTokens ? newConfig.globalBannedTokens.split(',').map(s => s.trim()).filter(s => s.length > 0) : undefined,
+                    negative_prompt: newConfig.negativePrompt,
+                    no_repeat_ngram_size: newConfig.noRepeatNgramSize,
+                    rep_pen_slope: newConfig.repPenSlope,
+                    rep_pen_decay: newConfig.repPenDecay,
+                    smoothing_factor: newConfig.smoothingFactor,
+                    smoothing_curve: newConfig.smoothingCurve,
+                    num_beams: newConfig.numBeams,
+                    length_penalty: newConfig.lengthPenalty,
+                    early_stopping: newConfig.earlyStopping,
+                    encoder_rep_pen: newConfig.encoderRepPenalty,
+                    ban_eos_token: newConfig.banEosToken,
+                    skip_special_tokens: newConfig.skipSpecialTokens,
+                    add_bos_token: newConfig.addBosToken,
+                    guidance_scale: newConfig.guidanceScale,
+                    penalty_alpha: newConfig.penaltyAlpha,
+                    max_tokens_second: newConfig.maxTokensSecond,
+                    n: newConfig.n,
                 }
             };
             setRawStSettings(updatedSettings);
@@ -770,7 +792,7 @@ const AppContent: React.FC = () => {
 
                     {/* Messages */}
                     <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
-                        <div className="max-w-4xl mx-auto">
+                        <div className={`max-w-4xl mx-auto transition-transform ${leftSidebarOpen ? '' : 'md:-translate-x-10'}`}>
                             {messages.map((msg) => (
                                 <MessageBubble
                                     key={msg.id}
@@ -785,7 +807,7 @@ const AppContent: React.FC = () => {
 
                     {/* Input */}
                     <div className="p-4 md:p-8 z-20 bg-gradient-to-t from-[#09090b] via-[#09090b]/80 to-transparent">
-                        <div className="max-w-4xl mx-auto relative group">
+                        <div className={`max-w-4xl mx-auto relative group transition-transform ${leftSidebarOpen ? '' : 'md:-translate-x-10'}`}>
                             <div className="relative bg-[#18181b]/60 backdrop-blur-2xl rounded-2xl p-2 flex items-end gap-2 ring-1 ring-white/5 focus-within:ring-slate-500/30 focus-within:bg-[#18181b]/80 transition-all shadow-2xl">
                                 <textarea
                                     value={inputText}
