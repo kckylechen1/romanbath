@@ -263,6 +263,48 @@ export interface GenerateOptions {
   systemPrompt?: string;     // System instruction for the character
 }
 
+/**
+ * Poll AI Horde for task completion
+ */
+const pollHordeTask = async (taskId: string, headers: HeadersInit): Promise<string> => {
+  const maxAttempts = 60; // 5 minutes max
+  const pollInterval = 5000; // 5 seconds
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+    const response = await fetch('/api/horde/check-text', {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ id: taskId }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Horde polling failed: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    if (data.done) {
+      // Task completed
+      if (data.generations && data.generations.length > 0) {
+        return data.generations[0].text || '';
+      }
+      return '';
+    }
+
+    if (data.faulted) {
+      throw new Error('Horde task faulted');
+    }
+
+    // Still processing, continue polling
+    console.log(`Horde task ${taskId}: ${data.wait_time}s remaining, position ${data.queue_position}`);
+  }
+
+  throw new Error('Horde task timed out');
+};
+
 export const generateText = async (options: GenerateOptions, settings: any): Promise<string> => {
   try {
     const token = await getCsrfToken();
@@ -343,8 +385,8 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
           rep_pen: settings.textgenerationwebui_settings?.rep_pen || 1.1,
         }
       };
-    } else if (mainApi === 'openai' || mainApi === 'claude' || mainApi === 'makersuite' || mainApi === 'custom' || mainApi === 'perplexity' || mainApi === 'openrouter' || mainApi === 'google') {
-      // Chat Completion APIs (OpenAI, Claude, Google, Perplexity, OpenRouter, etc.)
+    } else if (mainApi === 'openai' || mainApi === 'claude' || mainApi === 'makersuite' || mainApi === 'custom' || mainApi === 'perplexity' || mainApi === 'openrouter' || mainApi === 'google' || mainApi === 'grok') {
+      // Chat Completion APIs (OpenAI, Claude, Google, Perplexity, OpenRouter, Grok, etc.)
       const sourceMap: Record<string, string> = {
         'openai': 'openai',
         'claude': 'claude',
@@ -353,6 +395,7 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
         'google': 'makersuite',
         'perplexity': 'perplexity',
         'openrouter': 'openrouter',
+        'grok': 'openai', // Grok uses OpenAI-compatible API
       };
       const chatCompletionSource = sourceMap[mainApi] || 'openai';
 
@@ -361,6 +404,7 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
         'openai': 'gpt-4o',
         'openrouter': 'anthropic/claude-sonnet-4',
         'google': 'gemini-2.5-flash',
+        'grok': 'grok-4.1-fast',
       };
       const model = settings.modelName || settings.model_openai_select || settings.model || defaultModels[mainApi] || 'gpt-3.5-turbo';
 
@@ -553,6 +597,7 @@ const SECRET_KEY_MAP: Record<string, string> = {
   'google': 'api_key_makersuite',
   'custom': 'api_key_custom',
   'koboldhorde': 'api_key_horde',
+  'grok': 'api_key_openai', // Grok uses OpenAI-compatible format
 };
 
 export const saveSecret = async (mainApi: string, value: string): Promise<boolean> => {
@@ -594,38 +639,215 @@ export const saveSecret = async (mainApi: string, value: string): Promise<boolea
   }
 };
 
-const pollHordeTask = async (taskId: string, headers: HeadersInit): Promise<string> => {
-  let attempts = 0;
-  const maxAttempts = 60; // 60 * 2s = 2 minutes
+/**
+ * Streaming text generation - yields chunks as they arrive
+ * Only works with OpenAI-compatible APIs (openai, openrouter, google, local, custom)
+ */
+export const generateTextStream = async (
+  options: GenerateOptions,
+  settings: any,
+  onChunk: (chunk: string, fullText: string) => void,
+  onComplete: (fullText: string) => void,
+  onError: (error: Error) => void,
+): Promise<void> => {
+  const mainApi = settings.main_api;
 
-  while (attempts < maxAttempts) {
-    await new Promise(r => setTimeout(r, 2000));
-    const response = await fetch('/api/horde/task-status', {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-      body: JSON.stringify({ taskId })
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      if (data.done) {
-        return data.generations[0].text;
-      }
-      if (!data.is_possible || data.faulted) {
-        throw new Error("Horde generation failed or impossible");
-      }
+  // Only certain APIs support streaming
+  const streamableApis = ["openai", "openrouter", "google", "local", "custom", "perplexity"];
+  if (!streamableApis.includes(mainApi)) {
+    // Fall back to non-streaming for unsupported APIs
+    try {
+      const result = await generateText(options, settings);
+      onComplete(result);
+    } catch (error) {
+      onError(error instanceof Error ? error : new Error(String(error)));
     }
-    attempts++;
+    return;
   }
-  throw new Error("Horde generation timed out");
+
+  try {
+    const token = await getCsrfToken();
+    const headers: HeadersInit = { "Content-Type": "application/json" };
+    if (token) {
+      headers["X-CSRF-Token"] = token;
+    }
+
+    // Build the prompt from messages
+    const prompt = options.prompt ||
+      options.messages?.map((m) =>
+        m.role === "system" ? m.content : `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`
+      ).join("\n") || "";
+
+    if (mainApi === "local") {
+      // Call local OpenAI-compatible proxy with streaming
+      const apiUrl = "/local-api/v1";
+      const localApiKey = settings.apiKey || settings.localApiKey || "";
+      const model = settings.modelName || "gemini-2.5-pro";
+
+      const chatMessages: ChatMessage[] = options.messages || [{ role: "user", content: prompt }];
+
+      const response = await fetch(`${apiUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localApiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: chatMessages,
+          max_tokens: settings.maxOutputTokens || settings.amount_gen || 4096,
+          temperature: settings.textgenerationwebui_settings?.temp || settings.temperature || 1.0,
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Local proxy error: ${response.status} - ${errorText}`);
+      }
+
+      await processSSEStream(response, onChunk, onComplete, onError);
+    } else {
+      // Chat Completion APIs with streaming
+      const sourceMap: Record<string, string> = {
+        openai: "openai",
+        claude: "claude",
+        makersuite: "makersuite",
+        custom: "custom",
+        google: "makersuite",
+        perplexity: "perplexity",
+        openrouter: "openrouter",
+        grok: "openai", // Grok uses OpenAI-compatible API
+      };
+      const chatCompletionSource = sourceMap[mainApi] || "openai";
+
+      const defaultModels: Record<string, string> = {
+        perplexity: "sonar",
+        openai: "gpt-4o",
+        openrouter: "anthropic/claude-sonnet-4",
+        google: "gemini-2.5-flash",
+        grok: "grok-2",
+      };
+      const model = settings.modelName || settings.model_openai_select || settings.model || defaultModels[mainApi] || "gpt-3.5-turbo";
+
+      const messages: ChatMessage[] = options.messages && options.messages.length > 0
+        ? options.messages
+        : [
+            { role: "system", content: options.systemPrompt || "You are a helpful assistant." },
+            { role: "user", content: prompt },
+          ];
+
+      const maxOutputTokens = settings.maxOutputTokens || settings.amount_gen || 4096;
+      const thinkingBudget = settings.thinkingBudget || 0;
+      const effectiveMaxTokens = thinkingBudget > 0 ? Math.max(maxOutputTokens, thinkingBudget + 2048) : maxOutputTokens;
+
+      const response = await fetch("/api/backends/chat-completions/generate", {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify({
+          chat_completion_source: chatCompletionSource,
+          messages,
+          model,
+          max_tokens: effectiveMaxTokens,
+          temperature: settings.textgenerationwebui_settings?.temp || settings.temperature || 1.0,
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Generation failed: ${response.statusText} - ${errorText}`);
+      }
+
+      await processSSEStream(response, onChunk, onComplete, onError);
+    }
+  } catch (error) {
+    console.error("Error in streaming generation:", error);
+    onError(error instanceof Error ? error : new Error(String(error)));
+  }
 };
 
 /**
- * Import a character card file (PNG, JSON, YAML, CharX, etc.)
- * @param file The file to import
- * @returns The imported character's filename or null on failure
+ * Process SSE (Server-Sent Events) stream from OpenAI-compatible APIs
  */
+const processSSEStream = async (
+  response: Response,
+  onChunk: (chunk: string, fullText: string) => void,
+  onComplete: (fullText: string) => void,
+  onError: (error: Error) => void,
+): Promise<void> => {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    onError(new Error("No response body"));
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let fullText = "";
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith("data:")) {
+          const data = trimmed.slice(5).trim();
+
+          // End of stream markers
+          // Check for stream end markers
+          if (data === "[DONE]" || data === "") {
+            continue;
+          }
+
+          try {
+            const parsed = JSON.parse(data);
+            
+            // Handle OpenAI format
+            if (parsed.choices && parsed.choices[0]) {
+              const choice = parsed.choices[0];
+              const delta = choice.delta?.content || choice.text || "";
+              if (delta) {
+                fullText += delta;
+                onChunk(delta, fullText);
+              }
+              
+              // Check for finish reason
+              if (choice.finish_reason) {
+                break;
+              }
+            }
+            
+            // Handle other formats
+            if (parsed.response) {
+              fullText += parsed.response;
+              onChunk(parsed.response, fullText);
+            }
+          } catch (e) {
+            // Not valid JSON, might be partial data
+            console.warn("Failed to parse SSE data:", data);
+          }
+        }
+      }
+    }
+    
+    onComplete(fullText);
+  } catch (error) {
+    onError(error instanceof Error ? error : new Error(String(error)));
+  } finally {
+    reader.releaseLock();
+  }
+};
+
 export const importCharacterCard = async (file: File): Promise<{ success: boolean; fileName?: string; error?: string }> => {
   try {
     const token = await getCsrfToken();
@@ -711,5 +933,307 @@ export const importCharacterCard = async (file: File): Promise<{ success: boolea
         ? '无法连接到 SillyTavern 后端（http://127.0.0.1:8000）'
         : (error instanceof Error ? error.message : 'Unknown error occurred')
     };
+  }
+};
+
+// ==================== CHARACTER CRUD OPERATIONS ====================
+
+export interface CharacterFormData {
+  name: string;
+  description: string;
+  personality: string;
+  scenario: string;
+  firstMessage: string;
+  alternateGreetings?: string[];
+  exampleDialogue: string;
+  systemPrompt: string;
+  postHistoryInstructions: string;
+  creatorNotes?: string;
+  tags?: string[];
+  avatar?: File | string;
+}
+
+/**
+ * Create a new character
+ */
+export const createCharacter = async (
+  data: CharacterFormData,
+): Promise<{ success: boolean; fileName?: string; error?: string }> => {
+  try {
+    const token = await getCsrfToken();
+    const headers: HeadersInit = {};
+    if (token) {
+      headers["X-CSRF-Token"] = token;
+    }
+
+    const formData = new FormData();
+    formData.append("name", data.name);
+    formData.append("description", data.description || "");
+    formData.append("personality", data.personality || "");
+    formData.append("scenario", data.scenario || "");
+    formData.append("first_mes", data.firstMessage || "");
+    formData.append("mes_example", data.exampleDialogue || "");
+    formData.append("system_prompt", data.systemPrompt || "");
+    formData.append("post_history_instructions", data.postHistoryInstructions || "");
+    formData.append("creator_notes", data.creatorNotes || "");
+    formData.append("tags", JSON.stringify(data.tags || []));
+
+    if (data.alternateGreetings && data.alternateGreetings.length > 0) {
+      formData.append("alternate_greetings", JSON.stringify(data.alternateGreetings));
+    }
+
+    if (data.avatar instanceof File) {
+      formData.append("avatar", data.avatar);
+    }
+
+    let response = await fetch("/api/characters/create", {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: formData,
+    });
+
+    if (response.status === 403) {
+      resetCsrfToken();
+      const newToken = await getCsrfToken(true);
+      if (newToken) {
+        headers["X-CSRF-Token"] = newToken;
+      }
+      response = await fetch("/api/characters/create", {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: formData,
+      });
+    }
+
+    if (!response.ok) {
+      return { success: false, error: `Failed to create character: ${response.statusText}` };
+    }
+
+    const result = await response.json();
+    return { success: true, fileName: result.file_name || result.avatar };
+  } catch (error) {
+    console.error("Error creating character:", error);
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+  }
+};
+
+/**
+ * Update an existing character
+ */
+export const updateCharacter = async (
+  avatarUrl: string,
+  data: Partial<CharacterFormData>,
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const token = await getCsrfToken();
+    const headers: HeadersInit = {};
+    if (token) {
+      headers["X-CSRF-Token"] = token;
+    }
+
+    const formData = new FormData();
+    formData.append("avatar_url", avatarUrl);
+
+    if (data.name !== undefined) formData.append("name", data.name);
+    if (data.description !== undefined) formData.append("description", data.description);
+    if (data.personality !== undefined) formData.append("personality", data.personality);
+    if (data.scenario !== undefined) formData.append("scenario", data.scenario);
+    if (data.firstMessage !== undefined) formData.append("first_mes", data.firstMessage);
+    if (data.exampleDialogue !== undefined) formData.append("mes_example", data.exampleDialogue);
+    if (data.systemPrompt !== undefined) formData.append("system_prompt", data.systemPrompt);
+    if (data.postHistoryInstructions !== undefined) formData.append("post_history_instructions", data.postHistoryInstructions);
+    if (data.creatorNotes !== undefined) formData.append("creator_notes", data.creatorNotes);
+    if (data.tags !== undefined) formData.append("tags", JSON.stringify(data.tags));
+    if (data.alternateGreetings !== undefined) formData.append("alternate_greetings", JSON.stringify(data.alternateGreetings));
+
+    if (data.avatar instanceof File) {
+      formData.append("avatar", data.avatar);
+    }
+
+    let response = await fetch("/api/characters/edit", {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: formData,
+    });
+
+    if (response.status === 403) {
+      resetCsrfToken();
+      const newToken = await getCsrfToken(true);
+      if (newToken) {
+        headers["X-CSRF-Token"] = newToken;
+      }
+      response = await fetch("/api/characters/edit", {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: formData,
+      });
+    }
+
+    if (!response.ok) {
+      return { success: false, error: `Failed to update character: ${response.statusText}` };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error("Error updating character:", error);
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+  }
+};
+
+/**
+ * Delete a character
+ */
+export const deleteCharacter = async (
+  avatarUrl: string,
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const token = await getCsrfToken();
+    const headers: HeadersInit = { "Content-Type": "application/json" };
+    if (token) {
+      headers["X-CSRF-Token"] = token;
+    }
+
+    let response = await fetch("/api/characters/delete", {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: JSON.stringify({ avatar_url: avatarUrl, delete_chats: false }),
+    });
+
+    if (response.status === 403) {
+      resetCsrfToken();
+      const newToken = await getCsrfToken(true);
+      if (newToken) {
+        headers["X-CSRF-Token"] = newToken;
+      }
+      response = await fetch("/api/characters/delete", {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify({ avatar_url: avatarUrl, delete_chats: false }),
+      });
+    }
+
+    if (!response.ok) {
+      return { success: false, error: `Failed to delete character: ${response.statusText}` };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error("Error deleting character:", error);
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+  }
+};
+
+/**
+ * Get full character details (for editing)
+ */
+export const getCharacterDetails = async (
+  avatarUrl: string,
+): Promise<CharacterFormData | null> => {
+  try {
+    const token = await getCsrfToken();
+    const headers: HeadersInit = { "Content-Type": "application/json" };
+    if (token) {
+      headers["X-CSRF-Token"] = token;
+    }
+
+    const response = await fetch("/api/characters/get", {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: JSON.stringify({ avatar_url: avatarUrl }),
+    });
+
+    if (!response.ok) {
+      console.error("Get character details failed:", response.status);
+      return null;
+    }
+
+    const char = await response.json();
+
+    return {
+      name: char.name || "",
+      description: char.description || "",
+      personality: char.personality || "",
+      scenario: char.scenario || "",
+      firstMessage: char.first_mes || "",
+      alternateGreetings: char.alternate_greetings || [],
+      exampleDialogue: char.mes_example || "",
+      systemPrompt: char.system_prompt || "",
+      postHistoryInstructions: char.post_history_instructions || "",
+      creatorNotes: char.creator_notes || "",
+      tags: char.tags || [],
+      avatar: `/characters/${avatarUrl}`,
+    };
+  } catch (error) {
+    console.error("Error getting character details:", error);
+    return null;
+  }
+};
+
+/**
+ * Duplicate a character
+ */
+export const duplicateCharacter = async (
+  avatarUrl: string,
+): Promise<{ success: boolean; fileName?: string; error?: string }> => {
+  try {
+    const token = await getCsrfToken();
+    const headers: HeadersInit = { "Content-Type": "application/json" };
+    if (token) {
+      headers["X-CSRF-Token"] = token;
+    }
+
+    const response = await fetch("/api/characters/duplicate", {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: JSON.stringify({ avatar_url: avatarUrl }),
+    });
+
+    if (!response.ok) {
+      return { success: false, error: `Failed to duplicate character: ${response.statusText}` };
+    }
+
+    const result = await response.json();
+    return { success: true, fileName: result.file_name };
+  } catch (error) {
+    console.error("Error duplicating character:", error);
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+  }
+};
+
+/**
+ * Export a character as PNG
+ */
+export const exportCharacter = async (avatarUrl: string): Promise<Blob | null> => {
+  try {
+    const token = await getCsrfToken();
+    const headers: HeadersInit = { "Content-Type": "application/json" };
+    if (token) {
+      headers["X-CSRF-Token"] = token;
+    }
+
+    const response = await fetch("/api/characters/export", {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: JSON.stringify({ avatar_url: avatarUrl, format: "png" }),
+    });
+
+    if (!response.ok) {
+      console.error("Export character failed:", response.status);
+      return null;
+    }
+
+    return await response.blob();
+  } catch (error) {
+    console.error("Error exporting character:", error);
+    return null;
   }
 };

@@ -37,6 +37,16 @@ export interface STChatMessage {
     send_date: string;
     mes: string;
     extra?: Record<string, any>;
+
+    // Swipe support (SillyTavern compatible)
+    swipes?: string[];
+    swipe_id?: number;
+    swipe_info?: Array<{
+        send_date: string;
+        gen_started?: number;
+        gen_finished?: number;
+        extra?: Record<string, any>;
+    }>;
 }
 
 // Chat metadata (first line of JSONL)
@@ -66,31 +76,73 @@ export interface ChatInfo {
 // Convert our Message format to SillyTavern format
 const toSTMessage = (msg: Message, userName: string, characterName: string): STChatMessage => {
     const isUser = msg.role === Role.User;
-    return {
+    const sendDate = new Date(msg.timestamp).toLocaleString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+    });
+
+    const stMsg: STChatMessage = {
         name: isUser ? userName : characterName,
         is_user: isUser,
         is_system: false,
-        send_date: new Date(msg.timestamp).toLocaleString('en-US', {
-            month: 'long',
-            day: 'numeric',
-            year: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
-        }),
+        send_date: sendDate,
         mes: msg.content,
-        extra: {}
+        extra: msg.extra || {}
     };
+
+    // Add swipe data for AI messages
+    if (!isUser && msg.swipes && msg.swipes.length > 0) {
+        stMsg.swipes = msg.swipes;
+        stMsg.swipe_id = msg.swipeId ?? 0;
+        stMsg.swipe_info = msg.swipes.map((_, idx) => ({
+            send_date: new Date(msg.swipeTimestamps?.[idx] ?? msg.timestamp).toLocaleString('en-US', {
+                month: 'long',
+                day: 'numeric',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            })
+        }));
+    }
+
+    return stMsg;
 };
 
 // Convert SillyTavern format to our Message format
 const fromSTMessage = (stMsg: STChatMessage, index: number): Message => {
-    return {
+    const message: Message = {
         id: `msg-${index}-${Date.now()}`,
         role: stMsg.is_user ? Role.User : Role.Model,
         content: stMsg.mes,
         timestamp: new Date(stMsg.send_date).getTime() || Date.now()
     };
+
+    // Restore swipe data for AI messages
+    if (!stMsg.is_user && stMsg.swipes && stMsg.swipes.length > 0) {
+        message.swipes = stMsg.swipes;
+        message.swipeId = stMsg.swipe_id ?? 0;
+        // Use content from current swipe
+        message.content = stMsg.swipes[message.swipeId] ?? stMsg.mes;
+
+        // Restore timestamps from swipe_info if available
+        if (stMsg.swipe_info) {
+            message.swipeTimestamps = stMsg.swipe_info.map(info =>
+                new Date(info.send_date).getTime() || Date.now()
+            );
+        }
+    }
+
+    // Restore extra metadata
+    if (stMsg.extra) {
+        message.extra = stMsg.extra;
+    }
+
+    return message;
 };
 
 // Generate a chat filename

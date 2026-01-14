@@ -51,7 +51,14 @@ const OllamaIcon = () => (
     </svg>
 );
 
-export type ApiProviderId = 'local' | 'openai' | 'koboldhorde' | 'kobold' | 'textgenerationwebui' | 'openrouter' | 'google' | 'ollama' | 'perplexity' | 'custom';
+const GrokIcon = () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 2L2 7l10 5 10-5-10-5z" fill="#1DA1F2" />
+        <path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="#1DA1F2" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+);
+
+export type ApiProviderId = 'local' | 'openai' | 'koboldhorde' | 'kobold' | 'textgenerationwebui' | 'openrouter' | 'google' | 'ollama' | 'perplexity' | 'grok' | 'custom';
 
 export interface ApiProvider {
     id: ApiProviderId;
@@ -109,6 +116,15 @@ export const PROVIDERS: ApiProvider[] = [
         description: 'Sonar with real-time search',
         requiresKey: true,
         docsUrl: 'https://docs.perplexity.ai'
+    },
+    {
+        id: 'grok',
+        name: 'Grok (xAI)',
+        icon: <GrokIcon />,
+        defaultUrl: 'https://api.x.ai/v1',
+        description: 'Grok-2, Grok-2 Vision',
+        requiresKey: true,
+        docsUrl: 'https://docs.x.ai'
     },
     {
         id: 'koboldhorde',

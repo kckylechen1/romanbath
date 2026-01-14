@@ -1,7 +1,6 @@
-
 export enum Role {
-  User = 'user',
-  Model = 'model'
+  User = "user",
+  Model = "model",
 }
 
 export interface Message {
@@ -10,6 +9,20 @@ export interface Message {
   content: string;
   timestamp: number;
   isThinking?: boolean;
+
+  // Swipe support (alternative AI responses)
+  swipes?: string[]; // Array of alternative responses
+  swipeId?: number; // Currently selected swipe index (0-based)
+  swipeTimestamps?: number[]; // Timestamp for each swipe
+
+  // Generation metadata
+  extra?: {
+    api?: string; // Which API generated this
+    model?: string; // Model used
+    generationId?: string; // Unique generation ID
+    characterId?: string; // Character ID (for group chats)
+    characterName?: string; // Character name (for group chats)
+  };
 }
 
 export interface Character {
@@ -28,6 +41,44 @@ export interface LorebookEntry {
   keys: string[]; // Keywords that trigger this entry
   content: string; // The context to inject
   enabled: boolean;
+}
+
+// Group Chat - Multiple characters in one conversation
+export interface GroupChat {
+  id: string;
+  name: string;
+  characterIds: string[]; // IDs of characters in the group
+  activationMode: 'round-robin' | 'random' | 'natural'; // How to select next speaker
+  createdAt: number;
+  updatedAt: number;
+  lastActiveCharacterId?: string; // Track who spoke last
+}
+
+// Extended Message type for group chats
+export interface GroupMessage extends Message {
+  characterId?: string; // Which character sent this message (for group chats)
+  characterName?: string; // Character name for display
+}
+
+export interface TTSConfig {
+  enabled: boolean;
+  voice: string;
+  rate: number;
+  pitch: number;
+  volume: number;
+  autoPlay: boolean;
+}
+
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  systemPrefix: string;
+  systemSuffix: string;
+  userPrefix: string;
+  userSuffix: string;
+  assistantPrefix: string;
+  assistantSuffix: string;
+  stopSequences: string[];
 }
 
 // Persona - User profiles that can be saved and switched
@@ -53,12 +104,21 @@ export interface AppSettings {
   autoRestoreChat: boolean;
   showPersonaSwitchNotification: boolean;
   activePersonaId: string | null;
-  language: 'en' | 'zh-CN' | 'zh-TW';
+  language: "en" | "zh-CN" | "zh-TW";
 }
 
 export interface ChatConfig {
   // --- API Settings (New) ---
-  mainApi: 'kobold' | 'koboldhorde' | 'openai' | 'textgenerationwebui' | 'openrouter' | 'google' | 'ollama' | 'custom';
+  mainApi:
+    | "kobold"
+    | "koboldhorde"
+    | "openai"
+    | "textgenerationwebui"
+    | "openrouter"
+    | "google"
+    | "ollama"
+    | "grok"
+    | "custom";
   apiUrl: string;
   apiKey: string;
   modelName: string;
@@ -139,7 +199,7 @@ export interface ChatConfig {
   n: number;
 
   // --- Response Style Preset ---
-  responseStyle: 'natural' | 'sexy' | 'flirty' | 'horny' | 'custom';
+  responseStyle: "natural" | "sexy" | "flirty" | "horny" | "custom";
 
   // --- Advanced Samplers (for Custom mode) ---
   // DRY (Don't Repeat Yourself)
@@ -176,7 +236,7 @@ export interface ChatConfig {
   systemPromptOverride: string;
   authorsNote: string;
   authorsNoteDepth: number;
-  promptOrder: 'default' | 'style_first' | 'scenario_last';
+  promptOrder: "default" | "style_first" | "scenario_last";
 
   // --- Formatting (New) ---
   userPrefix: string; // e.g. "User:" or "## User"
@@ -188,5 +248,11 @@ export interface ChatConfig {
   backgroundBlur: number;
 
   // --- Safety ---
-  safetySettings: 'block_none' | 'block_some' | 'block_most';
+  safetySettings: "block_none" | "block_some" | "block_most";
+
+  // --- TTS (New) ---
+  tts: TTSConfig;
+
+  // --- Prompt Templates (New) ---
+  promptTemplate?: string;
 }
