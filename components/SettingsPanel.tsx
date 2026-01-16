@@ -607,7 +607,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   useEffect(() => {
     if (
       activeTab === "api" &&
-      ["openrouter", "openai", "google", "perplexity", "custom"].includes(
+      ["openrouter", "openai", "google", "perplexity", "custom", "grok"].includes(
         config.mainApi,
       )
     ) {
@@ -645,6 +645,24 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       }
       console.log(`Loading ${config.mainApi} API key from localStorage`);
       handleChange("apiKey", storedKey);
+
+      const needsSecret = [
+        "perplexity",
+        "openai",
+        "openrouter",
+        "google",
+        "koboldhorde",
+        "custom",
+        "grok",
+      ].includes(config.mainApi);
+      if (needsSecret) {
+        saveSecret(config.mainApi, storedKey).then((success) => {
+          if (success) {
+            setConnectionStatus("success");
+            setConnectionMessage("API Key loaded from localStorage and saved");
+          }
+        });
+      }
       return;
     }
 
@@ -761,6 +779,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       "google",
       "koboldhorde",
       "custom",
+      "grok",
     ].includes(config.mainApi);
     if (needsSecret) {
       const success = await saveSecret(config.mainApi, value);
@@ -829,6 +848,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         case "google":
         case "perplexity":
         case "custom":
+        case "grok":
           await testViaBackend();
           return { success: true, message: "API connection verified ✓" };
         case "local": {
@@ -895,6 +915,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       "google",
       "koboldhorde",
       "custom",
+      "grok",
     ].includes(config.mainApi);
     if (needsSecret && config.apiKey) {
       const success = await saveSecret(config.mainApi, config.apiKey);
@@ -1321,148 +1342,25 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       <Cpu size={14} className="text-cyan-400" />
                       Model
                     </label>
-                    <select
+                    <BufferedInput
+                      label=""
                       value={config.modelName || ""}
-                      onChange={(e) =>
-                        handleChange("modelName", e.target.value)
+                      onSave={(val) => handleChange("modelName", val)}
+                      placeholder={
+                        config.mainApi === "grok"
+                          ? "grok-4-1-fast-non-reasoning"
+                          : config.mainApi === "google"
+                            ? "gemini-2.5-flash"
+                            : config.mainApi === "perplexity"
+                              ? "sonar"
+                              : config.mainApi === "openrouter"
+                                ? "anthropic/claude-sonnet-4"
+                                : "gpt-4o"
                       }
-                      className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-slate-500/40"
-                    >
-                      <option value="">-- Select Model --</option>
-                      {config.mainApi === "perplexity" && (
-                        <>
-                          <optgroup label="Search Models">
-                            <option value="sonar">
-                              Sonar (Lightweight Search)
-                            </option>
-                            <option value="sonar-pro">
-                              Sonar Pro (Advanced Search)
-                            </option>
-                          </optgroup>
-                          <optgroup label="Reasoning">
-                            <option value="sonar-reasoning-pro">
-                              Sonar Reasoning Pro (CoT)
-                            </option>
-                          </optgroup>
-                          <optgroup label="Research">
-                            <option value="sonar-deep-research">
-                              Sonar Deep Research
-                            </option>
-                          </optgroup>
-                        </>
-                      )}
-                      {config.mainApi === "openai" && (
-                        <>
-                          <optgroup label="Flagship (Best Overall)">
-                            <option value="gpt-4o">
-                              GPT-4o (Smart & Fast)
-                            </option>
-                            <option value="gpt-4o-mini">
-                              GPT-4o Mini (Efficient)
-                            </option>
-                          </optgroup>
-                          <optgroup label="Reasoning (SOTA)">
-                            <option value="o3-mini">
-                              o3-mini (Advanced Reasoning)
-                            </option>
-                            <option value="o1">o1 (Full Reasoning)</option>
-                            <option value="o1-mini">
-                              o1-mini (Fast Reasoning)
-                            </option>
-                          </optgroup>
-                          <optgroup label="Legacy">
-                            <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                            <option value="gpt-4">GPT-4</option>
-                            <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                          </optgroup>
-                        </>
-                      )}
-                      {config.mainApi === "openrouter" && (
-                        <>
-                          <optgroup label="Claude (Anthropic)">
-                            <option value="anthropic/claude-sonnet-4">
-                              Claude Sonnet 4 (Latest)
-                            </option>
-                            <option value="anthropic/claude-3.5-sonnet">
-                              Claude 3.5 Sonnet
-                            </option>
-                            <option value="anthropic/claude-3-opus">
-                              Claude 3 Opus
-                            </option>
-                            <option value="anthropic/claude-3-haiku">
-                              Claude 3 Haiku (Fast)
-                            </option>
-                          </optgroup>
-                          <optgroup label="OpenAI">
-                            <option value="openai/gpt-4o">GPT-4o</option>
-                            <option value="openai/o1">o1 Reasoning</option>
-                          </optgroup>
-                          <optgroup label="Google">
-                            <option value="google/gemini-2.5-pro-preview">
-                              Gemini 2.5 Pro
-                            </option>
-                            <option value="google/gemini-2.5-flash-preview">
-                              Gemini 2.5 Flash
-                            </option>
-                            <option value="google/gemini-2.0-flash-exp:free">
-                              Gemini 2.0 Flash (Free)
-                            </option>
-                          </optgroup>
-                          <optgroup label="Meta Llama">
-                            <option value="meta-llama/llama-3.3-70b-instruct">
-                              Llama 3.3 70B
-                            </option>
-                            <option value="meta-llama/llama-3.1-405b-instruct">
-                              Llama 3.1 405B
-                            </option>
-                          </optgroup>
-                          <optgroup label="DeepSeek">
-                            <option value="deepseek/deepseek-r1">
-                              DeepSeek R1 (Reasoning)
-                            </option>
-                            <option value="deepseek/deepseek-chat">
-                              DeepSeek Chat
-                            </option>
-                          </optgroup>
-                        </>
-                      )}
-                      {config.mainApi === "google" && (
-                        <>
-                          <optgroup label="Gemini 2.5 (Latest)">
-                            <option value="gemini-2.5-pro">
-                              Gemini 2.5 Pro (Reasoning)
-                            </option>
-                            <option value="gemini-2.5-flash">
-                              Gemini 2.5 Flash (Best Value)
-                            </option>
-                          </optgroup>
-                          <optgroup label="Gemini 2.0">
-                            <option value="gemini-2.0-flash">
-                              Gemini 2.0 Flash
-                            </option>
-                          </optgroup>
-                          <optgroup label="Gemini 1.5 (Legacy)">
-                            <option value="gemini-1.5-pro">
-                              Gemini 1.5 Pro
-                            </option>
-                            <option value="gemini-1.5-flash">
-                              Gemini 1.5 Flash
-                            </option>
-                          </optgroup>
-                        </>
-                      )}
-                      {config.mainApi === "grok" && (
-                        <>
-                          <optgroup label="Grok 4.1 (Recommended)">
-                            <option value="grok-4.1-fast">
-                              Grok 4.1 Fast (2M context, low cost)
-                            </option>
-                          </optgroup>
-                        </>
-                      )}
-                    </select>
+                      className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-slate-500/40 font-mono"
+                    />
                     <p className="text-[10px] text-gray-500">
-                      Select the model to use for text generation.
+                      Enter the exact model name for this provider.
                     </p>
                   </div>
                 )}

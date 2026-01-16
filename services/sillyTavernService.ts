@@ -395,7 +395,7 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
         'google': 'makersuite',
         'perplexity': 'perplexity',
         'openrouter': 'openrouter',
-        'grok': 'openai', // Grok uses OpenAI-compatible API
+        'grok': 'xai',
       };
       const chatCompletionSource = sourceMap[mainApi] || 'openai';
 
@@ -404,7 +404,7 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
         'openai': 'gpt-4o',
         'openrouter': 'anthropic/claude-sonnet-4',
         'google': 'gemini-2.5-flash',
-        'grok': 'grok-4.1-fast',
+        'grok': 'grok-4-1-fast-non-reasoning',
       };
       const model = settings.modelName || settings.model_openai_select || settings.model || defaultModels[mainApi] || 'gpt-3.5-turbo';
 
@@ -597,7 +597,7 @@ const SECRET_KEY_MAP: Record<string, string> = {
   'google': 'api_key_makersuite',
   'custom': 'api_key_custom',
   'koboldhorde': 'api_key_horde',
-  'grok': 'api_key_openai', // Grok uses OpenAI-compatible format
+  'grok': 'api_key_xai',
 };
 
 export const saveSecret = async (mainApi: string, value: string): Promise<boolean> => {
@@ -653,7 +653,7 @@ export const generateTextStream = async (
   const mainApi = settings.main_api;
 
   // Only certain APIs support streaming
-  const streamableApis = ["openai", "openrouter", "google", "local", "custom", "perplexity"];
+  const streamableApis = ["openai", "openrouter", "google", "local", "custom", "perplexity", "grok"];
   if (!streamableApis.includes(mainApi)) {
     // Fall back to non-streaming for unsupported APIs
     try {
@@ -717,7 +717,7 @@ export const generateTextStream = async (
         google: "makersuite",
         perplexity: "perplexity",
         openrouter: "openrouter",
-        grok: "openai", // Grok uses OpenAI-compatible API
+        grok: "xai",
       };
       const chatCompletionSource = sourceMap[mainApi] || "openai";
 
@@ -726,7 +726,7 @@ export const generateTextStream = async (
         openai: "gpt-4o",
         openrouter: "anthropic/claude-sonnet-4",
         google: "gemini-2.5-flash",
-        grok: "grok-2",
+        grok: "grok-4-1-fast-non-reasoning",
       };
       const model = settings.modelName || settings.model_openai_select || settings.model || defaultModels[mainApi] || "gpt-3.5-turbo";
 

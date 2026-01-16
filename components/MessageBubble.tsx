@@ -43,7 +43,7 @@ const formatMessageContent = (content: string): React.ReactNode => {
   // Step 2: Split content into segments (action, dialogue, or narrative)
   // This regex matches complete action (*...*) or dialogue patterns
   const segmentRegex =
-    /(\*[^*]+\*)|("[^"]+"|"[^"]+"|'[^']+'|'[^']+'|「[^」]+」|『[^』]+』)/g;
+    /(\*[^*]+\*)|("[^"]+"|'[^']+'|“[^”]+”|‘[^’]+’|「[^」]+」|『[^』]+』|《[^》]+》)/g;
 
   const segments: { type: "action" | "dialogue" | "text"; content: string }[] =
     [];
