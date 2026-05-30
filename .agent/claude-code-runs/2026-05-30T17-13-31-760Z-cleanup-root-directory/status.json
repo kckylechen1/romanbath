@@ -1,0 +1,13 @@
+{
+  "status": "running",
+  "run_id": "2026-05-30T17-13-31-760Z-cleanup-root-directory",
+  "started_at": "2026-05-30T17:13:31.760Z",
+  "completed_at": null,
+  "work_folder": "/Volumes/Storage/RomanBath",
+  "prompt_path": "/Volumes/Storage/RomanBath/.agent/claude-code-runs/2026-05-30T17-13-31-760Z-cleanup-root-directory/prompt.md",
+  "plan_path": "/Volumes/Storage/RomanBath/.agent/claude-code-runs/2026-05-30T17-13-31-760Z-cleanup-root-directory/plan.md",
+  "result_path": "/Volumes/Storage/RomanBath/.agent/claude-code-runs/2026-05-30T17-13-31-760Z-cleanup-root-directory/result.md",
+  "stdout_path": "/Volumes/Storage/RomanBath/.agent/claude-code-runs/2026-05-30T17-13-31-760Z-cleanup-root-directory/stdout.log",
+  "stderr_path": "/Volumes/Storage/RomanBath/.agent/claude-code-runs/2026-05-30T17-13-31-760Z-cleanup-root-directory/stderr.log",
+  "result_written": false
+}

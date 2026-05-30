@@ -14,6 +14,10 @@ import {
   generateTextStream,
   getHordeModels,
   ChatMessage,
+  CharacterFormData,
+  updateCharacter,
+  createCharacter,
+  deleteCharacter,
 } from "./services/sillyTavernService";
 import { countMessagesTokens } from "./services/tokenizerService";
 import {
@@ -42,6 +46,7 @@ import {
 import CharacterList from "./components/CharacterList";
 import MessageBubble from "./components/MessageBubble";
 import SettingsPanel from "./components/SettingsPanel";
+import CharacterEditor from "./components/CharacterEditor";
 import { useToast } from "./components/Toast";
 import {
   Send,
@@ -127,6 +132,13 @@ const AppContent: React.FC = () => {
   const [activeGroup, setActiveGroup] = useState<GroupChat | null>(null);
   const [showGroupManager, setShowGroupManager] = useState(false);
 
+  // Character Editor State
+  const [showCharacterEditor, setShowCharacterEditor] = useState(false);
+  const [editingCharacterId, setEditingCharacterId] = useState<string | undefined>(undefined);
+
+  // Track character switching to prevent showing stale data
+  const [lastLoadedCharacterId, setLastLoadedCharacterId] = useState<string | null>(null);
+
   // Token Count State
   const [tokenCount, setTokenCount] = useState(0);
 
@@ -209,11 +221,123 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const getGenerationSettings = useCallback(() => {
+    const base = rawStSettings && Object.keys(rawStSettings).length > 0 ? rawStSettings : {};
+    const baseTextGen = base.textgenerationwebui_settings || {};
+
+    const mergedTextGen = {
+      ...baseTextGen,
+      temp: config.temperature,
+      top_p: config.topP,
+      top_k: config.topK,
+      rep_pen: config.repetitionPenalty,
+      min_p: config.minP,
+      top_a: config.topA,
+      typical_p: config.typicalP,
+      tfs: config.tfs,
+      rep_pen_range: config.repPenRange,
+      stopping_strings: config.stopSequences,
+      logit_bias: config.logitBias,
+      grammar_string: config.grammarString,
+      json_schema:
+        config.jsonSchemaAllowEmpty && config.jsonSchema
+          ? config.jsonSchema
+          : undefined,
+      banned_tokens: config.sendBannedTokens ? config.bannedTokens : undefined,
+      banned_strings:
+        config.sendBannedTokens && config.globalBannedTokens
+          ? config.globalBannedTokens
+              .split(",")
+              .map((s: string) => s.trim())
+              .filter((s: string) => s.length > 0)
+          : undefined,
+      negative_prompt: config.negativePrompt,
+      no_repeat_ngram_size: config.noRepeatNgramSize,
+      rep_pen_slope: config.repPenSlope,
+      rep_pen_decay: config.repPenDecay,
+      smoothing_factor: config.smoothingFactor,
+      smoothing_curve: config.smoothingCurve,
+      num_beams: config.numBeams,
+      length_penalty: config.lengthPenalty,
+      early_stopping: config.earlyStopping,
+      encoder_rep_pen: config.encoderRepPenalty,
+      ban_eos_token: config.banEosToken,
+      skip_special_tokens: config.skipSpecialTokens,
+      add_bos_token: config.addBosToken,
+      guidance_scale: config.guidanceScale,
+      penalty_alpha: config.penaltyAlpha,
+      max_tokens_second: config.maxTokensSecond,
+      n: config.n,
+    };
+
+    return {
+      ...base,
+      amount_gen: config.maxOutputTokens,
+      maxOutputTokens: config.maxOutputTokens,
+      thinkingBudget: config.thinkingBudget,
+      temperature: config.temperature,
+      username: config.userName,
+      main_api: config.mainApi,
+      api_server_textgenerationwebui: config.apiUrl,
+      apiUrl: config.apiUrl,
+      apiKey: config.apiKey,
+      modelName: config.modelName,
+      koboldhorde_settings: {
+        ...(base.koboldhorde_settings || {}),
+        apikey: config.apiKey,
+        models: config.hordeModels,
+        auto_adjust_context_length: config.hordeAdjustContext,
+        auto_adjust_response_length: config.hordeAdjustResponse,
+        trusted_workers_only: config.hordeTrustedOnly,
+      },
+      textgenerationwebui_settings: mergedTextGen,
+    };
+  }, [rawStSettings, config]);
+
   // Function to refresh character list (used after import)
   const refreshCharacters = useCallback(async () => {
     const chars = await getCharacters();
     setCharacters(chars);
   }, []);
+
+  // Character Editor Handlers
+  const handleEditCharacter = (charId: string) => {
+    setEditingCharacterId(charId);
+    setShowCharacterEditor(true);
+  };
+
+  const handleCreateCharacter = () => {
+    setEditingCharacterId(undefined);
+    setShowCharacterEditor(true);
+  };
+
+  const handleSaveCharacter = async (data: CharacterFormData) => {
+    if (editingCharacterId) {
+      // Update existing
+      const result = await updateCharacter(editingCharacterId, data);
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+    } else {
+      // Create new
+      const result = await createCharacter(data);
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+    }
+    await refreshCharacters();
+    setShowCharacterEditor(false);
+  };
+
+  const handleDeleteCharacter = async () => {
+    if (!editingCharacterId) return;
+    const result = await deleteCharacter(editingCharacterId);
+    if (!result.success) {
+      throw new Error(result.error);
+    }
+    await refreshCharacters();
+    setShowCharacterEditor(false);
+  };
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -320,13 +444,8 @@ const AppContent: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    // Only start new chat if we're not in initial load with restore pending
-    if (hasInitializedRef.current && !restoreInProgressRef.current) {
-      startNewChat();
-    }
-    setMobileMenuOpen(false);
-  }, [selectedCharacter.id]);
+  // Removed redundant useEffect that was causing chat confusion
+  // The character switching logic is now handled by the loadRecentChat effect below
 
   // Load chat history for current character
   const loadChatHistory = useCallback(async () => {
@@ -402,6 +521,14 @@ const AppContent: React.FC = () => {
     setTokenCount(count);
   }, [messages, selectedCharacter.systemInstruction]);
 
+  // Debug: Log when messages change
+  useEffect(() => {
+    console.log('[Messages Debug] messages state updated:', messages.length, 'messages');
+    console.log('[Messages Debug] messages content:', messages);
+    console.log('[Messages Debug] currentCharacter:', selectedCharacter.name, 'id:', selectedCharacter.id);
+    console.log('[Messages Debug] lastLoadedCharacterId:', lastLoadedCharacterId);
+  }, [messages, selectedCharacter.id, lastLoadedCharacterId]);
+
   // Load chat history when character changes
   useEffect(() => {
     loadChatHistory();
@@ -417,31 +544,112 @@ const AppContent: React.FC = () => {
       )
         return;
 
-      const history = await getChatList(selectedCharacter.id);
-      setChatHistory(history);
+      const currentCharacterId = selectedCharacter.id;
+      console.log('[loadRecentChat] Starting load for:', currentCharacterId, selectedCharacter.name);
 
-      if (history.length > 0) {
-        // Load the most recent chat
-        const mostRecent = history[0];
-        const fileName = stripChatExtension(mostRecent.file_name);
-        const { messages: loadedMessages } = await loadChat(
-          selectedCharacter.id,
-          fileName,
-        );
+      // Clear messages immediately to show we're switching
+      setMessages([]);
+      setLastLoadedCharacterId(null);
 
-        if (loadedMessages.length > 0) {
-          setMessages(loadedMessages);
-          setCurrentChatFileName(fileName);
+      try {
+        const history = await getChatList(selectedCharacter.id);
+        console.log('[loadRecentChat] Chat history loaded:', history.length, 'chats');
+        setChatHistory(history);
+
+        // Check if character changed during async load
+        if (currentCharacterId !== selectedCharacter.id) {
+          console.log('[loadRecentChat] Character changed during load, aborting. Was:', currentCharacterId, 'Now:', selectedCharacter.id);
           return;
         }
-      }
 
-      // No existing chat, start new one
-      startNewChat();
+        if (history.length > 0) {
+          // Load the most recent chat
+          const mostRecent = history[0];
+          const fileName = stripChatExtension(mostRecent.file_name);
+          console.log('[loadRecentChat] Loading chat file:', fileName);
+
+          const { messages: loadedMessages } = await loadChat(
+            selectedCharacter.id,
+            fileName,
+          );
+
+          // Double-check character didn't change during async operation
+          if (currentCharacterId !== selectedCharacter.id) {
+            console.log('[loadRecentChat] Character changed during chat load, aborting');
+            return;
+          }
+
+          console.log('[loadRecentChat] Loaded', loadedMessages.length, 'messages');
+          if (loadedMessages.length > 0) {
+            console.log('[loadRecentChat] Setting messages:', loadedMessages);
+            setMessages(loadedMessages);
+            setCurrentChatFileName(fileName);
+            setLastLoadedCharacterId(currentCharacterId);
+            console.log('[loadRecentChat] Messages set successfully for', currentCharacterId);
+            return;
+          } else {
+            console.warn('[loadRecentChat] No messages to set, loadedMessages is empty');
+          }
+        }
+
+        // No existing chat, start new one - create greeting directly
+        // Double-check character didn't change
+        if (currentCharacterId !== selectedCharacter.id) {
+          console.log('[loadRecentChat] Character changed, aborting new chat creation');
+          return;
+        }
+
+        console.log('[loadRecentChat] No existing chat, creating new one for', selectedCharacter.name);
+        const newFileName = createNewChatFileName(selectedCharacter.name);
+        setCurrentChatFileName(newFileName);
+
+        const greeting: Message = {
+          id: "init-" + Date.now(),
+          role: Role.Model,
+          content: selectedCharacter.firstMessage,
+          timestamp: Date.now(),
+        };
+        setMessages([greeting]);
+        setLastLoadedCharacterId(currentCharacterId);
+        console.log('[loadRecentChat] Created new chat with greeting for', currentCharacterId);
+
+        try {
+          createChatSession(selectedCharacter, config);
+        } catch (e) {
+          console.error('[loadRecentChat] Failed to initialize chat session:', e);
+        }
+
+        // Refresh chat history
+        loadChatHistory();
+      } catch (error) {
+        console.error('[loadRecentChat] Error loading chat for character:', currentCharacterId, error);
+        // Even on error, create a new chat so the user can still interact
+        const newFileName = createNewChatFileName(selectedCharacter.name);
+        setCurrentChatFileName(newFileName);
+
+        const greeting: Message = {
+          id: "init-" + Date.now(),
+          role: Role.Model,
+          content: selectedCharacter.firstMessage,
+          timestamp: Date.now(),
+        };
+        setMessages([greeting]);
+        setLastLoadedCharacterId(currentCharacterId);
+        console.log('[loadRecentChat] Created fallback chat after error for', currentCharacterId);
+
+        try {
+          createChatSession(selectedCharacter, config);
+        } catch (e) {
+          console.error('[loadRecentChat] Failed to initialize chat session after error:', e);
+        }
+      }
     };
 
     if (hasInitializedRef.current && selectedCharacter.id !== "default") {
+      console.log('[loadRecentChat] Effect triggered, calling loadRecentChat');
       loadRecentChat();
+    } else {
+      console.log('[loadRecentChat] Effect skipped - initialized:', hasInitializedRef.current, 'charId:', selectedCharacter.id);
     }
   }, [selectedCharacter.id]);
 
@@ -675,10 +883,11 @@ const AppContent: React.FC = () => {
       const useStreaming = streamableApis.includes(config.mainApi);
 
       if (useStreaming) {
+        const generationSettings = getGenerationSettings();
         // Use streaming for supported APIs
         await generateTextStream(
           { messages: chatMessages },
-          rawStSettings || {},
+          generationSettings,
           // onChunk - update message content as chunks arrive
           (chunk: string, fullText: string) => {
             setMessages((prev) =>
@@ -705,10 +914,11 @@ const AppContent: React.FC = () => {
           },
         );
       } else {
+        const generationSettings = getGenerationSettings();
         // Fall back to non-streaming for other APIs
         const responseText = await generateText(
           { messages: chatMessages },
-          rawStSettings || {},
+          generationSettings,
         );
 
         setMessages((prev) =>
@@ -885,9 +1095,10 @@ const AppContent: React.FC = () => {
 
     try {
       const chatMessages = buildChatMessagesForContext(contextMessages);
+      const generationSettings = getGenerationSettings();
       const responseText = await generateText(
         { messages: chatMessages },
-        rawStSettings || {},
+        generationSettings,
       );
 
       // Add new swipe to existing swipes array
@@ -952,9 +1163,10 @@ const AppContent: React.FC = () => {
 
     try {
       const chatMessages = buildChatMessagesForContext(contextMessages);
+      const generationSettings = getGenerationSettings();
       const responseText = await generateText(
         { messages: chatMessages },
-        rawStSettings || {},
+        generationSettings,
       );
 
       // Update message with new content (add to swipes)
@@ -1032,9 +1244,10 @@ const AppContent: React.FC = () => {
           "[Continue your response naturally without repeating yourself. Do not acknowledge this instruction.]",
       });
 
+      const generationSettings = getGenerationSettings();
       const continuationText = await generateText(
         { messages: chatMessages },
-        rawStSettings || {},
+        generationSettings,
       );
 
       // Append continuation to existing content
@@ -1316,6 +1529,8 @@ const AppContent: React.FC = () => {
               onSelect={setSelectedCharacter}
               isCollapsed={!leftSidebarOpen}
               onCharacterImported={refreshCharacters}
+              onEditCharacter={handleEditCharacter}
+              onCreateCharacter={handleCreateCharacter}
             />
           </div>
         </aside>
@@ -1340,6 +1555,8 @@ const AppContent: React.FC = () => {
               onSelect={setSelectedCharacter}
               isCollapsed={false}
               onCharacterImported={refreshCharacters}
+              onEditCharacter={handleEditCharacter}
+              onCreateCharacter={handleCreateCharacter}
             />
           </div>
         )}
@@ -1757,6 +1974,15 @@ const AppContent: React.FC = () => {
         selectedGroupId={activeGroup?.id}
         isOpen={showGroupManager}
         onClose={() => setShowGroupManager(false)}
+      />
+
+      {/* Character Editor Modal */}
+      <CharacterEditor
+        isOpen={showCharacterEditor}
+        characterId={editingCharacterId}
+        onSave={handleSaveCharacter}
+        onDelete={editingCharacterId ? handleDeleteCharacter : undefined}
+        onClose={() => setShowCharacterEditor(false)}
       />
 
       {/* Toast Notifications */}

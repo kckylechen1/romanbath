@@ -263,6 +263,27 @@ export interface GenerateOptions {
   systemPrompt?: string;     // System instruction for the character
 }
 
+const extractErrorMessage = (raw: string): string => {
+  const text = (raw ?? "").trim();
+  if (!text) return "Unknown error";
+
+  try {
+    const parsed = JSON.parse(text);
+    const parsedAny: any = parsed;
+
+    if (typeof parsedAny?.message === "string" && parsedAny.message.trim()) return parsedAny.message.trim();
+    if (typeof parsedAny?.response === "string" && parsedAny.response.trim()) return parsedAny.response.trim();
+
+    const errorField = parsedAny?.error;
+    if (typeof errorField === "string" && errorField.trim()) return errorField.trim();
+    if (typeof errorField?.message === "string" && errorField.message.trim()) return errorField.message.trim();
+
+    return text;
+  } catch {
+    return text;
+  }
+};
+
 /**
  * Poll AI Horde for task completion
  */
@@ -546,7 +567,8 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Generation failed: ${response.statusText} - ${errorText}`);
+      const message = extractErrorMessage(errorText);
+      throw new Error(`Generation failed: ${response.status} ${response.statusText} - ${message}`);
     }
 
     const data = await response.json();
@@ -554,7 +576,14 @@ export const generateText = async (options: GenerateOptions, settings: any): Pro
 
     // Handle error response from backend
     if (data.error) {
-      throw new Error(`Backend error: ${data.response || data.message || 'Unknown error'}`);
+      const errorField: any = data.error;
+      const message =
+        (typeof errorField === "string" ? errorField : undefined) ||
+        (typeof errorField?.message === "string" ? errorField.message : undefined) ||
+        data.response ||
+        data.message ||
+        "Unknown error";
+      throw new Error(`Backend error: ${message}`);
     }
 
     // Parse response based on API
@@ -757,7 +786,8 @@ export const generateTextStream = async (
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Generation failed: ${response.statusText} - ${errorText}`);
+        const message = extractErrorMessage(errorText);
+        throw new Error(`Generation failed: ${response.status} ${response.statusText} - ${message}`);
       }
 
       await processSSEStream(response, onChunk, onComplete, onError);
@@ -811,6 +841,17 @@ const processSSEStream = async (
 
           try {
             const parsed = JSON.parse(data);
+
+            if (parsed?.error) {
+              const errorField: any = parsed.error;
+              const message =
+                (typeof errorField === "string" ? errorField : undefined) ||
+                (typeof errorField?.message === "string" ? errorField.message : undefined) ||
+                (typeof parsed?.message === "string" ? parsed.message : undefined) ||
+                "Unknown streaming error";
+              onError(new Error(message));
+              return;
+            }
             
             // Handle OpenAI format
             if (parsed.choices && parsed.choices[0]) {

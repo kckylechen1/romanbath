@@ -44,19 +44,24 @@
 ### Prerequisites
 
 - **Node.js** (v18 or higher)
-- **SillyTavern** backend running locally (default: `http://localhost:8000`)
+- (Recommended) **Git submodules** enabled (this repo vendors SillyTavern as a submodule)
 
 ### Installation
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/kckylechen1/romanbath.git
+   git clone --recurse-submodules https://github.com/kckylechen1/romanbath.git
    cd romanbath
+   ```
+
+   If you already cloned without submodules:
+   ```bash
+   git submodule update --init --recursive
    ```
 
 2. **Install dependencies**
    ```bash
-   npm install
+   cd frontend && npm install
    ```
 
 3. **Configure environment**
@@ -67,8 +72,12 @@
 
 4. **Run the development server**
    ```bash
-   npm run dev
+   cd frontend && npm start
    ```
+
+   This launches:
+   - SillyTavern backend at `http://127.0.0.1:8000`
+   - Roman Bath frontend at `http://127.0.0.1:5173`
 
 5. **Open in browser**
    Navigate to `http://localhost:5173`
@@ -79,11 +88,14 @@
 
 ### Connecting to SillyTavern
 
-By default, Roman Bath connects to SillyTavern at `http://localhost:8000`. Make sure:
+By default, Roman Bath connects to SillyTavern at `http://127.0.0.1:8000`.
 
-1. SillyTavern is running (`npm start` in your SillyTavern directory)
-2. CORS is enabled in SillyTavern's settings
-3. The "Listen" option is enabled for external connections
+If you use `npm start` from `frontend/`, SillyTavern is started automatically.
+
+If you run the frontend only (`npm run dev` from `frontend/`), you must start SillyTavern separately and ensure it is reachable.
+
+Troubleshooting:
+- If `backend/SillyTavern` is missing, you cloned without submodules. Run `git submodule update --init --recursive`.
 
 ### Direct API Access (Optional)
 
@@ -98,13 +110,46 @@ You can also use AI providers directly without SillyTavern:
 
 ---
 
+## 🕹️ How to Use
+
+1. **Import a character**
+   - Click **Import Character** in the left sidebar and select a character card.
+
+2. **Pick a character / start a chat**
+   - Select a character from **Contacts**.
+   - Use **New Chat** to start fresh.
+
+3. **Configure your AI provider**
+   - Open **Settings → API 连接 / API**.
+   - Choose a provider (SillyTavern, OpenAI, OpenRouter, Google Gemini, Grok/xAI, Perplexity, etc.).
+   - Paste your API key and set the model name (free-form input).
+
+4. **Chat with streaming responses**
+   - Type in the composer, send, and watch tokens stream in real time.
+
+5. **Go beyond 1:1 chats**
+   - Create **Group Chats** and manage members.
+   - Enable **TTS** if you want voice output.
+   - Use bookmarks and history tools to keep long sessions manageable.
+
+---
+
+## ✅ What This Project Delivers
+
+- A modern, glassmorphic SillyTavern frontend with a faster workflow
+- One-command local dev (`npm start`) that boots backend + frontend
+- Multi-provider support with flexible model naming (no hardcoded dropdown)
+- Roleplay-first UX: character browsing, import, groups, streaming, and tuning controls
+
+---
+
 ## 🛠️ Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite
-- **Styling**: TailwindCSS, Glassmorphism design
+- **Styling**: TailwindCSS (via CDN), Glassmorphism design
 - **Icons**: Lucide React
 - **Fonts**: Inter, JetBrains Mono
-- **Backend Integration**: SillyTavern API
+- **Backend Integration**: SillyTavern API (vendored as a Git submodule)
 
 ---
 
@@ -112,21 +157,36 @@ You can also use AI providers directly without SillyTavern:
 
 ```
 romanbath/
-├── components/           # React components
-│   ├── ApiProviderSelector.tsx
-│   ├── CharacterList.tsx
-│   ├── MessageBubble.tsx
-│   └── SettingsPanel.tsx
-├── services/            # API and data services
-│   ├── chatService.ts
-│   ├── geminiService.ts
-│   ├── personaService.ts
-│   └── sillyTavernService.ts
-├── App.tsx              # Main application component
-├── constants.ts         # Configuration constants
-├── i18n.ts              # Internationalization
-├── types.ts             # TypeScript type definitions
-└── index.html           # Entry HTML file
+├── frontend/              # React frontend
+│   ├── src/
+│   │   ├── components/    # React components
+│   │   │   ├── ApiProviderSelector.tsx
+│   │   │   ├── CharacterList.tsx
+│   │   │   ├── GroupChatManager.tsx
+│   │   │   ├── MessageBubble.tsx
+│   │   │   └── SettingsPanel.tsx
+│   │   ├── services/      # API and data services
+│   │   │   ├── chatService.ts
+│   │   │   ├── groupChatService.ts
+│   │   │   ├── geminiService.ts
+│   │   │   └── sillyTavernService.ts
+│   │   ├── App.tsx        # Main application component
+│   │   ├── constants.ts   # Configuration constants
+│   │   ├── i18n.ts        # Internationalization
+│   │   ├── types.ts       # TypeScript type definitions
+│   │   └── index.tsx      # Entry point
+│   ├── index.html         # Entry HTML file
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── vite.config.ts
+├── backend/               # SillyTavern submodule
+│   └── SillyTavern/
+├── zeroclaw/              # Rust backend (memory system)
+├── characters/            # Character cards
+├── docs/                  # Documentation
+├── plugins/               # Plugins
+├── .env.example
+└── README.md
 ```
 
 ---

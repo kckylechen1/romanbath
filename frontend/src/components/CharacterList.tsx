@@ -1,9 +1,8 @@
 import React, { useRef, useState } from 'react';
 import { Character } from '../types';
 import { Users, Upload, User, Loader2, Plus, Pencil, MoreVertical, Trash2, Copy, Download } from 'lucide-react';
-import { importCharacterCard, createCharacter, updateCharacter, deleteCharacter, duplicateCharacter, exportCharacter, CharacterFormData } from '../services/sillyTavernService';
+import { importCharacterCard, duplicateCharacter, exportCharacter, deleteCharacter } from '../services/sillyTavernService';
 import { useLanguage } from '../i18n';
-import CharacterEditor from './CharacterEditor';
 
 interface CharacterListProps {
   characters: Character[];
@@ -11,6 +10,8 @@ interface CharacterListProps {
   onSelect: (character: Character) => void;
   isCollapsed: boolean;
   onCharacterImported?: () => void;  // Callback to refresh character list
+  onEditCharacter?: (charId: string) => void;  // Callback to edit character
+  onCreateCharacter?: () => void;  // Callback to create new character
 }
 
 const CharacterList: React.FC<CharacterListProps> = ({
@@ -18,16 +19,14 @@ const CharacterList: React.FC<CharacterListProps> = ({
   selectedId,
   onSelect,
   isCollapsed,
-  onCharacterImported
+  onCharacterImported,
+  onEditCharacter,
+  onCreateCharacter,
 }) => {
   const { t } = useLanguage();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-
-  // Character Editor State
-  const [showEditor, setShowEditor] = useState(false);
-  const [editingCharacterId, setEditingCharacterId] = useState<string | undefined>(undefined);
 
   // Context Menu State
   const [contextMenuChar, setContextMenuChar] = useState<string | null>(null);
@@ -68,43 +67,6 @@ const CharacterList: React.FC<CharacterListProps> = ({
     }
   };
 
-  const handleCreateCharacter = () => {
-    setEditingCharacterId(undefined);
-    setShowEditor(true);
-  };
-
-  const handleEditCharacter = (charId: string) => {
-    setEditingCharacterId(charId);
-    setShowEditor(true);
-    setContextMenuChar(null);
-  };
-
-  const handleSaveCharacter = async (data: CharacterFormData) => {
-    if (editingCharacterId) {
-      // Update existing
-      const result = await updateCharacter(editingCharacterId, data);
-      if (!result.success) {
-        throw new Error(result.error);
-      }
-    } else {
-      // Create new
-      const result = await createCharacter(data);
-      if (!result.success) {
-        throw new Error(result.error);
-      }
-    }
-    onCharacterImported?.();
-  };
-
-  const handleDeleteCharacter = async () => {
-    if (!editingCharacterId) return;
-    const result = await deleteCharacter(editingCharacterId);
-    if (!result.success) {
-      throw new Error(result.error);
-    }
-    onCharacterImported?.();
-  };
-
   const handleDuplicateCharacter = async (charId: string) => {
     setContextMenuChar(null);
     const result = await duplicateCharacter(charId);
@@ -136,6 +98,11 @@ const CharacterList: React.FC<CharacterListProps> = ({
     e.stopPropagation();
     setContextMenuChar(charId);
     setContextMenuPos({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleEditFromMenu = (charId: string) => {
+    setContextMenuChar(null);
+    onEditCharacter?.(charId);
   };
 
   const handleDeleteFromMenu = async (charId: string) => {
@@ -214,7 +181,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleEditCharacter(char.id);
+                  onEditCharacter?.(char.id);
                 }}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-slate-800/80 text-slate-500 hover:text-white hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-all"
                 title="Edit character"
@@ -234,7 +201,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            onClick={() => handleEditCharacter(contextMenuChar)}
+            onClick={() => handleEditFromMenu(contextMenuChar)}
             className="w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-300 hover:bg-white/5 hover:text-white transition-colors"
           >
             <Pencil size={14} />
@@ -285,7 +252,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
         {/* Create New Character Button */}
         {!isCollapsed && (
           <button
-            onClick={handleCreateCharacter}
+            onClick={onCreateCharacter}
             className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600/20 to-pink-600/20 hover:from-purple-600/30 hover:to-pink-600/30 text-purple-300 hover:text-purple-200 p-3 rounded-xl border border-purple-500/20 hover:border-purple-500/30 transition-all"
           >
             <Plus size={18} />
@@ -313,15 +280,6 @@ const CharacterList: React.FC<CharacterListProps> = ({
           )}
         </button>
       </div>
-
-      {/* Character Editor Modal */}
-      <CharacterEditor
-        isOpen={showEditor}
-        characterId={editingCharacterId}
-        onSave={handleSaveCharacter}
-        onDelete={editingCharacterId ? handleDeleteCharacter : undefined}
-        onClose={() => setShowEditor(false)}
-      />
     </div>
   );
 };

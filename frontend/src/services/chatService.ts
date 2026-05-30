@@ -235,6 +235,8 @@ export const loadChat = async (
     try {
         const headers = await getHeaders();
 
+        console.log('[loadChat] Fetching chat:', { characterId, chatFileName });
+
         const response = await fetch('/api/chats/get', {
             method: 'POST',
             headers,
@@ -246,27 +248,37 @@ export const loadChat = async (
         });
 
         if (!response.ok) {
-            console.error('Failed to load chat:', response.statusText);
+            console.error('[loadChat] Failed to load chat:', response.statusText);
             return { messages: [], metadata: null };
         }
 
         const data: (STChatMetadata | STChatMessage)[] = await response.json();
 
+        console.log('[loadChat] Raw data from server:', data.length, 'items');
+        console.log('[loadChat] Data sample:', data);
+
         if (!data || data.length === 0) {
+            console.warn('[loadChat] No data received from server');
             return { messages: [], metadata: null };
         }
 
         // First entry is metadata
         const metadata = data[0] as STChatMetadata;
+        console.log('[loadChat] Metadata:', metadata);
 
         // Rest are messages
-        const messages = data.slice(1).map((msg, index) =>
+        const messageData = data.slice(1);
+        console.log('[loadChat] Message data count:', messageData.length);
+
+        const messages = messageData.map((msg, index) =>
             fromSTMessage(msg as STChatMessage, index)
         );
 
+        console.log('[loadChat] Converted messages:', messages.length);
+
         return { messages, metadata };
     } catch (error) {
-        console.error('Error loading chat:', error);
+        console.error('[loadChat] Error loading chat:', error);
         return { messages: [], metadata: null };
     }
 };
