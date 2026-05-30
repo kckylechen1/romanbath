@@ -1,0 +1,14 @@
+{
+  "status": "completed",
+  "run_id": "2026-05-30T08-31-27-338Z-fix-xai-security-issues",
+  "started_at": "2026-05-30T08:31:27.338Z",
+  "completed_at": "2026-05-30T08:45:24.353Z",
+  "work_folder": "/Users/kckylechen/Dev/zeroclaw",
+  "prompt_path": "/Users/kckylechen/Dev/zeroclaw/.agent/claude-code-runs/2026-05-30T08-31-27-338Z-fix-xai-security-issues/prompt.md",
+  "plan_path": "/Users/kckylechen/Dev/zeroclaw/.agent/claude-code-runs/2026-05-30T08-31-27-338Z-fix-xai-security-issues/plan.md",
+  "result_path": "/Users/kckylechen/Dev/zeroclaw/.agent/claude-code-runs/2026-05-30T08-31-27-338Z-fix-xai-security-issues/result.md",
+  "stdout_path": "/Users/kckylechen/Dev/zeroclaw/.agent/claude-code-runs/2026-05-30T08-31-27-338Z-fix-xai-security-issues/stdout.log",
+  "stderr_path": "/Users/kckylechen/Dev/zeroclaw/.agent/claude-code-runs/2026-05-30T08-31-27-338Z-fix-xai-security-issues/stderr.log",
+  "result_written": true,
+  "exit_code": 0
+}

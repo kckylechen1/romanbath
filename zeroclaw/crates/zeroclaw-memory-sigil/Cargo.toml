@@ -1,0 +1,22 @@
+[package]
+name = "zeroclaw-memory-sigil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Chat-focused memory system for RomanBath — SQLite-backed with ACT-R decay, dreaming pipeline, and FTS search."
+publish = false
+
+[dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+uuid = { version = "1.22", default-features = false, features = ["v4", "std"] }
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+anyhow = "1.0"
+regex = "1.10"
+tokio = { version = "1.50", default-features = false, features = ["rt", "macros", "time"] }
+zeroclaw-api.workspace = true
+
+[dev-dependencies]
+tempfile = "3.26"

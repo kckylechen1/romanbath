@@ -1,0 +1,14 @@
+{
+  "status": "completed",
+  "run_id": "2026-05-30T17-00-13-810Z-enrichment-module",
+  "started_at": "2026-05-30T17:00:13.810Z",
+  "completed_at": "2026-05-30T17:06:46.636Z",
+  "work_folder": "/Volumes/Storage/RomanBath/zeroclaw",
+  "prompt_path": "/Volumes/Storage/RomanBath/zeroclaw/.agent/claude-code-runs/2026-05-30T17-00-13-810Z-enrichment-module/prompt.md",
+  "plan_path": "/Volumes/Storage/RomanBath/zeroclaw/.agent/claude-code-runs/2026-05-30T17-00-13-810Z-enrichment-module/plan.md",
+  "result_path": "/Volumes/Storage/RomanBath/zeroclaw/.agent/claude-code-runs/2026-05-30T17-00-13-810Z-enrichment-module/result.md",
+  "stdout_path": "/Volumes/Storage/RomanBath/zeroclaw/.agent/claude-code-runs/2026-05-30T17-00-13-810Z-enrichment-module/stdout.log",
+  "stderr_path": "/Volumes/Storage/RomanBath/zeroclaw/.agent/claude-code-runs/2026-05-30T17-00-13-810Z-enrichment-module/stderr.log",
+  "result_written": true,
+  "exit_code": 0
+}
