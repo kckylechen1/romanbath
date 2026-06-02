@@ -2,18 +2,66 @@
 
 use crate::security::traits::Sandbox;
 use std::path::Path;
-use std::sync::Arc;
-use zeroclaw_config::schema::SandboxConfig;
+use std::sync::{Arc, Once};
+use zeroclaw_config::schema::{SandboxBackend, SandboxConfig};
+
+static SANDBOX_DEPRECATION_WARN_ONCE: Once = Once::new();
+
+/// True when the caller's `SandboxConfig` shows explicit sandbox intent that
+/// the operator needs to be told was ignored. `Auto` and `None` are the
+/// default/unspecified values and must NOT trigger the per-call WARN.
+fn explicit_sandbox_intent(sandbox: &SandboxConfig) -> bool {
+    sandbox.enabled == Some(true)
+        || !matches!(
+            sandbox.backend,
+            SandboxBackend::None | SandboxBackend::Auto
+        )
+}
 
 /// Create a sandbox based on auto-detection or explicit config.
 ///
 /// Sandbox backends (Docker, Firejail, Bubblewrap, Landlock, Seatbelt) have
-/// been removed. Always returns `NoopSandbox` (application-layer security).
+/// been removed; this always returns `NoopSandbox`. The `enabled` and
+/// `backend` fields on `SandboxConfig` remain in the schema for backward
+/// compatibility but are ignored at runtime. See AGENTS.md §Sandbox
+/// deprecation for the migration contract.
 pub fn create_sandbox(
-    _sandbox: &SandboxConfig,
+    sandbox: &SandboxConfig,
     _runtime_kind: &str,
     _workspace_dir: Option<&Path>,
 ) -> Arc<dyn Sandbox> {
+    SANDBOX_DEPRECATION_WARN_ONCE.call_once(|| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                .with_attrs(::serde_json::json!({
+                    "removed_backends": ["docker", "firejail", "bubblewrap", "landlock", "seatbelt"],
+                })),
+            "Sandbox backends (Docker, Firejail, Bubblewrap, Landlock, Seatbelt) have been \
+             removed in this release. All tool executions — including agent shell commands — \
+             now run with NoopSandbox (no OS-level isolation). The agent runtime workspace is \
+             the only remaining boundary; do not rely on [risk_profiles.*].sandbox_backend to \
+             limit blast radius. See AGENTS.md §Sandbox deprecation for migration guidance."
+        );
+    });
+
+    if explicit_sandbox_intent(sandbox) {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "configured_enabled": sandbox.enabled,
+                    "configured_backend": format!("{:?}", sandbox.backend),
+                })),
+            "SandboxConfig requested a real sandbox but all backends were removed; \
+             returning NoopSandbox. Remove the [risk_profiles.*].sandbox_enabled and \
+             sandbox_backend entries from your config to silence this warning, or accept \
+             that agent tool execution is no longer OS-isolated in this build."
+        );
+    }
+
     Arc::new(super::traits::NoopSandbox)
 }
 
@@ -55,4 +103,42 @@ pub fn linux_memcg_available() -> bool {
 #[cfg(not(target_os = "linux"))]
 pub fn linux_memcg_available() -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(enabled: Option<bool>, backend: SandboxBackend) -> SandboxConfig {
+        SandboxConfig {
+            enabled,
+            backend,
+            ..SandboxConfig::default()
+        }
+    }
+
+    #[test]
+    fn explicit_sandbox_intent_rejects_defaults() {
+        // Default values (Auto + no explicit enabled) must NOT trigger the
+        // per-call WARN — they're the "no opinion" baseline.
+        assert!(!explicit_sandbox_intent(&cfg(None, SandboxBackend::Auto)));
+        assert!(!explicit_sandbox_intent(&cfg(None, SandboxBackend::None)));
+        assert!(!explicit_sandbox_intent(&cfg(Some(false), SandboxBackend::Auto)));
+    }
+
+    #[test]
+    fn explicit_sandbox_intent_flags_enabled_true() {
+        assert!(explicit_sandbox_intent(&cfg(Some(true), SandboxBackend::Auto)));
+        assert!(explicit_sandbox_intent(&cfg(Some(true), SandboxBackend::None)));
+    }
+
+    #[test]
+    fn explicit_sandbox_intent_flags_real_backends() {
+        // Any non-default, non-None backend is an explicit operator choice.
+        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::Docker)));
+        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::Firejail)));
+        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::Landlock)));
+        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::Bubblewrap)));
+        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::SandboxExec)));
+    }
 }
