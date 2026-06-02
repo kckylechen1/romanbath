@@ -113,12 +113,15 @@ mod tests {
             "INSERT INTO memories (id, path, text, importance, timestamp)
              VALUES ('test-1', '/chat/char1/memories', 'hello', 0.7, '2026-05-30T00:00:00Z')",
             [],
-        ).unwrap();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM memories WHERE path LIKE '/chat/char1/%'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE path LIKE '/chat/char1/%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 1);
     }
 }

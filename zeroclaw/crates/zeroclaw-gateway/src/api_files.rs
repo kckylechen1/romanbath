@@ -85,10 +85,5 @@ pub async fn handle_serve_file(
     };
 
     let mime = mime_for_path(&canonical);
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, mime)],
-        data,
-    )
-        .into_response()
+    (StatusCode::OK, [(header::CONTENT_TYPE, mime)], data).into_response()
 }

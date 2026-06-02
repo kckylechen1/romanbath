@@ -383,9 +383,9 @@ async fn handle_socket(
     })
     .await
     .unwrap_or_else(|join_err| {
-        Err(anyhow::anyhow!(
+        Err(anyhow::Error::msg(format!(
             "ws session cwd resolution task panicked: {join_err}"
-        ))
+        )))
     }) {
         Ok(cwd) => cwd,
         Err(e) => {
@@ -452,7 +452,13 @@ async fn handle_socket(
 
     // ── Character card injection ─────────────────────────────────────
     if let Some(ref char_name) = character_name {
-        match inject_character_card(&mut agent, char_name, character_mode.as_deref(), user_name.as_deref(), &config.data_dir) {
+        match inject_character_card(
+            &mut agent,
+            char_name,
+            character_mode.as_deref(),
+            user_name.as_deref(),
+            &config.data_dir,
+        ) {
             Ok(Some(first_mes)) => {
                 // Send first_mes as initial assistant message
                 let chunk = serde_json::json!({
@@ -468,9 +474,13 @@ async fn handle_socket(
             }
             Ok(None) => {} // No first_mes, that's fine
             Err(e) => {
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"character": char_name, "error": e.to_string()})),
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                        .with_attrs(
+                            ::serde_json::json!({"character": char_name, "error": e.to_string()})
+                        ),
                     "Failed to load character card (continuing without persona)"
                 );
             }
@@ -766,12 +776,12 @@ fn resolve_session_cwd(
                 })),
             "ws session cwd denied (not in allowlist)"
         );
-        return Err(anyhow::anyhow!(
+        return Err(anyhow::Error::msg(format!(
             "cwd `{}` is not in gateway.allowed_session_cwds; add the directory to \
              [gateway].allowed_session_cwds in config.toml, or omit the cwd query \
              parameter to fall back to the gateway default workspace",
             canonical.display()
-        ));
+        )));
     }
 
     Ok(canonical)
@@ -832,7 +842,9 @@ fn inject_character_card(
     data_dir: &std::path::Path,
 ) -> anyhow::Result<Option<String>> {
     let mgr = zeroclaw_cards::CardManager::default()?;
-    let card = mgr.load(character_name).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let card = mgr
+        .load(character_name)
+        .map_err(|e| anyhow::Error::msg(format!("{e}")))?;
 
     let uname = user_name.unwrap_or("User");
     let char_mode = mode.unwrap_or("play");
@@ -868,7 +880,9 @@ fn inject_character_card(
         None
     } else {
         // Apply template substitution to first_mes
-        let rendered = card.data.first_mes
+        let rendered = card
+            .data
+            .first_mes
             .replace("{{char}}", &card.data.name)
             .replace("{{user}}", uname);
         Some(rendered)

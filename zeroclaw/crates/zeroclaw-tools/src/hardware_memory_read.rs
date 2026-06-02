@@ -106,9 +106,7 @@ impl Tool for HardwareMemoryReadTool {
             Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(
-                    "Memory read requires probe feature which has been removed.".into(),
-                ),
+                error: Some("Memory read requires probe feature which has been removed.".into()),
             })
         }
     }

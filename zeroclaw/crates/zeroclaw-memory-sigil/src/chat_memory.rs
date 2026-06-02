@@ -27,8 +27,8 @@ impl ChatMemoryStore {
     }
 
     fn db_path_for(&self, character_name: &str) -> PathBuf {
-        let safe_name = character_name
-            .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+        let safe_name =
+            character_name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
         self.db_path.join(format!("{safe_name}_memory.db"))
     }
 
@@ -143,7 +143,8 @@ impl ChatMemoryStore {
         // Compute symbolic scores
         let mut symbolic_scores = HashMap::new();
         for (id, entry) in &entries {
-            let score = scorer::symbolic_score(query, &entry.text, &entry.keywords, &entry.entities);
+            let score =
+                scorer::symbolic_score(query, &entry.text, &entry.keywords, &entry.entities);
             symbolic_scores.insert(id.clone(), score);
         }
 
@@ -195,10 +196,7 @@ impl ChatMemoryStore {
                 let mut lines = vec!["[Relevant memories from past conversations]".to_string()];
                 for r in &results {
                     let ts = &r.entry.timestamp[..10.min(r.entry.timestamp.len())];
-                    lines.push(format!(
-                        "- ({}, {}) {}",
-                        ts, r.entry.category, r.entry.text
-                    ));
+                    lines.push(format!("- ({}, {}) {}", ts, r.entry.category, r.entry.text));
                 }
                 lines.join("\n")
             }
@@ -278,7 +276,11 @@ mod tests {
             "user",
             "I prefer using dark mode for everything",
         );
-        assert!(result.is_ok(), "save_chat_memory failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "save_chat_memory failed: {:?}",
+            result.err()
+        );
 
         // Now test via recall_memories (query must be >= 10 chars for non-CJK, and FTS AND semantics)
         let memories = store
@@ -318,10 +320,8 @@ mod tests {
             )
             .unwrap();
 
-        let injected = store.inject_memories_into_prompt(
-            "test_char4",
-            "User: TypeScript new projects",
-        );
+        let injected =
+            store.inject_memories_into_prompt("test_char4", "User: TypeScript new projects");
         assert!(!injected.is_empty());
         assert!(injected.contains("TypeScript"));
     }

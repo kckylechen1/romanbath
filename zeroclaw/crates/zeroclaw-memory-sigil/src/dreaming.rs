@@ -8,14 +8,14 @@
 // heuristics with LLM-powered enrichment.  The enricher is optional;
 // `None` preserves the original behaviour exactly.
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::enrichment::MemoryEnricher;
-use crate::memory_crud::{self, now_utc_iso, MemoryError};
+use crate::memory_crud::{self, MemoryError, now_utc_iso};
 use crate::scorer::tokenize;
 use crate::types::{DreamingReport, MemoryEntry};
 
@@ -65,10 +65,8 @@ impl DreamingPipeline {
             let mut conn = self.open()?;
             let entries = memory_crud::list_by_path(&conn, &path_prefix, 500)?;
 
-            let raw_entries: Vec<&MemoryEntry> = entries
-                .iter()
-                .filter(|e| e.tier == "raw")
-                .collect();
+            let raw_entries: Vec<&MemoryEntry> =
+                entries.iter().filter(|e| e.tier == "raw").collect();
 
             let mut merged = 0usize;
             let processed = raw_entries.len();
@@ -108,13 +106,14 @@ impl DreamingPipeline {
             let enrich_ok = async {
                 let mut conn = self.open()?;
                 let entries = memory_crud::list_by_path(&conn, &path_prefix, 500)?;
-                let surviving: Vec<MemoryEntry> = entries
-                    .into_iter()
-                    .filter(|e| e.tier == "raw")
-                    .collect();
+                let surviving: Vec<MemoryEntry> =
+                    entries.into_iter().filter(|e| e.tier == "raw").collect();
 
                 for entry in &surviving {
-                    match enricher.extract_facts(&entry.text, character_name, "user").await {
+                    match enricher
+                        .extract_facts(&entry.text, character_name, "user")
+                        .await
+                    {
                         Ok((summary, keywords, entities, importance)) => {
                             let mut updated = entry.clone();
                             updated.summary = summary;
@@ -180,11 +179,7 @@ impl DreamingPipeline {
                 for entry in &candidates {
                     let should_promote = if let Some(enricher) = &self.enricher {
                         enricher
-                            .verify_consolidation(
-                                &entry.summary,
-                                &entry.text,
-                                entry.recall_count,
-                            )
+                            .verify_consolidation(&entry.summary, &entry.text, entry.recall_count)
                             .await
                             .unwrap_or_default()
                     } else {
@@ -294,10 +289,7 @@ impl DreamingPipeline {
         let mut by_category: std::collections::HashMap<&str, Vec<&MemoryEntry>> =
             std::collections::HashMap::new();
         for entry in &consolidated {
-            by_category
-                .entry(&entry.category)
-                .or_default()
-                .push(entry);
+            by_category.entry(&entry.category).or_default().push(entry);
         }
 
         let mut new_id = uuid::Uuid::new_v4().to_string();

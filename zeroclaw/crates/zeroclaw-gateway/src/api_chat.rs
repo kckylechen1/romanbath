@@ -10,13 +10,13 @@
 
 use super::AppState;
 use axum::{
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse,
+        sse::{Event, KeepAlive, Sse},
     },
-    Json,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -128,17 +128,16 @@ pub async fn handle_chat(
     }
 }
 
-async fn handle_streaming_chat(
-    state: &AppState,
-    req: ChatRequest,
-) -> axum::response::Response {
+async fn handle_streaming_chat(state: &AppState, req: ChatRequest) -> axum::response::Response {
     let char_name = req.character_name.clone();
     let uname = req.user_name.clone().unwrap_or_else(|| "User".to_string());
     let memory_dir = state.config.read().data_dir.clone();
 
     // Per-request max_tokens override (ephemeral — applies to this call only).
     if req.max_tokens.is_some() {
-        state.model_provider.set_per_request_max_tokens(req.max_tokens);
+        state
+            .model_provider
+            .set_per_request_max_tokens(req.max_tokens);
     }
     let request_temperature = req.temperature;
 
@@ -162,50 +161,37 @@ async fn handle_streaming_chat(
 
     let stream = state
         .model_provider
-        .stream_chat_with_history(
-            &messages,
-            &model,
-            temperature,
-            StreamOptions::new(true),
-        )
-        .map(move |result| {
-            match result {
-                Ok(chunk) => {
-                    if chunk.is_final {
-                        let final_text = {
-                            let lock = reply_accumulator_clone.lock().unwrap();
-                            lock.clone()
-                        };
-                        if let Some(cn) = char_name.clone() {
-                            let uname = uname.clone();
-                            let memory_dir = memory_dir.clone();
-                            let final_text = final_text.clone();
-                            tokio::task::spawn_blocking(move || {
-                                let mem_store = ChatMemoryStore::new(&memory_dir.join("chat_memory"));
-                                let _ = mem_store.save_chat_memory(
-                                    &cn,
-                                    &uname,
-                                    "assistant",
-                                    &final_text,
-                                );
-                            });
-                        }
-                        Ok::<_, Infallible>(
-                            Event::default().data("[DONE]"),
-                        )
-                    } else {
-                        {
-                            let mut lock = reply_accumulator_clone.lock().unwrap();
-                            lock.push_str(&chunk.delta);
-                        }
-                        let json = serde_json::json!({"token": chunk.delta});
-                        Ok(Event::default().data(json.to_string()))
+        .stream_chat_with_history(&messages, &model, temperature, StreamOptions::new(true))
+        .map(move |result| match result {
+            Ok(chunk) => {
+                if chunk.is_final {
+                    let final_text = {
+                        let lock = reply_accumulator_clone.lock().unwrap();
+                        lock.clone()
+                    };
+                    if let Some(cn) = char_name.clone() {
+                        let uname = uname.clone();
+                        let memory_dir = memory_dir.clone();
+                        let final_text = final_text.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let mem_store = ChatMemoryStore::new(&memory_dir.join("chat_memory"));
+                            let _ =
+                                mem_store.save_chat_memory(&cn, &uname, "assistant", &final_text);
+                        });
                     }
-                }
-                Err(e) => {
-                    let json = serde_json::json!({"error": e.to_string()});
+                    Ok::<_, Infallible>(Event::default().data("[DONE]"))
+                } else {
+                    {
+                        let mut lock = reply_accumulator_clone.lock().unwrap();
+                        lock.push_str(&chunk.delta);
+                    }
+                    let json = serde_json::json!({"token": chunk.delta});
                     Ok(Event::default().data(json.to_string()))
                 }
+            }
+            Err(e) => {
+                let json = serde_json::json!({"error": e.to_string()});
+                Ok(Event::default().data(json.to_string()))
             }
         });
 
@@ -215,10 +201,7 @@ async fn handle_streaming_chat(
 }
 
 /// Build the final messages array with character card injection.
-async fn build_messages(
-    state: &AppState,
-    req: ChatRequest,
-) -> anyhow::Result<Vec<ChatMessage>> {
+async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Vec<ChatMessage>> {
     let max_context_tokens = req.max_context_tokens;
     let model = state.model.clone();
     let mut messages = req.messages;
@@ -227,7 +210,7 @@ async fn build_messages(
         let mgr = CardManager::default()?;
         let card = mgr
             .load(name)
-            .map_err(|e| anyhow::anyhow!("Character '{name}' not found: {e}"))?;
+            .map_err(|e| anyhow::Error::msg(format!("Character '{name}' not found: {e}")))?;
 
         let user_name = req.user_name.as_deref().unwrap_or("User");
 
@@ -246,19 +229,19 @@ async fn build_messages(
 
         // Save the last user message as a memory (best-effort)
         if let Some(last_user_msg) = messages.iter().rev().find(|m| m.role == "user") {
-            let _ = mem_store.save_chat_memory(
-                name,
-                user_name,
-                "user",
-                &last_user_msg.content,
-            );
+            let _ = mem_store.save_chat_memory(name, user_name, "user", &last_user_msg.content);
         }
 
         // Inject relevant memories into prompt
         let memory_context = mem_store.inject_memories_into_prompt(name, &conversation_text);
 
         // Build ST-style prompt fragments
-        let mut fragments = card.build_prompt(&req.mode, user_name, &conversation_text, req.user_description.as_deref());
+        let mut fragments = card.build_prompt(
+            &req.mode,
+            user_name,
+            &conversation_text,
+            req.user_description.as_deref(),
+        );
 
         // Remove any existing system messages from the caller
         messages.retain(|m| m.role != "system");
@@ -278,8 +261,7 @@ async fn build_messages(
 
         // ── Scene Mode injection ────────────────────────────────────────
         if req.scene_mode.unwrap_or(false) {
-            let scene_template_path =
-                std::path::Path::new("characters/scene_template.txt");
+            let scene_template_path = std::path::Path::new("characters/scene_template.txt");
             if scene_template_path.exists() {
                 if let Ok(template) = std::fs::read_to_string(scene_template_path) {
                     if !template.is_empty() {
@@ -315,7 +297,9 @@ async fn build_messages(
         // Rebuild ChatMessage vec from truncated token messages
         // Preserve original ChatMessage for messages that survived truncation
         messages.retain(|m| {
-            token_msgs.iter().any(|tm| tm.role == m.role && tm.content == m.content)
+            token_msgs
+                .iter()
+                .any(|tm| tm.role == m.role && tm.content == m.content)
         });
     }
 
@@ -329,7 +313,9 @@ async fn process_chat(state: &AppState, req: ChatRequest) -> anyhow::Result<Stri
 
     // Per-request max_tokens override (ephemeral — applies to this call only).
     if req.max_tokens.is_some() {
-        state.model_provider.set_per_request_max_tokens(req.max_tokens);
+        state
+            .model_provider
+            .set_per_request_max_tokens(req.max_tokens);
     }
     let request_temperature = req.temperature;
 
@@ -342,7 +328,7 @@ async fn process_chat(state: &AppState, req: ChatRequest) -> anyhow::Result<Stri
         .model_provider
         .chat_with_history(&messages, &model, temperature)
         .await
-        .map_err(|e| anyhow::anyhow!("Model provider error: {e}"))?;
+        .map_err(|e| anyhow::Error::msg(format!("Model provider error: {e}")))?;
 
     if let Some(ref name) = char_name {
         let memory_dir = state.config.read().data_dir.clone();

@@ -208,7 +208,6 @@ mod doctor;
 mod gateway;
 #[cfg(feature = "agent-runtime")]
 mod health;
-mod interactive_model;
 #[cfg(feature = "agent-runtime")]
 mod heartbeat;
 #[cfg(feature = "agent-runtime")]
@@ -219,6 +218,7 @@ mod i18n;
 mod identity;
 #[cfg(feature = "agent-runtime")]
 mod integrations;
+mod interactive_model;
 mod memory;
 #[cfg(feature = "agent-runtime")]
 mod migration;
@@ -250,8 +250,8 @@ use config::Config;
 
 // Re-export so binary modules can use crate::<CommandEnum> while keeping a single source of truth.
 pub use zeroclaw::{
-    ChannelCommands, CronCommands, GatewayCommands, IntegrationCommands,
-    MigrateCommands, ServiceCommands, SkillBundleCommands, SkillCommands,
+    ChannelCommands, CronCommands, GatewayCommands, IntegrationCommands, MigrateCommands,
+    ServiceCommands, SkillBundleCommands, SkillCommands,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -1347,8 +1347,7 @@ async fn main() -> Result<()> {
     // For the ACP command and agent interactive mode, we default to WARN to avoid
     // INFO logs corrupting the stdio protocol or interleaving with conversation output.
     // We also always redirect logs to stderr so stdout remains clean for data.
-    let default_log_level = if matches!(cli.command, Commands::Agent { message: None, .. })
-    {
+    let default_log_level = if matches!(cli.command, Commands::Agent { message: None, .. }) {
         "warn"
     } else {
         // matrix_sdk crates are suppressed to warn because they are extremely
@@ -2232,13 +2231,13 @@ async fn main() -> Result<()> {
             set,
             status,
         } => {
-            interactive_model::run(
+            Box::pin(interactive_model::run(
                 &mut config,
                 provider.as_deref(),
                 device_code,
                 set.as_deref(),
                 status,
-            )
+            ))
             .await
         }
 

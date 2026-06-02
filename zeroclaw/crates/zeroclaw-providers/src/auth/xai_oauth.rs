@@ -27,12 +27,10 @@ use tokio::net::TcpListener;
 pub const XAI_PUBLIC_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 
 /// OIDC discovery endpoint for dynamic endpoint resolution.
-pub const XAI_OIDC_DISCOVERY_URL: &str =
-    "https://auth.x.ai/.well-known/openid-configuration";
+pub const XAI_OIDC_DISCOVERY_URL: &str = "https://auth.x.ai/.well-known/openid-configuration";
 
 /// Extended scopes for full Grok API access.
-pub const XAI_OAUTH_SCOPES: &str =
-    "openid profile email offline_access grok-cli:access api:access";
+pub const XAI_OAUTH_SCOPES: &str = "openid profile email offline_access grok-cli:access api:access";
 
 // ── Hardcoded fallback endpoints ────────────────────────────────────────
 // Used when OIDC discovery fails (offline / air-gapped environments).
@@ -74,9 +72,7 @@ impl Default for XaiEndpoints {
 /// credential leakage via env-var tampering or compromised discovery.
 fn validate_xai_endpoint(url: &str) -> Result<()> {
     let parsed = url::Url::parse(url).context("Invalid endpoint URL")?;
-    let host = parsed
-        .host_str()
-        .context("Endpoint URL missing host")?;
+    let host = parsed.host_str().context("Endpoint URL missing host")?;
     if host == "x.ai" || host.ends_with(".x.ai") {
         Ok(())
     } else {
@@ -533,8 +529,7 @@ mod tests {
             code_challenge: "test_challenge".to_string(),
             state: "test_state".to_string(),
         };
-        let url =
-            build_authorize_url("test_client_id", &pkce, XAI_OAUTH_AUTHORIZE_URL).unwrap();
+        let url = build_authorize_url("test_client_id", &pkce, XAI_OAUTH_AUTHORIZE_URL).unwrap();
         assert!(url.contains("accounts.x.ai"));
         assert!(url.contains("test_client_id"));
         assert!(url.contains("test_challenge"));

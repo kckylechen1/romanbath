@@ -40,13 +40,19 @@ pub fn extract_from_png_bytes(bytes: &[u8]) -> Result<CharacterCard, CardError> 
     let text_chunks = read_png_text_chunks(bytes);
 
     // Prefer V3 (ccv3) over V2 (chara)
-    if let Some(value) = text_chunks.iter().find_map(|(k, v)| (k == "ccv3").then_some(v)) {
+    if let Some(value) = text_chunks
+        .iter()
+        .find_map(|(k, v)| (k == "ccv3").then_some(v))
+    {
         let json = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)?;
         let raw: serde_json::Value = serde_json::from_slice(&json)?;
         return normalize_card(&raw);
     }
 
-    if let Some(value) = text_chunks.iter().find_map(|(k, v)| (k == "chara").then_some(v)) {
+    if let Some(value) = text_chunks
+        .iter()
+        .find_map(|(k, v)| (k == "chara").then_some(v))
+    {
         let json = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)?;
         let raw: serde_json::Value = serde_json::from_slice(&json)?;
         return normalize_card(&raw);
@@ -97,10 +103,10 @@ fn read_png_text_chunks(bytes: &[u8]) -> Vec<(String, String)> {
 /// Normalize raw JSON into a CharacterCard, handling V1/V2/V3 formats.
 fn normalize_card(raw: &serde_json::Value) -> Result<CharacterCard, CardError> {
     // V2/V3: has spec wrapper
-    if let Some(spec) = raw.get("spec").and_then(|v| v.as_str()) {
-        if spec == "chara_card_v2" || spec == "chara_card_v3" {
-            return Ok(serde_json::from_value(raw.clone())?);
-        }
+    if let Some(spec) = raw.get("spec").and_then(|v| v.as_str())
+        && (spec == "chara_card_v2" || spec == "chara_card_v3")
+    {
+        return Ok(serde_json::from_value(raw.clone())?);
     }
 
     // V1: raw fields at top level, wrap in V2 envelope

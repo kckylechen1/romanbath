@@ -45,7 +45,11 @@ pub async fn handle_list_characters(
     }
 
     match list_characters() {
-        Ok(chars) => (StatusCode::OK, Json(CharactersResponse { characters: chars })).into_response(),
+        Ok(chars) => (
+            StatusCode::OK,
+            Json(CharactersResponse { characters: chars }),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -232,11 +236,7 @@ pub async fn handle_delete_character(
     }
 
     match delete_character(&name) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"success": true})),
-        )
-            .into_response(),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -390,7 +390,8 @@ pub async fn handle_update_character(
 fn save_character_data(data: CharacterData) -> anyhow::Result<String> {
     let mgr = CardManager::default()?;
     let card = default_card(data);
-    mgr.save(&card).map_err(|e| anyhow::anyhow!("{e}"))
+    mgr.save(&card)
+        .map_err(|e| anyhow::Error::msg(format!("{e}")))
 }
 
 fn update_character_data(previous_name: &str, data: CharacterData) -> anyhow::Result<String> {
@@ -399,7 +400,8 @@ fn update_character_data(previous_name: &str, data: CharacterData) -> anyhow::Re
         let _ = mgr.delete(previous_name);
     }
     let card = default_card(data);
-    mgr.save(&card).map_err(|e| anyhow::anyhow!("{e}"))
+    mgr.save(&card)
+        .map_err(|e| anyhow::Error::msg(format!("{e}")))
 }
 
 pub async fn handle_character_avatar(
@@ -463,9 +465,10 @@ fn sanitize_attachment_name(name: &str) -> String {
         })
         .take(MAX)
         .collect();
-    match sanitized.trim() {
-        s if s.is_empty() => "unknown".to_owned(),
-        s => s.to_owned(),
+    if sanitized.trim().is_empty() {
+        "unknown".to_owned()
+    } else {
+        sanitized.trim().to_owned()
     }
 }
 

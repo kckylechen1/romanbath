@@ -199,8 +199,14 @@ mod tests {
 
     #[test]
     fn noise_real_content_passes() {
-        assert!(!is_noise_text("I prefer using TypeScript for web development", None));
-        assert!(!is_noise_text("Decision: use Rust for the memory core", None));
+        assert!(!is_noise_text(
+            "I prefer using TypeScript for web development",
+            None
+        ));
+        assert!(!is_noise_text(
+            "Decision: use Rust for the memory core",
+            None
+        ));
     }
 
     #[test]
@@ -224,7 +230,9 @@ mod tests {
 
     #[test]
     fn real_queries_pass() {
-        assert!(!should_skip_query("How to implement hybrid search in Rust?"));
+        assert!(!should_skip_query(
+            "How to implement hybrid search in Rust?"
+        ));
     }
 
     #[test]
@@ -238,7 +246,8 @@ mod tests {
         let input = "<think>\nAnalyzing the context...\nLet's reply politely.\n</think>\nHello! How can I help you today?";
         assert_eq!(scrub_think_tags(input), "Hello! How can I help you today?");
 
-        let input_multiple = "<think>first thought</think>Part 1<think>second thought</think>Part 2";
+        let input_multiple =
+            "<think>first thought</think>Part 1<think>second thought</think>Part 2";
         assert_eq!(scrub_think_tags(input_multiple), "Part 1Part 2");
     }
 }

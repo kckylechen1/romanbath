@@ -136,16 +136,17 @@ impl Tool for XaiTtsTool {
         };
 
         // Resolve credentials
-        let (auth_token, base_url) = match xai_common::resolve_credentials(self.fallback_api_key.as_deref()) {
-            Ok(creds) => creds,
-            Err(e) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to resolve xAI credentials: {}", e)),
-                });
-            }
-        };
+        let (auth_token, base_url) =
+            match xai_common::resolve_credentials(self.fallback_api_key.as_deref()) {
+                Ok(creds) => creds,
+                Err(e) => {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("Failed to resolve xAI credentials: {}", e)),
+                    });
+                }
+            };
 
         // Build request
         let url = format!("{}/tts", base_url);

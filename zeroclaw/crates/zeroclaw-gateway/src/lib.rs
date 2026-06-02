@@ -14,11 +14,11 @@
 
 pub mod api;
 pub mod api_browse;
-pub mod api_chat;
 pub mod api_characters;
+pub mod api_chat;
+pub mod api_config;
 pub mod api_files;
 pub mod api_image_gen;
-pub mod api_config;
 pub mod api_logs;
 pub mod api_onboard;
 pub mod api_pairing;
