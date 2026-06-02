@@ -1352,7 +1352,11 @@ pub async fn run_gateway(
         )
         .route("/api/characters/{name}/export", get(api_characters::handle_export_character))
         .route("/api/characters/{name}/duplicate", post(api_characters::handle_duplicate_character))
-        .route("/api/characters/{name}/avatar", get(api_characters::handle_character_avatar))
+        .route(
+            "/api/characters/{name}/avatar",
+            get(api_characters::handle_character_avatar)
+                .post(api_characters::handle_upload_character_avatar),
+        )
         .route("/api/chat", post(api_chat::handle_chat))
         .route("/api/image-gen", post(api_image_gen::handle_image_gen))
         .route("/api/tts", post(api_tts::handle_tts))

@@ -95,6 +95,25 @@ export interface ChatOptions {
   sceneMode: boolean | null;
 }
 
+export interface CharacterBookEntry {
+  keys: string[];
+  secondaryKeys?: string[];
+  content: string;
+  enabled: boolean;
+  selective: boolean;
+  constant: boolean;
+  position: 'before_char' | 'after_char';
+  tokenBudget?: number;
+  priority?: number;
+  recursive: boolean;
+}
+
+export interface CharacterBook {
+  name?: string;
+  description?: string;
+  entries: CharacterBookEntry[];
+}
+
 export interface CharacterFormData {
   name: string;
   description: string;
@@ -107,7 +126,21 @@ export interface CharacterFormData {
   postHistoryInstructions: string;
   creatorNotes?: string;
   tags?: string[];
-  avatar?: File | string;
+  // Pass-through metadata. Sent verbatim on save so the editor doesn't
+  // destroy fields it doesn't expose (creator, character_version, V3
+  // fields, lorebook, extensions, custom assets).
+  assets?: CharacterAsset[];
+  creator?: string;
+  characterVersion?: string;
+  nickname?: string;
+  groupOnlyGreetings?: string[];
+  source?: string[];
+  characterBook?: CharacterBook | null;
+  extensions?: Record<string, unknown>;
+  // The pending avatar file is held in the editor and uploaded separately
+  // after the character data is saved (so avatar errors don't block the
+  // card update and rename semantics stay clean).
+  avatarFile?: File | null;
 }
 
 interface CharacterSummary {
@@ -122,6 +155,13 @@ interface CharacterSummary {
   has_avatar?: boolean;
 }
 
+interface CharacterAsset {
+  type: string;
+  uri: string;
+  name: string;
+  ext?: string;
+}
+
 interface CharacterDataResponse {
   name: string;
   description: string;
@@ -134,6 +174,13 @@ interface CharacterDataResponse {
   alternate_greetings: string[];
   creator_notes: string;
   tags: string[];
+  creator: string;
+  character_version: string;
+  nickname: string;
+  group_only_greetings: string[];
+  source: string[];
+  character_book: CharacterBook | null;
+  extensions: Record<string, unknown>;
 }
 
 const characterAvatarUrl = (name: string): string =>
@@ -167,8 +214,17 @@ const formToCharacterData = (data: CharacterFormData): Record<string, unknown> =
   alternate_greetings: data.alternateGreetings ?? [],
   creator_notes: data.creatorNotes || '',
   tags: data.tags ?? [],
-  creator: '',
-  character_version: '1.0',
+  // Pass-through fields. The editor's form state always carries the loaded
+  // values for these, so sending them back preserves them verbatim. Empty
+  // strings / empty arrays / null are intentional clears, not defaults.
+  assets: data.assets ?? [],
+  creator: data.creator ?? '',
+  character_version: data.characterVersion ?? '',
+  nickname: data.nickname ?? '',
+  group_only_greetings: data.groupOnlyGreetings ?? [],
+  source: data.source ?? [],
+  character_book: data.characterBook ?? null,
+  extensions: data.extensions ?? {},
 });
 
 const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData => ({
@@ -183,7 +239,13 @@ const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData => ({
   postHistoryInstructions: char.post_history_instructions || '',
   creatorNotes: char.creator_notes || '',
   tags: char.tags || [],
-  avatar: characterAvatarUrl(char.name),
+  creator: char.creator || '',
+  characterVersion: char.character_version || '',
+  nickname: char.nickname || '',
+  groupOnlyGreetings: char.group_only_greetings || [],
+  source: char.source || [],
+  characterBook: char.character_book ?? null,
+  extensions: char.extensions || {},
 });
 
 const fileToBase64 = (file: File): Promise<string> =>
@@ -262,7 +324,7 @@ export const importCharacterCard = async (
   file: File,
 ): Promise<{ success: boolean; fileName?: string; error?: string }> => {
   const extension = file.name.split('.').pop()?.toLowerCase() || '';
-  const supportedFormats = ['png', 'json', 'yaml', 'yml', 'webp'];
+  const supportedFormats = ['png', 'json', 'webp'];
   if (!supportedFormats.includes(extension)) {
     return {
       success: false,
@@ -326,6 +388,34 @@ export const exportCharacter = async (characterId: string): Promise<Blob | null>
     return res.blob();
   } catch {
     return null;
+  }
+};
+
+export const uploadCharacterAvatar = async (
+  characterName: string,
+  file: File,
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    await ensurePairing();
+    const data_base64 = await fileToBase64(file);
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(characterName)}/avatar`,
+      {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ data_base64 }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      return { success: false, error: err.error || 'Avatar upload failed' };
+    }
+    return { success: true };
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : 'Avatar upload failed',
+    };
   }
 };
 

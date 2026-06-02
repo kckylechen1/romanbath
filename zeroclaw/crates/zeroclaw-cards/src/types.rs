@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 /// Configurable ordering of prompt sections for SillyTavern-style prompt assembly.
@@ -66,7 +68,27 @@ pub struct CharacterData {
     #[serde(default)]
     pub character_book: Option<CharacterBook>,
     #[serde(default)]
+    // V3 fields — all `serde(default)` so V2 cards deserialize unchanged.
+    pub nickname: String,
+    #[serde(default)]
+    pub group_only_greetings: Vec<String>,
+    #[serde(default)]
+    pub source: Vec<String>,
+    #[serde(default)]
+    pub assets: Vec<CharacterAsset>,
+    #[serde(default)]
     pub extensions: serde_json::Value,
+}
+
+/// V3 character asset entry (e.g. embedded images, audio, or other files).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterAsset {
+    #[serde(rename = "type")]
+    pub asset_type: String,
+    pub uri: String,
+    pub name: String,
+    #[serde(default)]
+    pub ext: String,
 }
 
 /// A character's lorebook / world info book.
@@ -160,7 +182,10 @@ pub struct PromptFragment {
 
 impl PromptFragment {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into() }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+        }
     }
 }
 
@@ -214,48 +239,66 @@ impl CharacterCard {
 
         // persona — user persona
         if let Some(desc) = user_description.filter(|d| !d.is_empty()) {
-            sections.insert("persona", vec![PromptFragment::system(format!(
-                "[{user}'s persona]\n{desc}",
-                user = user_name,
-                desc = desc
-            ))]);
+            sections.insert(
+                "persona",
+                vec![PromptFragment::system(format!(
+                    "[{user}'s persona]\n{desc}",
+                    user = user_name,
+                    desc = desc
+                ))],
+            );
         }
 
         // world_info_before
         if !before.is_empty() {
-            sections.insert("world_info_before",
-                before.iter().map(|e| PromptFragment::system(e.clone())).collect());
+            sections.insert(
+                "world_info_before",
+                before
+                    .iter()
+                    .map(|e| PromptFragment::system(e.clone()))
+                    .collect(),
+            );
         }
 
         // description
         if !d.description.is_empty() {
-            sections.insert("description", vec![PromptFragment::system(format!(
-                "[{name}'s description]\n{desc}",
-                name = d.name,
-                desc = d.description
-            ))]);
+            sections.insert(
+                "description",
+                vec![PromptFragment::system(format!(
+                    "[{name}'s description]\n{desc}",
+                    name = d.name,
+                    desc = d.description
+                ))],
+            );
         }
 
         // personality
         if !d.personality.is_empty() {
-            sections.insert("personality", vec![PromptFragment::system(format!(
-                "[{name}'s personality]\n{personality}",
-                name = d.name,
-                personality = d.personality
-            ))]);
+            sections.insert(
+                "personality",
+                vec![PromptFragment::system(format!(
+                    "[{name}'s personality]\n{personality}",
+                    name = d.name,
+                    personality = d.personality
+                ))],
+            );
         }
 
         // scenario
         if !d.scenario.is_empty() {
-            sections.insert("scenario", vec![PromptFragment::system(format!(
-                "[Scenario]\n{scenario}",
-                scenario = d.scenario
-            ))]);
+            sections.insert(
+                "scenario",
+                vec![PromptFragment::system(format!(
+                    "[Scenario]\n{scenario}",
+                    scenario = d.scenario
+                ))],
+            );
         }
 
         // system_prompt (creator-defined instructions)
         if !d.system_prompt.is_empty() {
-            let sp = d.system_prompt
+            let sp = d
+                .system_prompt
                 .replace("{{char}}", &d.name)
                 .replace("{{user}}", user_name);
             sections.insert("system_prompt", vec![PromptFragment::system(sp)]);
@@ -263,23 +306,33 @@ impl CharacterCard {
 
         // world_info_after
         if !after.is_empty() {
-            sections.insert("world_info_after",
-                after.iter().map(|e| PromptFragment::system(e.clone())).collect());
+            sections.insert(
+                "world_info_after",
+                after
+                    .iter()
+                    .map(|e| PromptFragment::system(e.clone()))
+                    .collect(),
+            );
         }
 
         // dialogue_examples
         if !d.mes_example.is_empty() {
-            let examples = d.mes_example
+            let examples = d
+                .mes_example
                 .replace("{{char}}", &d.name)
                 .replace("{{user}}", user_name);
-            sections.insert("dialogue_examples", vec![PromptFragment::system(format!(
-                "[Example dialogues]\n{examples}"
-            ))]);
+            sections.insert(
+                "dialogue_examples",
+                vec![PromptFragment::system(format!(
+                    "[Example dialogues]\n{examples}"
+                ))],
+            );
         }
 
         // post_history
         if !d.post_history_instructions.is_empty() {
-            let phi = d.post_history_instructions
+            let phi = d
+                .post_history_instructions
                 .replace("{{char}}", &d.name)
                 .replace("{{user}}", user_name);
             sections.insert("post_history", vec![PromptFragment::system(phi)]);
@@ -329,55 +382,70 @@ impl CharacterCard {
             None => return (Vec::new(), Vec::new()),
         };
 
-        self.split_lorebook_with_text(book, conversation_text, 0)
+        let mut seen: HashSet<usize> = HashSet::new();
+        self.split_lorebook_with_text(book, conversation_text, 0, &mut seen)
     }
 
     /// Internal recursive lorebook scanner.
     ///
     /// `depth` tracks recursion level; stops at 3 to prevent infinite loops.
+    /// `seen` tracks entry indices already emitted into `before` / `after` so
+    /// a recursive entry that triggers itself doesn't duplicate its own
+    /// content (and so sibling recursion paths don't double-count entries).
     fn split_lorebook_with_text(
         &self,
         book: &CharacterBook,
         text: &str,
         depth: usize,
+        seen: &mut HashSet<usize>,
     ) -> (Vec<String>, Vec<String>) {
         let max_depth = 3;
         let lower_text = text.to_lowercase();
 
         // Collect all matching entries with their priority
-        let mut matched: Vec<&CharacterBookEntry> = Vec::new();
+        let mut matched: Vec<(usize, &CharacterBookEntry)> = Vec::new();
 
-        for entry in &book.entries {
-            if !entry.enabled {
+        for (idx, entry) in book.entries.iter().enumerate() {
+            if !entry.enabled || seen.contains(&idx) {
                 continue;
             }
 
             let should_include = if entry.constant {
                 true
             } else if entry.selective {
-                let primary_match = entry.keys.iter().any(|k| lower_text.contains(&k.to_lowercase()));
-                let secondary_match = entry.secondary_keys.iter().any(|k| lower_text.contains(&k.to_lowercase()));
+                let primary_match = entry
+                    .keys
+                    .iter()
+                    .any(|k| lower_text.contains(&k.to_lowercase()));
+                let secondary_match = entry
+                    .secondary_keys
+                    .iter()
+                    .any(|k| lower_text.contains(&k.to_lowercase()));
                 primary_match && secondary_match
             } else {
-                entry.keys.iter().any(|k| lower_text.contains(&k.to_lowercase()))
+                entry
+                    .keys
+                    .iter()
+                    .any(|k| lower_text.contains(&k.to_lowercase()))
             };
 
             if should_include {
-                matched.push(entry);
+                matched.push((idx, entry));
             }
         }
 
         // Sort by priority (descending) — higher priority first
         matched.sort_by(|a, b| {
-            let pa = a.priority.unwrap_or(0);
-            let pb = b.priority.unwrap_or(0);
+            let pa = a.1.priority.unwrap_or(0);
+            let pb = b.1.priority.unwrap_or(0);
             pb.cmp(&pa)
         });
 
         let mut before = Vec::new();
         let mut after = Vec::new();
 
-        for entry in &matched {
+        for (idx, entry) in &matched {
+            seen.insert(*idx);
             let mut content = entry.content.clone();
 
             // Apply token budget truncation
@@ -398,8 +466,12 @@ impl CharacterCard {
                 combined_text.push('\n');
                 combined_text.push_str(&content);
 
-                let (rec_before, rec_after) =
-                    self.split_lorebook_with_text(book, &combined_text, depth + 1);
+                let (rec_before, rec_after) = self.split_lorebook_with_text(
+                    book,
+                    &combined_text,
+                    depth + 1,
+                    seen,
+                );
                 before.extend(rec_before);
                 after.extend(rec_after);
             }
@@ -461,6 +533,10 @@ mod tests {
                         },
                     ],
                 }),
+                nickname: String::new(),
+                group_only_greetings: Vec::new(),
+                source: Vec::new(),
+                assets: Vec::new(),
                 extensions: serde_json::Value::Object(serde_json::Map::new()),
             },
         }
@@ -477,23 +553,33 @@ mod tests {
         assert!(fragments[0].content.contains("Write Daniel's next reply"));
 
         // Lorebook before_char entry should appear (whiskey matched)
-        let has_whiskey_lore = fragments.iter().any(|f| f.content.contains("30-year Macallan"));
+        let has_whiskey_lore = fragments
+            .iter()
+            .any(|f| f.content.contains("30-year Macallan"));
         assert!(has_whiskey_lore);
 
         // Char description
-        let has_desc = fragments.iter().any(|f| f.content.contains("witty bartender"));
+        let has_desc = fragments
+            .iter()
+            .any(|f| f.content.contains("witty bartender"));
         assert!(has_desc);
 
         // Dialogue examples
-        let has_examples = fragments.iter().any(|f| f.content.contains("wiping a glass"));
+        let has_examples = fragments
+            .iter()
+            .any(|f| f.content.contains("wiping a glass"));
         assert!(has_examples);
 
         // Post-history instructions
-        let has_post = fragments.iter().any(|f| f.content.contains("end with a question"));
+        let has_post = fragments
+            .iter()
+            .any(|f| f.content.contains("end with a question"));
         assert!(has_post);
 
         // Play mode note
-        let has_play_note = fragments.iter().any(|f| f.content.contains("Stay in character"));
+        let has_play_note = fragments
+            .iter()
+            .any(|f| f.content.contains("Stay in character"));
         assert!(has_play_note);
     }
 
@@ -503,7 +589,9 @@ mod tests {
         let fragments = card.build_prompt("play", "Alex", "Just water for me.", None);
 
         let has_whiskey = fragments.iter().any(|f| f.content.contains("Macallan"));
-        let has_secret = fragments.iter().any(|f| f.content.contains("government agency"));
+        let has_secret = fragments
+            .iter()
+            .any(|f| f.content.contains("government agency"));
         assert!(!has_whiskey);
         assert!(!has_secret);
     }
@@ -513,10 +601,43 @@ mod tests {
         let card = make_card();
         let fragments = card.build_prompt("soul", "Alex", "Hi", None);
 
-        let has_play_note = fragments.iter().any(|f| f.content.contains("Stay in character"));
+        let has_play_note = fragments
+            .iter()
+            .any(|f| f.content.contains("Stay in character"));
         assert!(!has_play_note);
 
-        let has_soul_note = fragments.iter().any(|f| f.content.contains("Use Daniel's personality"));
+        let has_soul_note = fragments
+            .iter()
+            .any(|f| f.content.contains("Use Daniel's personality"));
         assert!(has_soul_note);
+    }
+
+    #[test]
+    fn test_recursive_entry_does_not_duplicate_self() {
+        // A recursive entry whose content includes its own keyword would,
+        // under the old scanner, re-include itself in the recursive pass and
+        // produce a duplicate. The `seen` set must prevent that.
+        let mut card = make_card();
+        if let Some(book) = card.data.character_book.as_mut() {
+            // Replace the first entry with a self-referential recursive one.
+            book.entries[0] = CharacterBookEntry {
+                keys: vec!["whiskey".into()],
+                content: "The bar's whiskey collection includes a rare 30-year Macallan. Whiskey flows freely here.".into(),
+                enabled: true,
+                selective: false,
+                secondary_keys: vec![],
+                constant: false,
+                position: "before_char".into(),
+                token_budget: None,
+                priority: None,
+                recursive: true,
+            };
+        }
+        let fragments = card.build_prompt("play", "Alex", "I'll have a whiskey.", None);
+        let macallan_count = fragments
+            .iter()
+            .filter(|f| f.content.contains("30-year Macallan"))
+            .count();
+        assert_eq!(macallan_count, 1, "self-referential recursive entry must not duplicate its own content");
     }
 }

@@ -67,7 +67,13 @@ pub fn extract_from_json(json: &str) -> Result<CharacterCard, CardError> {
     normalize_card(&raw)
 }
 
-/// Read all tEXt chunks from a PNG byte buffer.
+/// Read all tEXt and iTXt chunks from a PNG byte buffer.
+///
+/// `tEXt` is Latin-1 only (SillyTavern V2 default). `iTXt` carries UTF-8 and
+/// is increasingly used by V3 cards for non-ASCII keywords (e.g. Chinese).
+/// Compressed iTXt (compression_flag=1, zlib) is skipped — the rare V3 cards
+/// that use it should be re-saved as uncompressed; this matches the ST
+/// baseline behaviour and avoids pulling in a decompressor.
 fn read_png_text_chunks(bytes: &[u8]) -> Vec<(String, String)> {
     let mut chunks = Vec::new();
     let mut offset = 8; // skip PNG signature
@@ -85,19 +91,69 @@ fn read_png_text_chunks(bytes: &[u8]) -> Vec<(String, String)> {
             break;
         }
 
-        if chunk_type == b"tEXt" {
-            let data = &bytes[offset + 8..offset + 8 + length];
-            if let Some(null_pos) = data.iter().position(|&b| b == 0) {
-                let keyword = String::from_utf8_lossy(&data[..null_pos]).into_owned();
-                let value = String::from_utf8_lossy(&data[null_pos + 1..]).into_owned();
-                chunks.push((keyword, value));
-            }
+        let data = &bytes[offset + 8..offset + 8 + length];
+        match chunk_type {
+            b"tEXt" => parse_text_chunk(data, &mut chunks),
+            b"iTXt" => parse_itxt_chunk(data, &mut chunks),
+            _ => {}
         }
 
         offset += 12 + length; // length(4) + type(4) + data + crc(4)
     }
 
     chunks
+}
+
+/// Parse a `tEXt` chunk body: `keyword\0value` (Latin-1 → lossy UTF-8).
+fn parse_text_chunk(data: &[u8], out: &mut Vec<(String, String)>) {
+    if let Some(null_pos) = data.iter().position(|&b| b == 0) {
+        let keyword = String::from_utf8_lossy(&data[..null_pos]).into_owned();
+        let value = String::from_utf8_lossy(&data[null_pos + 1..]).into_owned();
+        out.push((keyword, value));
+    }
+}
+
+/// Parse an `iTXt` chunk body:
+/// `keyword\0 compression_flag(1) compression_method(1) language\0 translated_keyword\0 text`
+///
+/// We accept only the uncompressed form (compression_flag == 0). Compressed
+/// iTXt bodies are skipped — see `read_png_text_chunks` docstring.
+fn parse_itxt_chunk(data: &[u8], out: &mut Vec<(String, String)>) {
+    let Some(kw_end) = data.iter().position(|&b| b == 0) else {
+        return;
+    };
+    let keyword = String::from_utf8_lossy(&data[..kw_end]).into_owned();
+    let rest = &data[kw_end + 1..];
+    if rest.len() < 2 {
+        return;
+    }
+    if rest[0] != 0 {
+        // Compressed iTXt — not supported, skip the chunk.
+        return;
+    }
+    let after_flags = &rest[2..];
+    // Skip the language tag (null-terminated; may be empty).
+    let lang_end = after_flags
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(after_flags.len());
+    let after_lang = if lang_end < after_flags.len() {
+        &after_flags[lang_end + 1..]
+    } else {
+        &[][..]
+    };
+    // Skip the translated keyword (null-terminated; may be empty).
+    let tk_end = after_lang
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(after_lang.len());
+    let text_bytes = if tk_end < after_lang.len() {
+        &after_lang[tk_end + 1..]
+    } else {
+        &[][..]
+    };
+    let value = String::from_utf8_lossy(text_bytes).into_owned();
+    out.push((keyword, value));
 }
 
 /// Normalize raw JSON into a CharacterCard, handling V1/V2/V3 formats.
@@ -129,6 +185,10 @@ fn normalize_card(raw: &serde_json::Value) -> Result<CharacterCard, CardError> {
             creator_notes: String::new(),
             character_version: String::new(),
             character_book: None,
+            nickname: String::new(),
+            group_only_greetings: Vec::new(),
+            source: Vec::new(),
+            assets: Vec::new(),
             extensions: serde_json::Value::Object(serde_json::Map::new()),
         };
         return Ok(CharacterCard {

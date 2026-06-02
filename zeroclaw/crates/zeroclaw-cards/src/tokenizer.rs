@@ -16,7 +16,10 @@ pub struct TokenMessage {
 
 impl TokenMessage {
     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: role.into(), content: content.into() }
+        Self {
+            role: role.into(),
+            content: content.into(),
+        }
     }
 }
 
@@ -29,7 +32,8 @@ impl TokenMessage {
 fn get_bpe(model: &str) -> CoreBPE {
     let lower = model.to_lowercase();
     if lower.starts_with("gpt-4") || lower.starts_with("gpt4") {
-        tiktoken_rs::o200k_base().unwrap_or_else(|_| tiktoken_rs::cl100k_base().expect("cl100k_base must load"))
+        tiktoken_rs::o200k_base()
+            .unwrap_or_else(|_| tiktoken_rs::cl100k_base().expect("cl100k_base must load"))
     } else {
         tiktoken_rs::cl100k_base().expect("cl100k_base must load")
     }
@@ -85,9 +89,7 @@ pub fn truncate_messages(
         }
 
         // Find the first non-system message to remove
-        let idx = messages
-            .iter()
-            .position(|m| m.role != "system");
+        let idx = messages.iter().position(|m| m.role != "system");
 
         match idx {
             Some(i) => {
@@ -144,7 +146,10 @@ mod tests {
             TokenMessage::new("user", "msg 1"),
             TokenMessage::new("assistant", "reply 1 with some extra text to add tokens"),
             TokenMessage::new("user", "msg 2"),
-            TokenMessage::new("assistant", "reply 2 with even more text to ensure we have tokens to count"),
+            TokenMessage::new(
+                "assistant",
+                "reply 2 with even more text to ensure we have tokens to count",
+            ),
             TokenMessage::new("user", "msg 3"),
         ];
 

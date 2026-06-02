@@ -27,6 +27,11 @@ impl CardManager {
         Ok(Self::new(home.join(".zeroclaw").join("characters")))
     }
 
+    /// Storage directory for character cards.
+    pub fn cards_dir(&self) -> &Path {
+        &self.cards_dir
+    }
+
     /// Import a character card from a file path (PNG, WEBP, or JSON).
     ///
     /// Returns the imported character's name.

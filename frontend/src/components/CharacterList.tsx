@@ -239,7 +239,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
       <input
         ref={fileInputRef}
         type="file"
-        accept=".png,.json,.yaml,.yml,.charx"
+        accept=".png,.json,.webp"
         onChange={handleFileChange}
         className="hidden"
       />
