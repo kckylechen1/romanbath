@@ -5226,6 +5226,23 @@ pub struct GatewayConfig {
     /// Default: 600s (10 minutes).
     #[serde(default = "default_gateway_long_running_request_timeout_secs")]
     pub long_running_request_timeout_secs: u64,
+
+    /// Allowlist of session working directories for the `/ws/chat` endpoint.
+    ///
+    /// A paired client may request a per-session `cwd` via the `?cwd=` query
+    /// parameter or the first `connect` frame. Without an entry here, the
+    /// request is rejected and the session falls back to the gateway's
+    /// `data_dir` workspace — **never** the requested path. This is the only
+    /// boundary on where agent file/shell tools operate after the sandbox
+    /// backends were removed; treat it as a security gate.
+    ///
+    /// Each entry is an absolute path. Globs and string-prefix matching are
+    /// not supported — the requested cwd must be a child of one of these
+    /// directories (component-wise). Default: empty (deny all client-supplied
+    /// cwd). Operators that need to operate outside `data_dir` must enumerate
+    /// the permitted roots here.
+    #[serde(default)]
+    pub allowed_session_cwds: Vec<String>,
 }
 
 fn default_gateway_port() -> u16 {
@@ -5294,6 +5311,7 @@ impl Default for GatewayConfig {
             tls: None,
             request_timeout_secs: default_gateway_request_timeout_secs(),
             long_running_request_timeout_secs: default_gateway_long_running_request_timeout_secs(),
+            allowed_session_cwds: Vec::new(),
         }
     }
 }
@@ -18220,6 +18238,7 @@ allowed_numbers = ["+1", "+2"]
             tls: None,
             request_timeout_secs: 30,
             long_running_request_timeout_secs: 600,
+            allowed_session_cwds: vec!["/srv/projects".into()],
         };
         let toml_str = toml::to_string(&g).unwrap();
         let parsed: GatewayConfig = toml::from_str(&toml_str).unwrap();
@@ -18235,6 +18254,10 @@ allowed_numbers = ["+1", "+2"]
         assert_eq!(parsed.rate_limit_max_keys, 2048);
         assert_eq!(parsed.idempotency_ttl_secs, 600);
         assert_eq!(parsed.idempotency_max_keys, 4096);
+        assert_eq!(
+            parsed.allowed_session_cwds,
+            vec!["/srv/projects".to_string()]
+        );
     }
 
     #[test]
