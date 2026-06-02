@@ -368,10 +368,13 @@ async fn handle_socket(
         }
     }
 
-    // `resolve_session_cwd` does synchronous `std::fs::canonicalize` for the
-    // default workspace, the requested cwd, and every allowlist entry. Run it
-    // on the blocking pool so the async Tokio runtime thread is never stalled
-    // on a syscall (slow disk or network FS could otherwise pin a worker).
+    // `resolve_session_cwd` does synchronous `std::fs::canonicalize` on the
+    // client-supplied cwd. The default workspace and the allowlist are
+    // already canonical (Config::load_or_init resolves them at config load),
+    // so the only blocking syscall is the one for the requested path. Run
+    // the call on the blocking pool so the async Tokio runtime thread is
+    // never stalled on that single realpath() (slow disk or network FS
+    // could otherwise pin a worker).
     let session_cwd = match tokio::task::spawn_blocking({
         let requested = requested_cwd.clone();
         let data_dir = config.data_dir.clone();
@@ -729,28 +732,13 @@ async fn handle_socket(
 fn resolve_session_cwd(
     requested_cwd: Option<&str>,
     default_workspace: &Path,
-    allowed_session_cwds: &[String],
+    allowed_session_cwds: &[PathBuf],
 ) -> anyhow::Result<PathBuf> {
     // No client-supplied cwd → use the gateway's own data_dir. The allowlist
-    // only constrains what a paired client can request. The default is
-    // canonicalized too so downstream consumers see a symlink-resolved path.
+    // only constrains what a paired client can request. `default_workspace` is
+    // already canonical (Config::load_or_init resolves it once at startup).
     let Some(raw) = requested_cwd else {
-        return std::fs::canonicalize(default_workspace).map_err(|e| {
-            ::zeroclaw_log::record!(
-                WARN,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({
-                        "default_workspace": default_workspace.display().to_string(),
-                        "error": format!("{}", e),
-                    })),
-                "ws session default workspace canonicalize failed"
-            );
-            anyhow::Error::msg(format!(
-                "default workspace is not a usable directory ({}): {e}",
-                default_workspace.display()
-            ))
-        });
+        return Ok(default_workspace.to_path_buf());
     };
 
     let canonical = std::fs::canonicalize(raw).map_err(|e| {
@@ -791,15 +779,13 @@ fn resolve_session_cwd(
 
 /// Component-wise prefix check (`Path::starts_with` matches on path
 /// components, not raw string prefixes — so `/foo/barbaz` does not match
-/// an allowlist entry of `/foo/bar`). Bad allowlist entries are silently
-/// skipped; the main "ws session cwd denied" WARN above carries the
-/// operational signal.
-fn cwd_in_allowlist(canonical_cwd: &Path, allowed: &[String]) -> bool {
-    allowed.iter().any(|entry| {
-        std::fs::canonicalize(entry)
-            .map(|canonical_allowed| canonical_cwd.starts_with(&canonical_allowed))
-            .unwrap_or(false)
-    })
+/// an allowlist entry of `/foo/bar`). Both the requested cwd and the
+/// allowlist entries are canonicalized at config load (allowlist) or on
+/// the blocking pool (requested cwd) — no canonicalize happens here.
+fn cwd_in_allowlist(canonical_cwd: &Path, allowed: &[PathBuf]) -> bool {
+    allowed
+        .iter()
+        .any(|allowed_root| canonical_cwd.starts_with(allowed_root))
 }
 
 fn session_queue_ws_error_code(error: &crate::session_queue::SessionQueueError) -> &'static str {
@@ -1622,11 +1608,11 @@ mod tests {
     fn resolve_session_cwd_uses_requested_cwd() {
         let requested = tempfile::tempdir().unwrap();
         let fallback = tempfile::tempdir().unwrap();
-        let allowed = vec![requested.path().to_string_lossy().into_owned()];
+        let allowed = vec![requested.path().canonicalize().unwrap()];
 
         let resolved = resolve_session_cwd(
             Some(requested.path().to_str().unwrap()),
-            fallback.path(),
+            &fallback.path().canonicalize().unwrap(),
             &allowed,
         )
         .unwrap();
@@ -1638,7 +1624,8 @@ mod tests {
     fn resolve_session_cwd_uses_default_workspace_without_request() {
         let fallback = tempfile::tempdir().unwrap();
 
-        let resolved = resolve_session_cwd(None, fallback.path(), &[]).unwrap();
+        let resolved =
+            resolve_session_cwd(None, &fallback.path().canonicalize().unwrap(), &[]).unwrap();
 
         assert_eq!(resolved, fallback.path().canonicalize().unwrap());
     }
@@ -1648,8 +1635,12 @@ mod tests {
         let fallback = tempfile::tempdir().unwrap();
         let missing = fallback.path().join("missing");
 
-        let err = resolve_session_cwd(Some(missing.to_str().unwrap()), fallback.path(), &[])
-            .expect_err("missing cwd should be rejected");
+        let err = resolve_session_cwd(
+            Some(missing.to_str().unwrap()),
+            &fallback.path().canonicalize().unwrap(),
+            &[],
+        )
+        .expect_err("missing cwd should be rejected");
 
         assert!(err.to_string().contains("cwd is not a usable directory"));
     }
@@ -1661,11 +1652,11 @@ mod tests {
         // Allowlist points at an unrelated path; the requested cwd is
         // canonical and exists but is not in the allowlist.
         let unrelated = tempfile::tempdir().unwrap();
-        let allowed = vec![unrelated.path().to_string_lossy().into_owned()];
+        let allowed = vec![unrelated.path().canonicalize().unwrap()];
 
         let err = resolve_session_cwd(
             Some(requested.path().to_str().unwrap()),
-            fallback.path(),
+            &fallback.path().canonicalize().unwrap(),
             &allowed,
         )
         .expect_err("cwd outside allowlist should be rejected");
@@ -1681,7 +1672,7 @@ mod tests {
         // No allowed_session_cwds entries — every client-supplied cwd is denied.
         let err = resolve_session_cwd(
             Some(requested.path().to_str().unwrap()),
-            fallback.path(),
+            &fallback.path().canonicalize().unwrap(),
             &[],
         )
         .expect_err("empty allowlist should deny client-supplied cwd");

@@ -12,10 +12,7 @@ static SANDBOX_DEPRECATION_WARN_ONCE: Once = Once::new();
 /// default/unspecified values and must NOT trigger the per-call WARN.
 fn explicit_sandbox_intent(sandbox: &SandboxConfig) -> bool {
     sandbox.enabled == Some(true)
-        || !matches!(
-            sandbox.backend,
-            SandboxBackend::None | SandboxBackend::Auto
-        )
+        || !matches!(sandbox.backend, SandboxBackend::None | SandboxBackend::Auto)
 }
 
 /// Create a sandbox based on auto-detection or explicit config.
@@ -123,22 +120,43 @@ mod tests {
         // per-call WARN — they're the "no opinion" baseline.
         assert!(!explicit_sandbox_intent(&cfg(None, SandboxBackend::Auto)));
         assert!(!explicit_sandbox_intent(&cfg(None, SandboxBackend::None)));
-        assert!(!explicit_sandbox_intent(&cfg(Some(false), SandboxBackend::Auto)));
+        assert!(!explicit_sandbox_intent(&cfg(
+            Some(false),
+            SandboxBackend::Auto
+        )));
     }
 
     #[test]
     fn explicit_sandbox_intent_flags_enabled_true() {
-        assert!(explicit_sandbox_intent(&cfg(Some(true), SandboxBackend::Auto)));
-        assert!(explicit_sandbox_intent(&cfg(Some(true), SandboxBackend::None)));
+        assert!(explicit_sandbox_intent(&cfg(
+            Some(true),
+            SandboxBackend::Auto
+        )));
+        assert!(explicit_sandbox_intent(&cfg(
+            Some(true),
+            SandboxBackend::None
+        )));
     }
 
     #[test]
     fn explicit_sandbox_intent_flags_real_backends() {
         // Any non-default, non-None backend is an explicit operator choice.
         assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::Docker)));
-        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::Firejail)));
-        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::Landlock)));
-        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::Bubblewrap)));
-        assert!(explicit_sandbox_intent(&cfg(None, SandboxBackend::SandboxExec)));
+        assert!(explicit_sandbox_intent(&cfg(
+            None,
+            SandboxBackend::Firejail
+        )));
+        assert!(explicit_sandbox_intent(&cfg(
+            None,
+            SandboxBackend::Landlock
+        )));
+        assert!(explicit_sandbox_intent(&cfg(
+            None,
+            SandboxBackend::Bubblewrap
+        )));
+        assert!(explicit_sandbox_intent(&cfg(
+            None,
+            SandboxBackend::SandboxExec
+        )));
     }
 }
