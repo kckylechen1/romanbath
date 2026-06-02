@@ -17,8 +17,6 @@
 //! gate, and wire it into [`start_channels`] here. See `AGENTS.md` §7.2 for the
 //! full change playbook.
 
-#[cfg(feature = "channel-acp-server")]
-pub mod acp_server;
 pub mod media_pipeline;
 #[cfg(feature = "channel-mqtt")]
 pub mod mqtt;
@@ -7548,14 +7546,6 @@ pub async fn start_channels(
             agent_provider_entry.and_then(|e| e.api_key.as_deref()),
         )
         .await?;
-        let (composio_key, composio_entity_id) = if config.composio.enabled {
-            (
-                config.composio.api_key.as_deref(),
-                Some(config.composio.entity_id.as_str()),
-            )
-        } else {
-            (None, None)
-        };
 
         // Per-agent workspace: `<install>/agents/<alias>/workspace/`. Holds
         // this agent's IDENTITY.md / SOUL.md / USER.md / TOOLS.md /
@@ -7583,8 +7573,6 @@ pub async fn start_channels(
             agent_alias,
             Arc::clone(&runtime),
             Arc::clone(&mem),
-            composio_key,
-            composio_entity_id,
             &config.browser,
             &config.http_request,
             &config.web_fetch,

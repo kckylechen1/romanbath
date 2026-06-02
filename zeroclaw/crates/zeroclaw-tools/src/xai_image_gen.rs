@@ -18,6 +18,7 @@ pub struct XaiImageGenTool {
     workspace_dir: PathBuf,
     default_model: String,
     default_resolution: String,
+    fallback_api_key: Option<String>,
 }
 
 impl XaiImageGenTool {
@@ -26,12 +27,14 @@ impl XaiImageGenTool {
         workspace_dir: PathBuf,
         default_model: String,
         default_resolution: String,
+        fallback_api_key: Option<String>,
     ) -> Self {
         Self {
             security,
             workspace_dir,
             default_model,
             default_resolution,
+            fallback_api_key,
         }
     }
 
@@ -182,7 +185,7 @@ impl Tool for XaiImageGenTool {
         }
 
         // Resolve credentials
-        let (auth_token, base_url) = match xai_common::resolve_credentials() {
+        let (auth_token, base_url) = match xai_common::resolve_credentials(self.fallback_api_key.as_deref()) {
             Ok(creds) => creds,
             Err(e) => {
                 return Ok(ToolResult {

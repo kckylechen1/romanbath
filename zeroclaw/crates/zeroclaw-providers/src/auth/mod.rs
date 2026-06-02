@@ -1330,37 +1330,23 @@ impl AuthProviderFlow for XaiFlow {
         device_code: bool,
         _import: Option<&std::path::Path>,
     ) -> Result<()> {
-        let client_id = std::env::var("XAI_OAUTH_CLIENT_ID").map_err(|_| {
-            ::zeroclaw_log::record!(
-                ERROR,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({"missing": "XAI_OAUTH_CLIENT_ID"})),
-                "auth: xAI OAuth missing client ID"
-            );
-            anyhow::Error::msg("XAI_OAUTH_CLIENT_ID environment variable not set")
-        })?;
-        let client_secret = std::env::var("XAI_OAUTH_CLIENT_SECRET").map_err(|_| {
-            ::zeroclaw_log::record!(
-                ERROR,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({"missing": "XAI_OAUTH_CLIENT_SECRET"})),
-                "auth: xAI OAuth missing client secret"
-            );
-            anyhow::Error::msg("XAI_OAUTH_CLIENT_SECRET environment variable not set")
-        })?;
+        let endpoints =
+            crate::auth::xai_oauth::discover_endpoints(ctx.client).await;
 
         if device_code {
-            let device = crate::auth::xai_oauth::start_device_code_flow(ctx.client, &client_id)
-                .await
-                .map_err(|e| {
-                    println!(
-                        "xAI device-code flow unavailable: {e}. Falling back to browser flow."
-                    );
-                    e
-                })
-                .ok();
+            let device = crate::auth::xai_oauth::start_device_code_flow(
+                ctx.client,
+                crate::auth::xai_oauth::XAI_PUBLIC_CLIENT_ID,
+                &endpoints.device_code_url,
+            )
+            .await
+            .map_err(|e| {
+                println!(
+                    "xAI device-code flow unavailable: {e}. Falling back to browser flow."
+                );
+                e
+            })
+            .ok();
 
             if let Some(device) = device {
                 println!("xAI device-code login started.");
@@ -1371,10 +1357,10 @@ impl AuthProviderFlow for XaiFlow {
                 }
                 let token_set = crate::auth::xai_oauth::poll_device_code_token(
                     ctx.client,
-                    &client_id,
-                    &client_secret,
+                    crate::auth::xai_oauth::XAI_PUBLIC_CLIENT_ID,
                     &device.device_code,
                     device.interval,
+                    &endpoints.token_url,
                 )
                 .await?;
                 ctx.auth_service
@@ -1386,8 +1372,8 @@ impl AuthProviderFlow for XaiFlow {
             }
         }
 
-        // Browser PKCE flow — bind loopback listener first, then display URL.
-        let token_set = crate::auth::xai_oauth::run_pkce_flow(&client_id, &client_secret).await?;
+        // Browser PKCE flow — public client, no secret needed.
+        let token_set = crate::auth::xai_oauth::run_pkce_flow(ctx.client).await?;
         ctx.auth_service
             .store_xai_tokens(profile, token_set, None, true)
             .await?;
@@ -1398,15 +1384,49 @@ impl AuthProviderFlow for XaiFlow {
 
     async fn refresh_status(
         &self,
-        _ctx: &AuthFlowContext<'_>,
+        ctx: &AuthFlowContext<'_>,
         profile_override: Option<&str>,
     ) -> Result<RefreshStatus> {
-        // xAI token refresh is not yet wired into AuthService (no
-        // get_valid_xai_access_token method). Return NoProfile so callers
-        // know there is nothing to refresh through this path. Operators can
-        // still use `auth login --model-provider xai` to re-authenticate.
-        let _ = profile_override;
-        Ok(RefreshStatus::NoProfile)
+        let profile = ctx
+            .auth_service
+            .get_profile("xai", profile_override)
+            .await?;
+
+        let profile = match profile {
+            Some(p) => p,
+            None => return Ok(RefreshStatus::NoProfile),
+        };
+
+        let token_set = match &profile.token_set {
+            Some(ts) => ts,
+            None => return Ok(RefreshStatus::NoProfile),
+        };
+
+        let refresh = match &token_set.refresh_token {
+            Some(rt) => rt,
+            None => return Ok(RefreshStatus::NoProfile),
+        };
+
+        let endpoints =
+            crate::auth::xai_oauth::discover_endpoints(ctx.client).await;
+
+        let refreshed = crate::auth::xai_oauth::refresh_token(
+            ctx.client,
+            crate::auth::xai_oauth::XAI_PUBLIC_CLIENT_ID,
+            refresh,
+            &endpoints.token_url,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("xAI token refresh failed: {}", e))?;
+
+        let profile_name = profile.profile_name.clone();
+        ctx.auth_service
+            .store_xai_tokens(&profile_name, refreshed, None, false)
+            .await?;
+
+        Ok(RefreshStatus::Refreshed {
+            profile: profile_name,
+        })
     }
 }
 

@@ -170,7 +170,7 @@ pub fn should_skip_query(query: &str) -> bool {
 pub fn scrub_think_tags(text: &str) -> String {
     static THINK_BLOCK_RE: OnceLock<Regex> = OnceLock::new();
     let re = THINK_BLOCK_RE.get_or_init(|| {
-        Regex::new(r"(?is)<think\b[^>]*>.*?").expect("valid think-tag regex")
+        Regex::new(r"(?is)<think\b[^>]*>.*?</think\s*>").expect("valid think-tag regex")
     });
     re.replace_all(text, "").trim().to_string()
 }
@@ -231,5 +231,14 @@ mod tests {
     fn skip_pure_emoji() {
         assert!(should_skip_query("👍"));
         assert!(should_skip_query("👍👎"));
+    }
+
+    #[test]
+    fn test_scrub_think_tags() {
+        let input = "<think>\nAnalyzing the context...\nLet's reply politely.\n</think>\nHello! How can I help you today?";
+        assert_eq!(scrub_think_tags(input), "Hello! How can I help you today?");
+
+        let input_multiple = "<think>first thought</think>Part 1<think>second thought</think>Part 2";
+        assert_eq!(scrub_think_tags(input_multiple), "Part 1Part 2");
     }
 }

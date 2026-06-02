@@ -3029,14 +3029,6 @@ pub async fn run(
         }
 
         // ── Tools (including memory tools and peripherals) ────────────
-        let (composio_key, composio_entity_id) = if config.composio.enabled {
-            (
-                config.composio.api_key.as_deref(),
-                Some(config.composio.entity_id.as_str()),
-            )
-        } else {
-            (None, None)
-        };
         let (
             mut tools_registry,
             delegate_handle,
@@ -3051,8 +3043,6 @@ pub async fn run(
             agent_alias,
             runtime,
             mem.clone(),
-            composio_key,
-            composio_entity_id,
             &config.browser,
             &config.http_request,
             &config.web_fetch,
@@ -4380,14 +4370,6 @@ pub async fn process_message(
         )
         .await?;
 
-        let (composio_key, composio_entity_id) = if config.composio.enabled {
-            (
-                config.composio.api_key.as_deref(),
-                Some(config.composio.entity_id.as_str()),
-            )
-        } else {
-            (None, None)
-        };
         let (
             mut tools_registry,
             delegate_handle_pm,
@@ -4402,8 +4384,6 @@ pub async fn process_message(
             agent_alias,
             runtime,
             mem.clone(),
-            composio_key,
-            composio_entity_id,
             &config.browser,
             &config.http_request,
             &config.web_fetch,
@@ -11768,8 +11748,6 @@ Let me check the result."#;
             &risk,
             "test",
             mem,
-            None,
-            None,
             &config.browser,
             &config.http_request,
             &config.web_fetch,
@@ -11826,8 +11804,6 @@ Let me check the result."#;
             &risk,
             "test",
             Arc::new(zeroclaw_memory::NoneMemory::new("test")),
-            None,
-            None,
             &config.browser,
             &config.http_request,
             &config.web_fetch,

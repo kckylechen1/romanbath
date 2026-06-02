@@ -20,7 +20,10 @@ pub struct ContentSearchTool {
 
 impl ContentSearchTool {
     pub fn new(security: Arc<SecurityPolicy>) -> Self {
-        let has_rg = which::which("rg").is_ok();
+        let has_rg = std::process::Command::new("rg")
+            .arg("--version")
+            .output()
+            .is_ok();
         Self { security, has_rg }
     }
 

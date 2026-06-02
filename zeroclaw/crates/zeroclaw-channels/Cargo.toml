@@ -59,10 +59,6 @@ matrix-sdk = { version = "0.17", optional = true, default-features = false, feat
   "sqlite",
 ] }
 mime_guess = { version = "2", optional = true }
-nostr-sdk = { version = "0.44", default-features = false, features = [
-  "nip04",
-  "nip59",
-], optional = true }
 parking_lot = "0.12"
 portable-atomic = "1"
 prost = { version = "0.14", default-features = false, features = [
@@ -134,9 +130,8 @@ wacore-binary = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734
 waproto = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734fb2ec544e22b7055147aa3e73b6889e3ff0d", optional = true, default-features = false }
 serde-big-array = { version = "0.5", optional = true }
 
-cpal = { version = "0.15", optional = true }
-whatsapp-rust-ureq-http-client = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734fb2ec544e22b7055147aa3e73b6889e3ff0d", optional = true }
 whatsapp-rust-tokio-transport = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734fb2ec544e22b7055147aa3e73b6889e3ff0d", optional = true, default-features = false }
+whatsapp-rust-ureq-http-client = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734fb2ec544e22b7055147aa3e73b6889e3ff0d", optional = true }
 qrcode = { version = "0.14", optional = true }
 # `bytes` is required for the `Bytes` return types in wacore 0.6 storage
 # traits (SignalStore::get_session / load_prekey). Feature-gated to
@@ -154,7 +149,6 @@ md5 = { version = "0.8", optional = true }
 
 [features]
 default = [
-  "channel-acp-server",
   "channel-bluesky",
   "channel-clawdtalk",
   "channel-dingtalk",
@@ -171,7 +165,6 @@ default = [
   "channel-signal",
   "channel-slack",
   "channel-twitter",
-  "channel-voice-call",
   "channel-wati",
   "channel-webhook",
   "channel-wecom",
@@ -183,7 +176,7 @@ channel-email = ["dep:async-imap", "dep:lettre", "dep:mail-parser", "dep:pulldow
 channel-telegram = ["dep:image"]
 channel-lark = ["dep:prost"]
 channel-line = []
-channel-nostr = ["dep:nostr-sdk"]
+channel-matrix = ["dep:matrix-sdk", "dep:mime_guess"]
 whatsapp-web = [
   "dep:bytes",
   "dep:prost",
@@ -226,10 +219,10 @@ channel-wecom-ws = ["dep:aes", "dep:cbc"]
 channel-clawdtalk = []
 channel-webhook = []
 channel-whatsapp-cloud = []
-channel-voice-call = []
-channel-acp-server = []
-channel-matrix = ["dep:matrix-sdk", "dep:mime_guess"]
-voice-wake = ["dep:cpal"]
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(feature, values("channel-nostr", "channel-voice-call", "voice-wake"))',
+] }
 
 [dev-dependencies]
 axum = { version = "0.8", default-features = false, features = [

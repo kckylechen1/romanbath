@@ -207,9 +207,8 @@ mod doctor;
 #[cfg(feature = "gateway")]
 mod gateway;
 #[cfg(feature = "agent-runtime")]
-mod hardware;
-#[cfg(feature = "agent-runtime")]
 mod health;
+mod interactive_model;
 #[cfg(feature = "agent-runtime")]
 mod heartbeat;
 #[cfg(feature = "agent-runtime")]
@@ -226,13 +225,7 @@ mod migration;
 #[cfg(feature = "agent-runtime")]
 mod multimodal;
 #[cfg(feature = "agent-runtime")]
-mod observability;
-#[cfg(feature = "agent-runtime")]
-mod peripherals;
-#[cfg(feature = "agent-runtime")]
 mod platform;
-#[cfg(feature = "plugins-wasm")]
-mod plugins;
 mod providers;
 #[cfg(feature = "schema-export")]
 mod schema_markdown;
@@ -245,8 +238,6 @@ mod skillforge;
 #[cfg(feature = "agent-runtime")]
 mod skills;
 #[cfg(feature = "agent-runtime")]
-mod sop;
-#[cfg(feature = "agent-runtime")]
 mod tools;
 #[cfg(feature = "agent-runtime")]
 mod trust;
@@ -254,16 +245,13 @@ mod trust;
 mod tunnel;
 #[cfg(feature = "agent-runtime")]
 mod util;
-#[cfg(feature = "agent-runtime")]
-mod verifiable_intent;
 
 use config::Config;
 
 // Re-export so binary modules can use crate::<CommandEnum> while keeping a single source of truth.
 pub use zeroclaw::{
-    ChannelCommands, CronCommands, GatewayCommands, HardwareCommands, IntegrationCommands,
-    MigrateCommands, PeripheralCommands, ServiceCommands, SkillBundleCommands, SkillCommands,
-    SopCommands,
+    ChannelCommands, CronCommands, GatewayCommands, IntegrationCommands,
+    MigrateCommands, ServiceCommands, SkillBundleCommands, SkillCommands,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -424,29 +412,6 @@ Examples:
         gateway_command: Option<zeroclaw::GatewayCommands>,
     },
 
-    /// Start ACP (Agent Control Protocol) server over stdio
-    #[command(long_about = "\
-Start the ACP server (JSON-RPC 2.0 over stdio).
-
-Launches a JSON-RPC 2.0 server on stdin/stdout for IDE and tool \
-integration. Supports session management and streaming agent \
-responses as notifications.
-
-Methods: initialize, session/new, session/prompt, session/stop.
-
-Examples:
-  zeroclaw acp                        # start ACP server
-  zeroclaw acp --max-sessions 5       # limit concurrent sessions")]
-    Acp {
-        /// Maximum concurrent sessions (default: 10)
-        #[arg(long)]
-        max_sessions: Option<usize>,
-
-        /// Session inactivity timeout in seconds (default: 3600)
-        #[arg(long)]
-        session_timeout: Option<u64>,
-    },
-
     /// Start long-running autonomous runtime (gateway + channels + heartbeat + scheduler)
     #[command(long_about = "\
 Start the long-running autonomous daemon.
@@ -558,6 +523,37 @@ Examples:
         model_command: ModelCommands,
     },
 
+    /// Interactively pick a provider and model
+    #[command(long_about = "\
+Interactively select a model provider, authenticate, and choose a model.
+
+Supports OAuth (xAI Grok, OpenAI Codex, Gemini) and API-key providers
+(Anthropic, OpenRouter, DeepSeek). Local providers like Ollama need no auth.
+
+Examples:
+  zeroclaw model                      # Interactive picker
+  zeroclaw model --provider xai       # Skip provider picker
+  zeroclaw model --device-code        # Headless auth (no browser)
+  zeroclaw model --set grok-3         # Set model directly
+  zeroclaw model --status             # Show current model")]
+    Model {
+        /// Skip provider picker, go straight to this provider
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Use device-code flow for headless auth (no browser)
+        #[arg(long)]
+        device_code: bool,
+
+        /// Non-interactive: set model directly without picker
+        #[arg(long)]
+        set: Option<String>,
+
+        /// Show current active model
+        #[arg(long)]
+        status: bool,
+    },
+
     /// List supported AI model_providers
     Providers,
 
@@ -610,12 +606,6 @@ Examples:
         path: String,
     },
 
-    /// Manage standard operating procedures (SOPs)
-    Sop {
-        #[command(subcommand)]
-        sop_command: SopCommands,
-    },
-
     /// Migrate data from other agent runtimes
     Migrate {
         #[command(subcommand)]
@@ -626,42 +616,6 @@ Examples:
     Auth {
         #[command(subcommand)]
         auth_command: AuthCommands,
-    },
-
-    /// Discover and introspect USB hardware
-    #[command(long_about = "\
-Discover and introspect USB hardware.
-
-Enumerate connected USB devices, identify known development boards \
-(STM32 Nucleo, Arduino, ESP32), and retrieve chip information via \
-probe-rs / ST-Link.
-
-Examples:
-  zeroclaw hardware discover
-  zeroclaw hardware introspect /dev/ttyACM0
-  zeroclaw hardware info --chip STM32F401RETx")]
-    Hardware {
-        #[command(subcommand)]
-        hardware_command: zeroclaw::HardwareCommands,
-    },
-
-    /// Manage hardware peripherals (STM32, RPi GPIO, etc.)
-    #[command(long_about = "\
-Manage hardware peripherals.
-
-Add, list, flash, and configure hardware boards that expose tools \
-to the agent (GPIO, sensors, actuators). Supported boards: \
-nucleo-f401re, rpi-gpio, esp32, arduino-uno.
-
-Examples:
-  zeroclaw peripheral list
-  zeroclaw peripheral add nucleo-f401re /dev/ttyACM0
-  zeroclaw peripheral add rpi-gpio native
-  zeroclaw peripheral flash --port /dev/cu.usbmodem12345
-  zeroclaw peripheral flash-nucleo")]
-    Peripheral {
-        #[command(subcommand)]
-        peripheral_command: zeroclaw::PeripheralCommands,
     },
 
     /// Manage agent memory (list, get, stats, clear)
@@ -817,6 +771,39 @@ Examples:
     Plugin {
         #[command(subcommand)]
         plugin_command: PluginCommands,
+    },
+
+    /// Generate an image via xAI Grok
+    #[command(long_about = "\
+Generate an image using xAI Grok Imagine.\n\nUses the configured xAI model provider credentials.\nOutput is saved as a PNG file.\n\nExamples:\n  zeroclaw image-gen --prompt \"A serene landscape\" --output scene.png\n  zeroclaw image-gen --prompt \"Cyberpunk city\" --resolution 2k -o city.png")]
+    ImageGen {
+        /// Image prompt
+        #[arg(long, short)]
+        prompt: String,
+        /// Output file path
+        #[arg(long, short, default_value = "output.png")]
+        output: PathBuf,
+        /// Resolution: 1k or 2k
+        #[arg(long, default_value = "1k")]
+        resolution: String,
+    },
+
+    /// Generate speech audio via xAI Grok TTS
+    #[command(long_about = "\
+Generate speech audio using xAI Grok TTS.\n\nUses the configured xAI model provider credentials.\nOutput is saved as an MP3 file.\n\nExamples:\n  zeroclaw tts --text \"Hello world\" --output speech.mp3\n  zeroclaw tts --text \"你好世界\" --voice ara --language en-US -o hello.mp3")]
+    Tts {
+        /// Text to speak
+        #[arg(long, short)]
+        text: String,
+        /// Output file path
+        #[arg(long, short, default_value = "output.mp3")]
+        output: PathBuf,
+        /// Voice ID (default: ara)
+        #[arg(long, default_value = "ara")]
+        voice: String,
+        /// Language code (default: en-US)
+        #[arg(long, default_value = "en-US")]
+        language: String,
     },
 }
 
@@ -1360,8 +1347,7 @@ async fn main() -> Result<()> {
     // For the ACP command and agent interactive mode, we default to WARN to avoid
     // INFO logs corrupting the stdio protocol or interleaving with conversation output.
     // We also always redirect logs to stderr so stdout remains clean for data.
-    let default_log_level = if matches!(cli.command, Commands::Acp { .. })
-        || matches!(cli.command, Commands::Agent { message: None, .. })
+    let default_log_level = if matches!(cli.command, Commands::Agent { message: None, .. })
     {
         "warn"
     } else {
@@ -1524,8 +1510,6 @@ async fn main() -> Result<()> {
 
     // All other commands need config loaded first
     let mut config = Box::pin(Config::load_or_init()).await?;
-    #[cfg(feature = "agent-runtime")]
-    observability::runtime_trace::init_from_config(&config.observability, &config.data_dir);
     #[cfg(feature = "agent-runtime")]
     if config.security.otp.enabled {
         let config_dir = config
@@ -1718,54 +1702,6 @@ async fn main() -> Result<()> {
             ))
             .await
             .map(|_| ())
-        }
-
-        Commands::Acp {
-            max_sessions,
-            session_timeout,
-        } => {
-            #[cfg(feature = "channel-acp-server")]
-            {
-                let mut acp_config = channels::acp_server::AcpServerConfig {
-                    max_sessions: config.acp.max_sessions,
-                    session_timeout_secs: config.acp.session_timeout_secs,
-                };
-                if let Some(max) = max_sessions {
-                    acp_config.max_sessions = max;
-                }
-                if let Some(timeout) = session_timeout {
-                    acp_config.session_timeout_secs = timeout;
-                }
-                let store =
-                    zeroclaw_infra::acp_session_store::AcpSessionStore::new(&config.data_dir)
-                        .map(std::sync::Arc::new)
-                        .inspect_err(|e| {
-                            ::zeroclaw_log::record!(
-                                WARN,
-                                ::zeroclaw_log::Event::new(
-                                    module_path!(),
-                                    ::zeroclaw_log::Action::Note
-                                )
-                                .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                                .with_attrs(::serde_json::json!({"error": e.to_string()})),
-                                "Failed to open ACP session store"
-                            );
-                        })
-                        .ok();
-                let server = if let Some(store) = store {
-                    std::sync::Arc::new(channels::acp_server::AcpServer::new_with_store(
-                        config, acp_config, store,
-                    ))
-                } else {
-                    std::sync::Arc::new(channels::acp_server::AcpServer::new(config, acp_config))
-                };
-                server.run().await
-            }
-            #[cfg(not(feature = "channel-acp-server"))]
-            {
-                let _ = (max_sessions, session_timeout);
-                anyhow::bail!("ACP server requires the `channel-acp-server` feature")
-            }
         }
 
         Commands::Gateway { gateway_command } => {
@@ -1982,14 +1918,6 @@ async fn main() -> Result<()> {
             #[cfg(feature = "agent-runtime")]
             zeroclaw_runtime::agent::loop_::register_cli_channel_fn(Box::new(|| {
                 Box::new(zeroclaw_channels::cli::CliChannel::new("cli"))
-            }));
-
-            // Wire peripheral tools from zeroclaw-hardware
-            #[cfg(feature = "hardware")]
-            zeroclaw_runtime::agent::loop_::register_peripheral_tools_fn(Box::new(|config| {
-                Box::pin(async move {
-                    zeroclaw_hardware::peripherals::create_peripheral_tools(&config).await
-                })
             }));
 
             // Cron delivery is registered earlier (before the command match)
@@ -2298,6 +2226,22 @@ async fn main() -> Result<()> {
             doctor::run_models(&config, model_provider, false).await
         }
 
+        Commands::Model {
+            provider,
+            device_code,
+            set,
+            status,
+        } => {
+            interactive_model::run(
+                &mut config,
+                provider.as_deref(),
+                device_code,
+                set.as_deref(),
+                status,
+            )
+            .await
+        }
+
         Commands::Providers => {
             let model_providers = zeroclaw_providers::list_model_providers();
             let current = config
@@ -2370,8 +2314,6 @@ async fn main() -> Result<()> {
 
         Commands::Browse { path } => browse::handle_browse(path, &config),
 
-        Commands::Sop { sop_command } => sop::handle_command(sop_command, &config),
-
         Commands::Migrate { migrate_command } => {
             migration::handle_command(migrate_command, &config).await
         }
@@ -2381,18 +2323,6 @@ async fn main() -> Result<()> {
         }
 
         Commands::Auth { auth_command } => handle_auth_command(auth_command, &config).await,
-
-        Commands::Hardware { hardware_command } => {
-            hardware::handle_command(hardware_command.clone(), &config)
-        }
-
-        Commands::Peripheral { peripheral_command } => {
-            Box::pin(peripherals::handle_command(
-                peripheral_command.clone(),
-                &config,
-            ))
-            .await
-        }
 
         Commands::Desktop {
             install: do_install,
@@ -2496,10 +2426,17 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                // 4. Fallback to PATH lookup
+                // 4. Fallback: try executing `zeroclaw-desktop --version` to find in PATH
                 if found.is_none() {
-                    if let Ok(path) = which::which("zeroclaw-desktop") {
-                        found = Some(path);
+                    if let Ok(output) = std::process::Command::new("zeroclaw-desktop")
+                        .arg("--version")
+                        .output()
+                    {
+                        if output.status.success() {
+                            // Best-effort: the binary exists in PATH but we don't have its path.
+                            // The Command::new below will find it via PATH again.
+                            found = Some(std::path::PathBuf::from("zeroclaw-desktop"));
+                        }
                     }
                 }
 
@@ -3289,6 +3226,104 @@ async fn main() -> Result<()> {
                 Ok(())
             }
         },
+
+        Commands::ImageGen {
+            prompt,
+            output,
+            resolution,
+        } => {
+            let api_key = config
+                .first_model_provider()
+                .and_then(|e| e.api_key.clone())
+                .or_else(|| std::env::var("XAI_API_KEY").ok())
+                .or_else(|| std::env::var("XAI_OAUTH_TOKEN").ok());
+
+            let token = api_key
+                .as_deref()
+                .filter(|k| !k.trim().is_empty())
+                .context("No xAI credentials found. Set api_key in [providers.models.xai.default] or XAI_API_KEY env var.")?;
+
+            let res = if resolution == "2k" { "2k" } else { "1k" };
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()?;
+
+            let resp = client
+                .post("https://api.x.ai/v1/images/generations")
+                .header("Authorization", format!("Bearer {token}"))
+                .json(&serde_json::json!({
+                    "model": "grok-imagine-image",
+                    "prompt": prompt,
+                    "resolution": res
+                }))
+                .send()
+                .await?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("xAI API error: {body}");
+            }
+
+            let body: serde_json::Value = resp.json().await?;
+            let data = body["data"].as_array().context("Missing data array")?;
+            let first = data.first().context("Empty data array")?;
+
+            let bytes = if let Some(b64) = first["b64_json"].as_str() {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD.decode(b64)?
+            } else if let Some(url) = first["url"].as_str() {
+                reqwest::get(url).await?.bytes().await?.to_vec()
+            } else {
+                anyhow::bail!("Response missing image data");
+            };
+
+            std::fs::write(&output, &bytes)?;
+            println!("Saved {}", output.display());
+            Ok(())
+        }
+
+        Commands::Tts {
+            text,
+            output,
+            voice,
+            language,
+        } => {
+            let api_key = config
+                .first_model_provider()
+                .and_then(|e| e.api_key.clone())
+                .or_else(|| std::env::var("XAI_API_KEY").ok())
+                .or_else(|| std::env::var("XAI_OAUTH_TOKEN").ok());
+
+            let token = api_key
+                .as_deref()
+                .filter(|k| !k.trim().is_empty())
+                .context("No xAI credentials found. Set api_key in [providers.models.xai.default] or XAI_API_KEY env var.")?;
+
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()?;
+
+            let resp = client
+                .post("https://api.x.ai/v1/tts")
+                .header("Authorization", format!("Bearer {token}"))
+                .json(&serde_json::json!({
+                    "text": text,
+                    "voice_id": voice,
+                    "language": language
+                }))
+                .send()
+                .await?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("xAI TTS error: {body}");
+            }
+
+            let bytes = resp.bytes().await?;
+            std::fs::write(&output, &bytes)?;
+            println!("Saved {}", output.display());
+            Ok(())
+        }
     }
 }
 

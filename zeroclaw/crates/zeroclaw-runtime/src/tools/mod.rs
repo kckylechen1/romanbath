@@ -51,13 +51,9 @@ pub use zeroclaw_tools::browser_open::BrowserOpenTool;
 pub use zeroclaw_tools::calculator::CalculatorTool;
 pub use zeroclaw_tools::canvas::{ALLOWED_CONTENT_TYPES, MAX_CONTENT_SIZE};
 pub use zeroclaw_tools::canvas::{CanvasStore, CanvasTool};
-pub use zeroclaw_tools::claude_code::ClaudeCodeTool;
-pub use zeroclaw_tools::claude_code_runner::ClaudeCodeRunnerTool;
 pub use zeroclaw_tools::cli_discovery::{DiscoveredCli, discover_cli_tools};
 pub use zeroclaw_tools::cloud_ops::CloudOpsTool;
 pub use zeroclaw_tools::cloud_patterns::CloudPatternsTool;
-pub use zeroclaw_tools::codex_cli::CodexCliTool;
-pub use zeroclaw_tools::composio::ComposioTool;
 pub use zeroclaw_tools::content_search::ContentSearchTool;
 pub use zeroclaw_tools::data_management::DataManagementTool;
 pub use zeroclaw_tools::discord_search::DiscordSearchTool;
@@ -65,19 +61,17 @@ pub use zeroclaw_tools::escalate::EscalateToHumanTool;
 pub use zeroclaw_tools::file_edit::FileEditTool;
 pub use zeroclaw_tools::file_upload::FileUploadTool;
 pub use zeroclaw_tools::file_write::FileWriteTool;
-pub use zeroclaw_tools::gemini_cli::GeminiCliTool;
 pub use zeroclaw_tools::git_operations::GitOperationsTool;
 pub use zeroclaw_tools::glob_search::GlobSearchTool;
-pub use zeroclaw_tools::google_workspace::GoogleWorkspaceTool;
 pub use zeroclaw_tools::hardware_board_info::HardwareBoardInfoTool;
 pub use zeroclaw_tools::hardware_memory_map::HardwareMemoryMapTool;
 pub use zeroclaw_tools::hardware_memory_read::HardwareMemoryReadTool;
 pub use zeroclaw_tools::http_request::HttpRequestTool;
 pub use zeroclaw_tools::image_gen::ImageGenTool;
+pub use zeroclaw_tools::xai_image_gen::XaiImageGenTool;
+pub use zeroclaw_tools::xai_tts::XaiTtsTool;
 pub use zeroclaw_tools::image_info::ImageInfoTool;
-pub use zeroclaw_tools::jira_tool::JiraTool;
 pub use zeroclaw_tools::knowledge_tool::KnowledgeTool;
-pub use zeroclaw_tools::linkedin::LinkedInTool;
 pub use zeroclaw_tools::llm_task::LlmTaskTool;
 pub use zeroclaw_tools::mcp_client::McpRegistry;
 pub use zeroclaw_tools::mcp_deferred::{
@@ -90,12 +84,7 @@ pub use zeroclaw_tools::memory_forget::MemoryForgetTool;
 pub use zeroclaw_tools::memory_purge::MemoryPurgeTool;
 pub use zeroclaw_tools::memory_recall::MemoryRecallTool;
 pub use zeroclaw_tools::memory_store::MemoryStoreTool;
-pub use zeroclaw_tools::microsoft365::Microsoft365Tool;
 pub use zeroclaw_tools::model_routing_config::ModelRoutingConfigTool;
-pub use zeroclaw_tools::notion_tool::NotionTool;
-pub use zeroclaw_tools::opencode_cli::OpenCodeCliTool;
-#[cfg(feature = "rag-pdf")]
-pub use zeroclaw_tools::pdf_read::PdfReadTool;
 pub use zeroclaw_tools::pipeline::PipelineTool;
 pub use zeroclaw_tools::poll::PollTool;
 pub use zeroclaw_tools::project_intel::ProjectIntelTool;
@@ -347,8 +336,6 @@ pub fn all_tools(
     risk_profile: &zeroclaw_config::schema::RiskProfileConfig,
     agent_alias: &str,
     memory: Arc<dyn Memory>,
-    composio_key: Option<&str>,
-    composio_entity_id: Option<&str>,
     browser_config: &zeroclaw_config::schema::BrowserConfig,
     http_config: &zeroclaw_config::schema::HttpRequestConfig,
     web_fetch_config: &zeroclaw_config::schema::WebFetchConfig,
@@ -373,8 +360,6 @@ pub fn all_tools(
         agent_alias,
         Arc::new(NativeRuntime::new()),
         memory,
-        composio_key,
-        composio_entity_id,
         browser_config,
         http_config,
         web_fetch_config,
@@ -400,8 +385,6 @@ pub fn all_tools_with_runtime(
     agent_alias: &str,
     runtime: Arc<dyn RuntimeAdapter>,
     memory: Arc<dyn Memory>,
-    composio_key: Option<&str>,
-    composio_entity_id: Option<&str>,
     browser_config: &zeroclaw_config::schema::BrowserConfig,
     http_config: &zeroclaw_config::schema::HttpRequestConfig,
     web_fetch_config: &zeroclaw_config::schema::WebFetchConfig,
@@ -702,77 +685,7 @@ pub fn all_tools_with_runtime(
         )));
     }
 
-    // Notion API tool (conditionally registered)
-    if root_config.notion.enabled {
-        let notion_api_key = if root_config.notion.api_key.trim().is_empty() {
-            std::env::var("NOTION_API_KEY").unwrap_or_default()
-        } else {
-            root_config.notion.api_key.trim().to_string()
-        };
-        if notion_api_key.trim().is_empty() {
-            ::zeroclaw_log::record!(
-                WARN,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
-                "Notion tool enabled but no API key found (set notion.api_key or NOTION_API_KEY env var)"
-            );
-        } else {
-            tool_arcs.push(Arc::new(NotionTool::new(notion_api_key, security.clone())));
-        }
-    }
-
-    // Jira integration (config-gated)
-    if root_config.jira.enabled {
-        let api_token = if root_config.jira.api_token.trim().is_empty() {
-            std::env::var("JIRA_API_TOKEN").unwrap_or_default()
-        } else {
-            root_config.jira.api_token.trim().to_string()
-        };
-        if api_token.trim().is_empty() {
-            ::zeroclaw_log::record!(
-                WARN,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
-                "Jira tool enabled but no API token found (set jira.api_token or JIRA_API_TOKEN env var)"
-            );
-        } else if root_config.jira.base_url.trim().is_empty() {
-            ::zeroclaw_log::record!(
-                WARN,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
-                "Jira tool enabled but jira.base_url is empty — skipping registration"
-            );
-        } else {
-            let email = root_config
-                .jira
-                .email
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from);
-            if email.is_some() {
-                ::zeroclaw_log::record!(
-                    INFO,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
-                    "Jira tool: Cloud mode (API v3, Basic auth)"
-                );
-            } else {
-                ::zeroclaw_log::record!(
-                    INFO,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
-                    "Jira tool: Server/DC mode (API v2, Bearer auth)"
-                );
-            }
-            tool_arcs.push(Arc::new(JiraTool::new(
-                root_config.jira.base_url.trim().to_string(),
-                email,
-                api_token,
-                root_config.jira.allowed_actions.clone(),
-                security.clone(),
-                root_config.jira.timeout_secs,
-            )));
-        }
-    }
+    // Notion and Jira tools removed (tool implementations deleted)
 
     // Project delivery intelligence
     if root_config.project_intel.enabled {
@@ -814,82 +727,6 @@ pub fn all_tools_with_runtime(
         tool_arcs.push(Arc::new(CloudPatternsTool::new()));
     }
 
-    // Google Workspace CLI (gws) integration — requires shell access
-    if root_config.google_workspace.enabled && has_shell_access {
-        tool_arcs.push(Arc::new(GoogleWorkspaceTool::new(
-            security.clone(),
-            root_config.google_workspace.allowed_services.clone(),
-            root_config.google_workspace.allowed_operations.clone(),
-            root_config.google_workspace.credentials_path.clone(),
-            root_config.google_workspace.default_account.clone(),
-            root_config.google_workspace.rate_limit_per_minute,
-            root_config.google_workspace.timeout_secs,
-            root_config.google_workspace.audit_log,
-        )));
-    } else if root_config.google_workspace.enabled {
-        ::zeroclaw_log::record!(
-            WARN,
-            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
-            "google_workspace: skipped registration because shell access is unavailable"
-        );
-    }
-
-    // Claude Code delegation tool
-    if root_config.claude_code.enabled {
-        tool_arcs.push(Arc::new(RateLimitedTool::new(
-            ClaudeCodeTool::new(security.clone(), root_config.claude_code.clone()),
-            security.clone(),
-        )));
-    }
-
-    // Claude Code task runner with Slack progress and SSH handoff
-    if root_config.claude_code_runner.enabled {
-        let gateway_url = format!(
-            "http://{}:{}",
-            root_config.gateway.host, root_config.gateway.port
-        );
-        tool_arcs.push(Arc::new(RateLimitedTool::new(
-            ClaudeCodeRunnerTool::new(
-                security.clone(),
-                root_config.claude_code_runner.clone(),
-                gateway_url,
-            ),
-            security.clone(),
-        )));
-    }
-
-    // Codex CLI delegation tool
-    if root_config.codex_cli.enabled {
-        tool_arcs.push(Arc::new(RateLimitedTool::new(
-            CodexCliTool::new(security.clone(), root_config.codex_cli.clone()),
-            security.clone(),
-        )));
-    }
-
-    // Gemini CLI delegation tool
-    if root_config.gemini_cli.enabled {
-        tool_arcs.push(Arc::new(RateLimitedTool::new(
-            GeminiCliTool::new(security.clone(), root_config.gemini_cli.clone()),
-            security.clone(),
-        )));
-    }
-
-    // OpenCode CLI delegation tool
-    if root_config.opencode_cli.enabled {
-        tool_arcs.push(Arc::new(RateLimitedTool::new(
-            OpenCodeCliTool::new(security.clone(), root_config.opencode_cli.clone()),
-            security.clone(),
-        )));
-    }
-
-    // PDF extraction (feature-gated at compile time via rag-pdf)
-    #[cfg(feature = "rag-pdf")]
-    tool_arcs.push(Arc::new(RateLimitedTool::new(
-        PathGuardedTool::new(PdfReadTool::new(security.clone()), security.clone()),
-        security.clone(),
-    )));
-
     // Vision tools are always available
     tool_arcs.push(Arc::new(ScreenshotTool::new(security.clone())));
     tool_arcs.push(Arc::new(RateLimitedTool::new(
@@ -923,17 +760,6 @@ pub fn all_tools_with_runtime(
         // agent's sessions. The unscoped constructors are operator/admin only.
     }
 
-    // LinkedIn integration (config-gated)
-    if root_config.linkedin.enabled {
-        tool_arcs.push(Arc::new(LinkedInTool::new(
-            security.clone(),
-            workspace_dir.to_path_buf(),
-            root_config.linkedin.api_version.clone(),
-            root_config.linkedin.content.clone(),
-            root_config.linkedin.image.clone(),
-        )));
-    }
-
     // Standalone image generation tool (config-gated)
     if root_config.image_gen.enabled {
         tool_arcs.push(Arc::new(ImageGenTool::new(
@@ -942,6 +768,29 @@ pub fn all_tools_with_runtime(
             root_config.image_gen.default_model.clone(),
             root_config.image_gen.api_key_env.clone(),
         )));
+    }
+
+    // xAI image gen + TTS — gated on configured provider api_key
+    if let Some(xai_key) = root_config
+        .first_model_provider()
+        .and_then(|p| p.api_key.as_deref())
+    {
+        if !xai_key.trim().is_empty() {
+            tool_arcs.push(Arc::new(XaiImageGenTool::new(
+                security.clone(),
+                workspace_dir.to_path_buf(),
+                "grok-imagine-image".to_string(),
+                "1k".to_string(),
+                Some(xai_key.to_string()),
+            )));
+            tool_arcs.push(Arc::new(XaiTtsTool::new(
+                security.clone(),
+                workspace_dir.to_path_buf(),
+                "ara".to_string(),
+                "en-US".to_string(),
+                Some(xai_key.to_string()),
+            )));
+        }
     }
 
     // File upload tool — enabled iff [file_upload].url is set
@@ -976,16 +825,6 @@ pub fn all_tools_with_runtime(
         tool_arcs.push(Arc::new(SopStatusTool::new(Arc::clone(&sop_engine))));
     }
 
-    if let Some(key) = composio_key
-        && !key.is_empty()
-    {
-        tool_arcs.push(Arc::new(ComposioTool::new(
-            key,
-            composio_entity_id,
-            security.clone(),
-        )));
-    }
-
     // Emoji reaction tool — always registered; channel map populated later by start_channels.
     let reaction_tool = ReactionTool::new(security.clone());
     let reaction_handle = reaction_tool.channel_map_handle();
@@ -1003,80 +842,6 @@ pub fn all_tools_with_runtime(
     );
     let escalate_handle = escalate_tool.channel_map_handle();
     tool_arcs.push(Arc::new(escalate_tool));
-
-    // Microsoft 365 Graph API integration
-    if root_config.microsoft365.enabled {
-        let ms_cfg = &root_config.microsoft365;
-        let tenant_id = ms_cfg
-            .tenant_id
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let client_id = ms_cfg
-            .client_id
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if !tenant_id.is_empty() && !client_id.is_empty() {
-            // Fail fast: client_credentials flow requires a client_secret at registration time.
-            if ms_cfg.auth_flow.trim() == "client_credentials"
-                && ms_cfg
-                    .client_secret
-                    .as_deref()
-                    .is_none_or(|s| s.trim().is_empty())
-            {
-                ::zeroclaw_log::record!(
-                    ERROR,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure),
-                    "microsoft365: client_credentials auth_flow requires a non-empty client_secret"
-                );
-                return (
-                    boxed_registry_from_arcs(tool_arcs),
-                    None,
-                    Some(reaction_handle),
-                    channel_map_handle,
-                    Some(ask_user_handle),
-                    Some(escalate_handle),
-                );
-            }
-
-            let resolved = zeroclaw_tools::microsoft365::types::Microsoft365ResolvedConfig {
-                tenant_id,
-                client_id,
-                client_secret: ms_cfg.client_secret.clone(),
-                auth_flow: ms_cfg.auth_flow.clone(),
-                scopes: ms_cfg.scopes.clone(),
-                token_cache_encrypted: ms_cfg.token_cache_encrypted,
-                user_id: ms_cfg.user_id.as_deref().unwrap_or("me").to_string(),
-            };
-            // Store token cache in the config directory (next to config.toml),
-            // not the workspace directory, to keep bearer tokens out of the
-            // project tree.
-            let cache_dir = root_config.config_path.parent().unwrap_or(workspace_dir);
-            match Microsoft365Tool::new(resolved, security.clone(), cache_dir) {
-                Ok(tool) => tool_arcs.push(Arc::new(tool)),
-                Err(e) => {
-                    ::zeroclaw_log::record!(
-                        ERROR,
-                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
-                        "microsoft365: failed to initialize tool"
-                    );
-                }
-            }
-        } else {
-            ::zeroclaw_log::record!(
-                WARN,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
-                "microsoft365: skipped registration because tenant_id or client_id is empty"
-            );
-        }
-    }
 
     // Knowledge graph tool
     if root_config.knowledge.enabled {
@@ -1286,8 +1051,6 @@ mod tests {
             &zeroclaw_config::schema::RiskProfileConfig::default(),
             "test-agent",
             mem,
-            None,
-            None,
             &browser,
             &http,
             &zeroclaw_config::schema::WebFetchConfig::default(),
@@ -1332,8 +1095,6 @@ mod tests {
             &zeroclaw_config::schema::RiskProfileConfig::default(),
             "test-agent",
             mem,
-            None,
-            None,
             &browser,
             &http,
             &zeroclaw_config::schema::WebFetchConfig::default(),
@@ -1479,8 +1240,6 @@ mod tests {
             &zeroclaw_config::schema::RiskProfileConfig::default(),
             "test-agent",
             mem,
-            None,
-            None,
             &browser,
             &http,
             &zeroclaw_config::schema::WebFetchConfig::default(),
@@ -1516,8 +1275,6 @@ mod tests {
             &zeroclaw_config::schema::RiskProfileConfig::default(),
             "test-agent",
             mem,
-            None,
-            None,
             &browser,
             &http,
             &zeroclaw_config::schema::WebFetchConfig::default(),
@@ -1555,8 +1312,6 @@ mod tests {
             &zeroclaw_config::schema::RiskProfileConfig::default(),
             "test-agent",
             mem,
-            None,
-            None,
             &browser,
             &http,
             &zeroclaw_config::schema::WebFetchConfig::default(),
@@ -1593,8 +1348,6 @@ mod tests {
             &zeroclaw_config::schema::RiskProfileConfig::default(),
             "test-agent",
             mem,
-            None,
-            None,
             &browser,
             &http,
             &zeroclaw_config::schema::WebFetchConfig::default(),

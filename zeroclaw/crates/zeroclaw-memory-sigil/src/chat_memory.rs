@@ -59,8 +59,11 @@ impl ChatMemoryStore {
         role: &str,
         content: &str,
     ) -> Result<Option<String>, MemoryError> {
+        // Scrub think tags first so they don't pollute the noise checks or DB
+        let cleaned_content = crate::noise::scrub_think_tags(content);
+
         // Filter noise
-        if is_noise_text(content, Some(role)) {
+        if is_noise_text(&cleaned_content, Some(role)) {
             return Ok(None);
         }
 
@@ -70,20 +73,20 @@ impl ChatMemoryStore {
         let timestamp = memory_crud::now_utc_iso();
 
         // Determine category based on content heuristics
-        let category = infer_category(content);
-        let importance = infer_importance(content);
+        let category = infer_category(&cleaned_content);
+        let importance = infer_importance(&cleaned_content);
 
         // Extract entities: user name + any mentioned names
         let mut entities = vec![user_name.to_string(), character_name.to_string()];
-        entities.extend(extract_mentions(content));
+        entities.extend(extract_mentions(&cleaned_content));
 
         let path = format!("/chat/{character_name}/memories/{role}");
 
         let entry = MemoryEntry {
             id,
             path,
-            summary: content.chars().take(100).collect(),
-            text: content.to_string(),
+            summary: cleaned_content.chars().take(100).collect(),
+            text: cleaned_content,
             importance,
             timestamp,
             category,
@@ -321,5 +324,24 @@ mod tests {
         );
         assert!(!injected.is_empty());
         assert!(injected.contains("TypeScript"));
+    }
+
+    #[test]
+    fn save_scrubs_think_tags() {
+        let (_dir, store) = temp_store();
+        let result = store.save_chat_memory(
+            "test_char_think",
+            "Alice",
+            "user",
+            "<think>Analyzing the user preference...</think>I like using Rust for coding",
+        );
+        let _id = result.unwrap().expect("Should not be filtered as noise");
+        let memories = store
+            .recall_memories("test_char_think", "like using Rust coding", 5)
+            .unwrap();
+        assert!(!memories.is_empty());
+        let entry = &memories[0].entry;
+        assert_eq!(entry.text, "I like using Rust for coding");
+        assert!(!entry.text.contains("<think>"));
     }
 }

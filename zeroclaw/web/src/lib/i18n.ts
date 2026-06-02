@@ -11,6 +11,7 @@ const translations: Record<Locale, Record<string, string>> = {
   zh: {
     // Navigation
     'nav.dashboard': '仪表盘',
+    'nav.chat': 'Chat',
     'nav.agent': '智能体',
     'nav.tools': '工具',
     'nav.cron': '定时任务',
@@ -403,6 +404,7 @@ const translations: Record<Locale, Record<string, string>> = {
   en: {
     // Navigation
     'nav.dashboard': 'Dashboard',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.agents': 'Agents',
     'nav.tools': 'Tools',
@@ -808,6 +810,7 @@ const translations: Record<Locale, Record<string, string>> = {
   tr: {
     // Navigation
     'nav.dashboard': 'Kontrol Paneli',
+    'nav.chat': 'Chat',
     'nav.agent': 'Ajan',
     'nav.tools': 'Araçlar',
     'nav.cron': 'Zamanlanmış Görevler',
@@ -1175,6 +1178,7 @@ const translations: Record<Locale, Record<string, string>> = {
   ar: {
     // Navigation
     'nav.dashboard': 'لوحة التحكم',
+    'nav.chat': 'Chat',
     'nav.agent': 'الوكيل',
     'nav.tools': 'الأدوات',
     'nav.cron': 'المهام المجدولة',
@@ -1530,6 +1534,7 @@ const translations: Record<Locale, Record<string, string>> = {
   bn: {
     // Navigation
     'nav.dashboard': 'ড্যাশবোর্ড',
+    'nav.chat': 'Chat',
     'nav.agent': 'এজেন্ট',
     'nav.tools': 'টুলস',
     'nav.cron': 'নির্ধারিত কাজ',
@@ -1885,6 +1890,7 @@ const translations: Record<Locale, Record<string, string>> = {
   cs: {
     // Navigation
     'nav.dashboard': 'Přehled',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Nástroje',
     'nav.cron': 'Plánované úlohy',
@@ -2240,6 +2246,7 @@ const translations: Record<Locale, Record<string, string>> = {
   da: {
     // Navigation
     'nav.dashboard': 'Dashboard',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Værktøjer',
     'nav.cron': 'Planlagte opgaver',
@@ -2595,6 +2602,7 @@ const translations: Record<Locale, Record<string, string>> = {
   de: {
     // Navigation
     'nav.dashboard': 'Dashboard',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Werkzeuge',
     'nav.cron': 'Geplante Aufgaben',
@@ -2950,6 +2958,7 @@ const translations: Record<Locale, Record<string, string>> = {
   el: {
     // Navigation
     'nav.dashboard': 'Πίνακας ελέγχου',
+    'nav.chat': 'Chat',
     'nav.agent': 'Πράκτορας',
     'nav.tools': 'Εργαλεία',
     'nav.cron': 'Προγραμματισμένες εργασίες',
@@ -3305,6 +3314,7 @@ const translations: Record<Locale, Record<string, string>> = {
   es: {
     // Navigation
     'nav.dashboard': 'Panel de control',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agente',
     'nav.tools': 'Herramientas',
     'nav.cron': 'Tareas programadas',
@@ -3660,6 +3670,7 @@ const translations: Record<Locale, Record<string, string>> = {
   fi: {
     // Navigation
     'nav.dashboard': 'Hallintapaneeli',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agentti',
     'nav.tools': 'Työkalut',
     'nav.cron': 'Ajastetut tehtävät',
@@ -4015,6 +4026,7 @@ const translations: Record<Locale, Record<string, string>> = {
   fr: {
     // Navigation
     'nav.dashboard': 'Tableau de bord',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Outils',
     'nav.cron': 'Tâches planifiées',
@@ -4384,6 +4396,7 @@ const translations: Record<Locale, Record<string, string>> = {
   he: {
     // Navigation
     'nav.dashboard': 'לוח בקרה',
+    'nav.chat': 'Chat',
     'nav.agent': 'סוכן',
     'nav.tools': 'כלים',
     'nav.cron': 'משימות מתוזמנות',
@@ -4739,6 +4752,7 @@ const translations: Record<Locale, Record<string, string>> = {
   hi: {
     // Navigation
     'nav.dashboard': 'डैशबोर्ड',
+    'nav.chat': 'Chat',
     'nav.agent': 'एजेंट',
     'nav.tools': 'उपकरण',
     'nav.cron': 'शेड्यूल्ड कार्य',
@@ -5094,6 +5108,7 @@ const translations: Record<Locale, Record<string, string>> = {
   hu: {
     // Navigation
     'nav.dashboard': 'Vezérlőpult',
+    'nav.chat': 'Chat',
     'nav.agent': 'Ügynök',
     'nav.tools': 'Eszközök',
     'nav.cron': 'Ütemezett feladatok',
@@ -5449,6 +5464,7 @@ const translations: Record<Locale, Record<string, string>> = {
   id: {
     // Navigation
     'nav.dashboard': 'Dasbor',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agen',
     'nav.tools': 'Alat',
     'nav.cron': 'Tugas Terjadwal',
@@ -5804,6 +5820,7 @@ const translations: Record<Locale, Record<string, string>> = {
   it: {
     // Navigation
     'nav.dashboard': 'Pannello di controllo',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agente',
     'nav.tools': 'Strumenti',
     'nav.cron': 'Attività pianificate',
@@ -6159,6 +6176,7 @@ const translations: Record<Locale, Record<string, string>> = {
   ja: {
     // Navigation
     'nav.dashboard': 'ダッシュボード',
+    'nav.chat': 'Chat',
     'nav.agent': 'エージェント',
     'nav.tools': 'ツール',
     'nav.cron': 'スケジュールジョブ',
@@ -6528,6 +6546,7 @@ const translations: Record<Locale, Record<string, string>> = {
   ko: {
     // Navigation
     'nav.dashboard': '대시보드',
+    'nav.chat': 'Chat',
     'nav.agent': '에이전트',
     'nav.tools': '도구',
     'nav.cron': '예약 작업',
@@ -6883,6 +6902,7 @@ const translations: Record<Locale, Record<string, string>> = {
   nb: {
     // Navigation
     'nav.dashboard': 'Dashbord',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Verktøy',
     'nav.cron': 'Planlagte jobber',
@@ -7238,6 +7258,7 @@ const translations: Record<Locale, Record<string, string>> = {
   nl: {
     // Navigation
     'nav.dashboard': 'Dashboard',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Gereedschappen',
     'nav.cron': 'Geplande taken',
@@ -7593,6 +7614,7 @@ const translations: Record<Locale, Record<string, string>> = {
   pl: {
     // Navigation
     'nav.dashboard': 'Panel',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Narzędzia',
     'nav.cron': 'Zaplanowane zadania',
@@ -7948,6 +7970,7 @@ const translations: Record<Locale, Record<string, string>> = {
   pt: {
     // Navigation
     'nav.dashboard': 'Painel',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agente',
     'nav.tools': 'Ferramentas',
     'nav.cron': 'Tarefas Agendadas',
@@ -8303,6 +8326,7 @@ const translations: Record<Locale, Record<string, string>> = {
   ro: {
     // Navigation
     'nav.dashboard': 'Panou de control',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Instrumente',
     'nav.cron': 'Sarcini programate',
@@ -8658,6 +8682,7 @@ const translations: Record<Locale, Record<string, string>> = {
   ru: {
     // Navigation
     'nav.dashboard': 'Панель управления',
+    'nav.chat': 'Chat',
     'nav.agent': 'Агент',
     'nav.tools': 'Инструменты',
     'nav.cron': 'Запланированные задачи',
@@ -9027,6 +9052,7 @@ const translations: Record<Locale, Record<string, string>> = {
   sv: {
     // Navigation
     'nav.dashboard': 'Instrumentpanel',
+    'nav.chat': 'Chat',
     'nav.agent': 'Agent',
     'nav.tools': 'Verktyg',
     'nav.cron': 'Schemalagda jobb',
@@ -9382,6 +9408,7 @@ const translations: Record<Locale, Record<string, string>> = {
   th: {
     // Navigation
     'nav.dashboard': 'แดชบอร์ด',
+    'nav.chat': 'Chat',
     'nav.agent': 'เอเจนต์',
     'nav.tools': 'เครื่องมือ',
     'nav.cron': 'งานตามกำหนดเวลา',
@@ -9737,6 +9764,7 @@ const translations: Record<Locale, Record<string, string>> = {
   tl: {
     // Navigation
     'nav.dashboard': 'Dashboard',
+    'nav.chat': 'Chat',
     'nav.agent': 'Ahente',
     'nav.tools': 'Mga Kagamitan',
     'nav.cron': 'Mga Nakaiskedyul na Gawain',
@@ -10092,6 +10120,7 @@ const translations: Record<Locale, Record<string, string>> = {
   uk: {
     // Navigation
     'nav.dashboard': 'Панель керування',
+    'nav.chat': 'Chat',
     'nav.agent': 'Агент',
     'nav.tools': 'Інструменти',
     'nav.cron': 'Заплановані завдання',
@@ -10447,6 +10476,7 @@ const translations: Record<Locale, Record<string, string>> = {
   ur: {
     // Navigation
     'nav.dashboard': 'ڈیش بورڈ',
+    'nav.chat': 'Chat',
     'nav.agent': 'ایجنٹ',
     'nav.tools': 'ٹولز',
     'nav.cron': 'شیڈول شدہ کام',
@@ -10802,6 +10832,7 @@ const translations: Record<Locale, Record<string, string>> = {
   vi: {
     // Navigation
     'nav.dashboard': 'Bảng điều khiển',
+    'nav.chat': 'Chat',
     'nav.agent': 'Tác nhân',
     'nav.tools': 'Công cụ',
     'nav.cron': 'Tác vụ đã lên lịch',

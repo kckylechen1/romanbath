@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { Character } from '../types';
 import { Users, Upload, User, Loader2, Plus, Pencil, MoreVertical, Trash2, Copy, Download } from 'lucide-react';
-import { importCharacterCard, duplicateCharacter, exportCharacter, deleteCharacter } from '../services/sillyTavernService';
+import { importCharacterCard, duplicateCharacter, exportCharacter, deleteCharacter } from '../services/zeroclawService';
 import { useLanguage } from '../i18n';
+import { CharacterAvatar } from './CharacterAvatar';
 
 interface CharacterListProps {
   characters: Character[];
@@ -144,32 +145,27 @@ const CharacterList: React.FC<CharacterListProps> = ({
               onClick={() => onSelect(char)}
               className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-300
                 ${selectedId === char.id
-                  ? 'bg-slate-500/10 border border-slate-500/20 shadow-sm'
-                  : 'hover:bg-white/5 border border-transparent'
+                  ? 'bg-gradient-to-r from-bath-500/5 to-transparent border border-bath-500/10 border-l-2 border-l-bath-500/40 shadow-sm'
+                  : 'hover:bg-gradient-to-r hover:from-white/[0.03] hover:to-transparent border border-transparent border-l-2 border-l-transparent'
                 }
               `}
             >
               <div className="relative shrink-0">
-                {char.avatar ? (
-                  <img
-                    src={char.avatar}
-                    alt={char.name}
-                    className={`w-12 h-12 rounded-full object-cover ring-1 transition-all duration-300 ${selectedId === char.id ? 'ring-slate-400' : 'ring-white/10 group-hover:ring-white/20'}`}
-                  />
-                ) : (
-                  <div className={`w-12 h-12 rounded-full ring-1 flex items-center justify-center bg-slate-900 transition-all duration-300 ${selectedId === char.id ? 'ring-slate-400' : 'ring-white/10 group-hover:ring-white/20'}`}>
-                    <User size={24} className="text-slate-500" />
-                  </div>
-                )}
-                <div className={`absolute bottom-0.5 right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#09090b] ${selectedId === char.id ? 'bg-slate-400' : 'bg-slate-700'}`}></div>
+                <CharacterAvatar
+                  name={char.name}
+                  avatar={char.avatar}
+                  size="lg"
+                  ringClassName={selectedId === char.id ? 'ring-bath-500/30' : 'ring-white/5 group-hover:ring-white/10'}
+                />
+                <div className={`absolute bottom-0.5 right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#0d0b09] transition-colors duration-300 ${selectedId === char.id ? 'bg-bath-400' : 'bg-stone-700'}`}></div>
               </div>
 
               {!isCollapsed && (
                 <div className="flex flex-col items-start text-left overflow-hidden flex-1">
-                  <span className={`font-semibold text-sm truncate w-full ${selectedId === char.id ? 'text-slate-100' : 'text-slate-400 group-hover:text-slate-300'}`}>
+                  <span className={`font-semibold text-sm truncate w-full ${selectedId === char.id ? 'text-stone-100' : 'text-stone-400 group-hover:text-stone-300'}`}>
                     {char.name}
                   </span>
-                  <span className="text-[10px] text-slate-600 truncate w-full uppercase font-mono tracking-tighter">
+                  <span className="text-[10px] text-stone-600 truncate w-full">
                     {char.description}
                   </span>
                 </div>
@@ -183,7 +179,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
                   e.stopPropagation();
                   onEditCharacter?.(char.id);
                 }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-slate-800/80 text-slate-500 hover:text-white hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-all"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-stone-800/80 text-stone-500 hover:text-white hover:bg-stone-700 opacity-0 group-hover:opacity-100 transition-all"
                 title="Edit character"
               >
                 <Pencil size={14} />
@@ -196,27 +192,27 @@ const CharacterList: React.FC<CharacterListProps> = ({
       {/* Context Menu */}
       {contextMenuChar && (
         <div
-          className="fixed z-50 bg-[#1a1a1d] border border-white/10 rounded-xl shadow-2xl py-1 min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
+          className="fixed z-50 bg-[#1a1410] border border-white/10 rounded-xl shadow-2xl py-1 min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
           style={{ left: contextMenuPos.x, top: contextMenuPos.y }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
             onClick={() => handleEditFromMenu(contextMenuChar)}
-            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-300 hover:bg-white/5 hover:text-white transition-colors"
+            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-stone-300 hover:bg-white/5 hover:text-white transition-colors"
           >
             <Pencil size={14} />
             Edit
           </button>
           <button
             onClick={() => handleDuplicateCharacter(contextMenuChar)}
-            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-300 hover:bg-white/5 hover:text-white transition-colors"
+            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-stone-300 hover:bg-white/5 hover:text-white transition-colors"
           >
             <Copy size={14} />
             Duplicate
           </button>
           <button
             onClick={() => handleExportCharacter(contextMenuChar)}
-            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-300 hover:bg-white/5 hover:text-white transition-colors"
+            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-stone-300 hover:bg-white/5 hover:text-white transition-colors"
           >
             <Download size={14} />
             Export
@@ -253,7 +249,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
         {!isCollapsed && (
           <button
             onClick={onCreateCharacter}
-            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600/20 to-pink-600/20 hover:from-purple-600/30 hover:to-pink-600/30 text-purple-300 hover:text-purple-200 p-3 rounded-xl border border-purple-500/20 hover:border-purple-500/30 transition-all"
+            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-bath-600/10 to-bath-700/10 hover:from-bath-600/20 hover:to-bath-700/20 text-bath-300/80 hover:text-bath-200 p-3 rounded-xl border border-bath-500/10 hover:border-bath-500/20 transition-all"
           >
             <Plus size={18} />
             <span className="text-sm font-medium">Create Character</span>
@@ -264,7 +260,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
         <button
           onClick={handleImportClick}
           disabled={isImporting}
-          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'justify-center gap-2'} bg-slate-800/40 hover:bg-slate-800/60 text-slate-400 hover:text-slate-200 p-3 rounded-xl border border-white/5 transition-all disabled:opacity-50 disabled:cursor-not-allowed`}
+          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'justify-center gap-2'} bg-white/[0.02] hover:bg-white/[0.05] text-stone-500 hover:text-stone-200 p-3 rounded-xl border border-white/5 hover:border-white/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed`}
           title={t('character.importCard')}
         >
           {isImporting ? (

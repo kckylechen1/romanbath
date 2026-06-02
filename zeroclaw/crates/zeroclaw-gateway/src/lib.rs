@@ -12,23 +12,21 @@
 //! - Request timeouts (30s) to prevent slow-loris attacks
 //! - Header sanitization (handled by axum/hyper)
 
-pub mod acp;
 pub mod api;
 pub mod api_browse;
 pub mod api_chat;
+pub mod api_characters;
+pub mod api_files;
+pub mod api_image_gen;
 pub mod api_config;
 pub mod api_logs;
 pub mod api_onboard;
 pub mod api_pairing;
 pub mod api_personality;
-#[cfg(feature = "plugins-wasm")]
-pub mod api_plugins;
 pub mod api_skills;
-#[cfg(feature = "webauthn")]
-pub mod api_webauthn;
+pub mod api_tts;
 pub mod auth_rate_limit;
 pub mod canvas;
-pub mod hardware_context;
 pub mod node_tool;
 pub mod nodes;
 pub mod openapi;
@@ -36,8 +34,6 @@ pub mod session_queue;
 pub mod sse;
 pub mod static_files;
 pub mod tls;
-#[cfg(feature = "gateway-voice-duplex")]
-pub mod voice_duplex;
 pub mod ws;
 pub mod ws_approval;
 
@@ -390,8 +386,6 @@ pub struct AppState {
     pub wati: Option<Arc<WatiChannel>>,
     /// Gmail Pub/Sub push notification channel
     pub gmail_push: Option<Arc<GmailPushChannel>>,
-    /// Observability backend for metrics scraping
-    pub observer: Arc<dyn zeroclaw_runtime::observability::Observer>,
     /// Registered tool specs (for web dashboard tools page)
     pub tools_registry: Arc<Vec<ToolSpec>>,
     /// Cost tracker (optional, for web dashboard cost page)
@@ -423,9 +417,6 @@ pub struct AppState {
     pub pending_pairings: Option<Arc<api_pairing::PairingStore>>,
     /// Shared canvas store for Live Canvas (A2UI) system
     pub canvas_store: CanvasStore,
-    /// WebAuthn state for hardware key authentication (optional, requires `webauthn` feature)
-    #[cfg(feature = "webauthn")]
-    pub webauthn: Option<Arc<api_webauthn::WebAuthnState>>,
     /// Per-session cancellation tokens for aborting in-flight agent responses.
     /// Key is session_key (e.g. `gw_<session_id>`), value is the token for the
     /// current turn. Entries are inserted before each turn and removed after
@@ -595,15 +586,6 @@ pub async fn run_gateway(
         .find(|(_, a)| a.enabled)
         .map(|(alias, _)| alias.clone());
 
-    let (composio_key, composio_entity_id) = if config.composio.enabled {
-        (
-            config.composio.api_key.as_deref(),
-            Some(config.composio.entity_id.as_str()),
-        )
-    } else {
-        (None, None)
-    };
-
     // The seeded `risk_profile` + `SecurityPolicy` here drive the legacy
     // single-agent `/api/tools` listing and the `run_gateway_chat_with_tools`
     // test mock — they are not load-bearing for per-request agent dispatch.
@@ -647,8 +629,6 @@ pub async fn run_gateway(
                 agent_alias,
                 runtime,
                 Arc::clone(&mem),
-                composio_key,
-                composio_entity_id,
                 &config.browser,
                 &config.http_request,
                 &config.web_fetch,
@@ -1146,7 +1126,6 @@ pub async fn run_gateway(
         println!("  GET  {pfx}/ws/nodes  — WebSocket node discovery");
     }
     println!("  GET  {pfx}/health    — health check");
-    println!("  GET  {pfx}/metrics   — Prometheus metrics");
     println!("  Press Ctrl+C to stop.\n");
 
     zeroclaw_runtime::health::mark_component_ok("gateway");
@@ -1156,31 +1135,13 @@ pub async fn run_gateway(
         hooks.fire_gateway_start(host, actual_port).await;
     }
 
-    // Install the SSE broadcast hook before building any observer so that
-    // events emitted by the agent's per-call observer (built inside
-    // `process_message`) also reach `/api/events`. The state-level observer
-    // is just the configured backend — `TeeObserver` (created by
-    // `create_observer`) tees its events into the hook automatically.
-    let broadcast_layer: Arc<dyn zeroclaw_runtime::observability::Observer> = Arc::new(
-        sse::BroadcastObserver::new(event_tx.clone(), event_buffer.clone()),
-    );
-    let broadcast_hook_guard =
-        zeroclaw_runtime::observability::set_scoped_broadcast_hook(broadcast_layer);
-
-    // Install the same broadcast sender as zeroclaw-log's canonical
-    // hook so that every event emitted through `record!` / `record_event`
-    // also reaches `/api/events`. The Observer-trait hook above stays
-    // wired for legacy `observer.record_event(ObserverEvent::...)`
-    // callers that haven't migrated to `record!` yet.
+    // Install the SSE broadcast hook for zeroclaw-log so that every event
+    // emitted through `record!` also reaches `/api/events`.
     zeroclaw_log::set_broadcast_hook(event_tx.clone());
-
-    // Bound into AppState. Not a broadcaster — the broadcaster is the
-    // `broadcast_layer` installed above as the global hook. This is the
-    // configured backend (Log/Prometheus/...) wrapped by `TeeObserver`,
-    // which tees events into the hook on every record.
-    let state_observer: Arc<dyn zeroclaw_runtime::observability::Observer> = Arc::from(
-        zeroclaw_runtime::observability::create_observer(&config.observability),
-    );
+    let _runtime_broadcast_guard =
+        zeroclaw_runtime::observability::set_scoped_broadcast_hook(Arc::new(
+            sse::BroadcastObserver::new(event_tx.clone(), event_buffer.clone()),
+        ));
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -1220,7 +1181,6 @@ pub async fn run_gateway(
         nextcloud_talk_webhook_secret,
         wati: wati_channel,
         gmail_push: gmail_push_channel,
-        observer: state_observer,
         tools_registry,
         cost_tracker,
         event_tx,
@@ -1237,30 +1197,6 @@ pub async fn run_gateway(
         canvas_store,
         cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        #[cfg(feature = "webauthn")]
-        webauthn: if config.security.webauthn.enabled {
-            let secret_store = Arc::new(zeroclaw_runtime::security::SecretStore::new(
-                &config.data_dir,
-                true,
-            ));
-            let wa_config = zeroclaw_runtime::security::webauthn::WebAuthnConfig {
-                enabled: true,
-                rp_id: config.security.webauthn.rp_id.clone(),
-                rp_origin: config.security.webauthn.rp_origin.clone(),
-                rp_name: config.security.webauthn.rp_name.clone(),
-            };
-            Some(Arc::new(api_webauthn::WebAuthnState {
-                manager: zeroclaw_runtime::security::webauthn::WebAuthnManager::new(
-                    wa_config,
-                    secret_store,
-                    &config.data_dir,
-                ),
-                pending_registrations: parking_lot::Mutex::new(std::collections::HashMap::new()),
-                pending_authentications: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            }))
-        } else {
-            None
-        },
     };
 
     // Build router with middleware
@@ -1272,7 +1208,6 @@ pub async fn run_gateway(
         .route("/admin/paircode/new", post(handle_admin_paircode_new))
         // ── Existing routes ──
         .route("/health", get(handle_health))
-        .route("/metrics", get(handle_metrics))
         .route("/pair", post(handle_pair))
         .route("/pair/code", get(handle_pair_code))
         .route("/webhook", post(handle_webhook))
@@ -1283,8 +1218,6 @@ pub async fn run_gateway(
         .route("/wati", post(handle_wati_webhook))
         .route("/nextcloud-talk", post(handle_nextcloud_talk_webhook))
         .route("/webhook/gmail", post(handle_gmail_push_webhook))
-        // ── Claude Code runner hooks ──
-        .route("/hooks/claude-code", post(api::handle_claude_code_hook))
         // ── Web Dashboard API routes ──
         .route("/api/status", get(api::handle_api_status))
         .route("/api/logs", get(api_logs::handle_api_logs))
@@ -1408,7 +1341,22 @@ pub async fn run_gateway(
         .route("/api/memory", post(api::handle_api_memory_store))
         .route("/api/memory/{key}", delete(api::handle_api_memory_delete))
         .route("/api/cost", get(api::handle_api_cost))
+        .route("/api/characters", get(api_characters::handle_list_characters).post(api_characters::handle_create_character))
+        .route("/api/characters/import", post(api_characters::handle_import_character))
+        .route("/api/characters/upload", post(api_characters::handle_upload_character))
+        .route(
+            "/api/characters/{name}",
+            get(api_characters::handle_get_character)
+                .put(api_characters::handle_update_character)
+                .delete(api_characters::handle_delete_character),
+        )
+        .route("/api/characters/{name}/export", get(api_characters::handle_export_character))
+        .route("/api/characters/{name}/duplicate", post(api_characters::handle_duplicate_character))
+        .route("/api/characters/{name}/avatar", get(api_characters::handle_character_avatar))
         .route("/api/chat", post(api_chat::handle_chat))
+        .route("/api/image-gen", post(api_image_gen::handle_image_gen))
+        .route("/api/tts", post(api_tts::handle_tts))
+        .route("/api/files/{*path}", get(api_files::handle_serve_file))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
         .route("/api/channels", get(api::handle_api_channels))
         .route("/api/health", get(api::handle_api_health))
@@ -1447,47 +1395,10 @@ pub async fn run_gateway(
             get(canvas::handle_canvas_history),
         );
 
-    // ── WebAuthn hardware key authentication API (requires webauthn feature) ──
-    #[cfg(feature = "webauthn")]
-    let inner = inner
-        .route(
-            "/api/webauthn/register/start",
-            post(api_webauthn::handle_register_start),
-        )
-        .route(
-            "/api/webauthn/register/finish",
-            post(api_webauthn::handle_register_finish),
-        )
-        .route(
-            "/api/webauthn/auth/start",
-            post(api_webauthn::handle_auth_start),
-        )
-        .route(
-            "/api/webauthn/auth/finish",
-            post(api_webauthn::handle_auth_finish),
-        )
-        .route(
-            "/api/webauthn/credentials",
-            get(api_webauthn::handle_list_credentials),
-        )
-        .route(
-            "/api/webauthn/credentials/{id}",
-            delete(api_webauthn::handle_delete_credential),
-        );
-
-    // ── Plugin management API (requires plugins-wasm feature) ──
-    #[cfg(feature = "plugins-wasm")]
-    let inner = inner.route(
-        "/api/plugins",
-        get(api_plugins::plugin_routes::list_plugins),
-    );
-
     let inner = inner
         // ── SSE event stream ──
         .route("/api/events", get(sse::handle_sse_events))
         .route("/api/events/history", get(sse::handle_events_history))
-        // ── ACP client bridge ──
-        .route("/acp", get(acp::handle_ws_acp))
         // ── WebSocket agent chat ──
         .route("/ws/chat", get(ws::handle_ws_chat))
         // ── WebSocket canvas updates ──
@@ -1621,8 +1532,6 @@ pub async fn run_gateway(
         .await?;
     }
 
-    drop(broadcast_hook_guard);
-
     Ok(())
 }
 
@@ -1659,52 +1568,6 @@ async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
         "runtime": zeroclaw_runtime::health::snapshot_json(),
     });
     Json(body)
-}
-
-/// Prometheus content type for text exposition format.
-const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
-
-fn prometheus_disabled_hint() -> String {
-    String::from(
-        "# Prometheus backend not enabled. Set [observability] backend = \"prometheus\" in config.\n",
-    )
-}
-
-#[cfg(feature = "observability-prometheus")]
-fn prometheus_observer_from_state(
-    observer: &dyn zeroclaw_runtime::observability::Observer,
-) -> Option<&zeroclaw_runtime::observability::PrometheusObserver> {
-    // `TeeObserver::as_any` returns the primary observer, so a single direct
-    // downcast finds the PrometheusObserver whether the state observer is the
-    // raw backend or wrapped by the factory tee.
-    observer
-        .as_any()
-        .downcast_ref::<zeroclaw_runtime::observability::PrometheusObserver>()
-}
-
-/// GET /metrics — Prometheus text exposition format
-async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
-    let body = {
-        #[cfg(feature = "observability-prometheus")]
-        {
-            if let Some(prom) = prometheus_observer_from_state(state.observer.as_ref()) {
-                prom.encode()
-            } else {
-                prometheus_disabled_hint()
-            }
-        }
-        #[cfg(not(feature = "observability-prometheus"))]
-        {
-            let _ = &state;
-            prometheus_disabled_hint()
-        }
-    };
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
-        body,
-    )
 }
 
 /// POST /pair — exchange one-time code for bearer token
@@ -2151,20 +2014,6 @@ async fn handle_webhook(
     let model_label = state.model.clone();
     let started_at = Instant::now();
 
-    state.observer.record_event(
-        &zeroclaw_runtime::observability::ObserverEvent::AgentStart {
-            model_provider: provider_label.clone(),
-            model: model_label.clone(),
-        },
-    );
-    state.observer.record_event(
-        &zeroclaw_runtime::observability::ObserverEvent::LlmRequest {
-            model_provider: provider_label.clone(),
-            model: model_label.clone(),
-            messages_count: 1,
-        },
-    );
-
     match run_gateway_chat_with_tools(&state, message, session_id.as_deref()).await {
         Ok(GatewayChatOutcome {
             response,
@@ -2172,76 +2021,24 @@ async fn handle_webhook(
             output_tokens,
             cost_usd,
         }) => {
-            let duration = started_at.elapsed();
-            // Per-turn token / cost annotation captured from the cost-tracking
-            // scope inside `run_gateway_chat_with_tools` (None outside of test
-            // / when no LLM call recorded). Cost is also persisted to
-            // /api/cost and costs.jsonl via the same scope.
-            let tokens_used = input_tokens
-                .zip(output_tokens)
-                .map(|(i, o)| i + o)
-                .or(input_tokens)
-                .or(output_tokens);
-            state.observer.record_event(
-                &zeroclaw_runtime::observability::ObserverEvent::LlmResponse {
-                    model_provider: provider_label.clone(),
-                    model: model_label.clone(),
-                    duration,
-                    success: true,
-                    error_message: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                },
+            ::zeroclaw_log::record!(
+                INFO,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_attrs(::serde_json::json!({
+                        "model_provider": provider_label,
+                        "model": model_label,
+                        "duration_ms": started_at.elapsed().as_millis(),
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "cost_usd": cost_usd,
+                    })),
+                "webhook chat completed"
             );
-            state.observer.record_metric(
-                &zeroclaw_runtime::observability::traits::ObserverMetric::RequestLatency(duration),
-            );
-            state.observer.record_event(
-                &zeroclaw_runtime::observability::ObserverEvent::AgentEnd {
-                    model_provider: provider_label,
-                    model: model_label,
-                    duration,
-                    tokens_used,
-                    cost_usd,
-                },
-            );
-
             let body = serde_json::json!({"response": response, "model": state.model});
             (StatusCode::OK, Json(body))
         }
         Err(e) => {
-            let duration = started_at.elapsed();
             let sanitized = zeroclaw_providers::sanitize_api_error(&e.to_string());
-
-            state.observer.record_event(
-                &zeroclaw_runtime::observability::ObserverEvent::LlmResponse {
-                    model_provider: provider_label.clone(),
-                    model: model_label.clone(),
-                    duration,
-                    success: false,
-                    error_message: Some(sanitized.clone()),
-                    input_tokens: None,
-                    output_tokens: None,
-                },
-            );
-            state.observer.record_metric(
-                &zeroclaw_runtime::observability::traits::ObserverMetric::RequestLatency(duration),
-            );
-            state
-                .observer
-                .record_event(&zeroclaw_runtime::observability::ObserverEvent::Error {
-                    component: "gateway".to_string(),
-                    message: sanitized.clone(),
-                });
-            state.observer.record_event(
-                &zeroclaw_runtime::observability::ObserverEvent::AgentEnd {
-                    model_provider: provider_label,
-                    model: model_label,
-                    duration,
-                    tokens_used: None,
-                    cost_usd: None,
-                },
-            );
 
             if is_needs_onboarding_err(&e) {
                 ::zeroclaw_log::record!(
@@ -3424,130 +3221,6 @@ mod tests {
         handle.abort();
     }
 
-    #[tokio::test]
-    async fn metrics_endpoint_returns_hint_when_prometheus_is_disabled() {
-        let state = AppState {
-            config: Arc::new(RwLock::new(Config::default())),
-            model_provider: Arc::new(MockModelProvider::default()),
-            model: "test-model".into(),
-            temperature: None,
-            mem: Arc::new(MockMemory),
-            auto_save: false,
-            webhook_secret_hash: None,
-            pairing: Arc::new(PairingGuard::new(false, &[])),
-            trust_forwarded_headers: false,
-            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
-            auth_limiter: Arc::new(auth_rate_limit::AuthRateLimiter::new()),
-            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
-            whatsapp: None,
-            whatsapp_app_secret: None,
-            linq: None,
-            linq_signing_secret: None,
-            nextcloud_talk: None,
-            nextcloud_talk_webhook_secret: None,
-            wati: None,
-            gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
-            tools_registry: Arc::new(Vec::new()),
-            cost_tracker: None,
-            event_tx: tokio::sync::broadcast::channel(16).0,
-            event_buffer: Arc::new(sse::EventBuffer::new(16)),
-            shutdown_tx: tokio::sync::watch::channel(false).0,
-            reload_tx: None,
-            node_registry: Arc::new(nodes::NodeRegistry::new(16)),
-            path_prefix: String::new(),
-            web_dist_dir: None,
-            session_backend: None,
-            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
-                8, 30, 600,
-            )),
-            device_registry: None,
-            pending_pairings: None,
-            canvas_store: CanvasStore::new(),
-            cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
-        };
-
-        let response = handle_metrics(State(state)).await.into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
-            Some(PROMETHEUS_CONTENT_TYPE)
-        );
-
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        let text = String::from_utf8(body.to_vec()).unwrap();
-        assert!(text.contains("Prometheus backend not enabled"));
-    }
-
-    #[cfg(feature = "observability-prometheus")]
-    #[tokio::test]
-    async fn metrics_endpoint_renders_prometheus_output() {
-        let event_tx = tokio::sync::broadcast::channel(16).0;
-        let prom = zeroclaw_runtime::observability::PrometheusObserver::new();
-        zeroclaw_runtime::observability::Observer::record_event(
-            &prom,
-            &zeroclaw_runtime::observability::ObserverEvent::HeartbeatTick,
-        );
-
-        let observer: Arc<dyn zeroclaw_runtime::observability::Observer> = Arc::new(prom);
-        let state = AppState {
-            config: Arc::new(RwLock::new(Config::default())),
-            model_provider: Arc::new(MockModelProvider::default()),
-            model: "test-model".into(),
-            temperature: None,
-            mem: Arc::new(MockMemory),
-            auto_save: false,
-            webhook_secret_hash: None,
-            pairing: Arc::new(PairingGuard::new(false, &[])),
-            trust_forwarded_headers: false,
-            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
-            auth_limiter: Arc::new(auth_rate_limit::AuthRateLimiter::new()),
-            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
-            whatsapp: None,
-            whatsapp_app_secret: None,
-            linq: None,
-            linq_signing_secret: None,
-            nextcloud_talk: None,
-            nextcloud_talk_webhook_secret: None,
-            wati: None,
-            gmail_push: None,
-            observer,
-            tools_registry: Arc::new(Vec::new()),
-            cost_tracker: None,
-            event_tx,
-            event_buffer: Arc::new(sse::EventBuffer::new(16)),
-            shutdown_tx: tokio::sync::watch::channel(false).0,
-            reload_tx: None,
-            node_registry: Arc::new(nodes::NodeRegistry::new(16)),
-            path_prefix: String::new(),
-            web_dist_dir: None,
-            session_backend: None,
-            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
-                8, 30, 600,
-            )),
-            device_registry: None,
-            pending_pairings: None,
-            canvas_store: CanvasStore::new(),
-            cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
-        };
-
-        let response = handle_metrics(State(state)).await.into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        let text = String::from_utf8(body.to_vec()).unwrap();
-        assert!(text.contains("zeroclaw_heartbeat_ticks_total 1"));
-    }
-
     #[test]
     fn gateway_rate_limiter_blocks_after_limit() {
         let limiter = GatewayRateLimiter::new(2, 2, 100);
@@ -4069,7 +3742,6 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -4088,8 +3760,6 @@ mod tests {
             canvas_store: CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -4152,7 +3822,6 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -4171,8 +3840,6 @@ mod tests {
             canvas_store: CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         };
 
         let headers = HeaderMap::new();
@@ -4247,7 +3914,6 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -4266,8 +3932,6 @@ mod tests {
             canvas_store: CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         };
 
         let response = handle_webhook(
@@ -4314,7 +3978,6 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -4333,8 +3996,6 @@ mod tests {
             canvas_store: CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -4386,7 +4047,6 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -4405,8 +4065,6 @@ mod tests {
             canvas_store: CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -4463,7 +4121,6 @@ mod tests {
             nextcloud_talk_webhook_secret: None,
             wati: None,
             gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -4482,8 +4139,6 @@ mod tests {
             canvas_store: CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         };
 
         let response = Box::pin(handle_nextcloud_talk_webhook(
@@ -4540,7 +4195,6 @@ mod tests {
             nextcloud_talk_webhook_secret: Some(Arc::from(secret)),
             wati: None,
             gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -4559,8 +4213,6 @@ mod tests {
             canvas_store: CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -4665,7 +4317,6 @@ mod tests {
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             wati: None,
             gmail_push: None,
-            observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
@@ -4683,8 +4334,6 @@ mod tests {
             pending_pairings: None,
             canvas_store: CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         };
 
         let start = std::time::Instant::now();

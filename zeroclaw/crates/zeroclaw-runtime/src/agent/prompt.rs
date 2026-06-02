@@ -770,3 +770,29 @@ mod tests {
         );
     }
 }
+
+/// A user-supplied prompt section with static content.
+/// Used for injecting character card prompts and other custom context.
+pub struct CustomSection {
+    section_name: String,
+    section_content: String,
+}
+
+impl CustomSection {
+    pub fn new(name: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            section_name: name.into(),
+            section_content: content.into(),
+        }
+    }
+}
+
+impl PromptSection for CustomSection {
+    fn name(&self) -> &str {
+        &self.section_name
+    }
+
+    fn build(&self, _ctx: &PromptContext<'_>) -> Result<String> {
+        Ok(self.section_content.clone())
+    }
+}

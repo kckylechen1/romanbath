@@ -1,52 +1,46 @@
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname, '..'), '');
-  const geminiApiKey = env.VITE_GOOGLE_API_KEY || env.VITE_GEMINI_API_KEY || env.GOOGLE_API_KEY || env.GEMINI_API_KEY || '';
-
-  // Shared proxy configuration for cookie handling
-  const createProxyConfig = (additionalOptions = {}) => ({
-    target: 'http://127.0.0.1:8000',
-    changeOrigin: true,
-    secure: false,
-    // Rewrite cookies so they work with the Vite dev server
-    cookieDomainRewrite: {
-      '*': ''
-    },
-    cookiePathRewrite: {
-      '*': '/'
-    },
-    ...additionalOptions
-  });
+  const zeroclawPort = env.VITE_ZEROCLAW_PORT || '42617';
 
   return {
     server: {
       port: 5173,
-      strictPort: true, // Don't try other ports if 5173 is in use
+      strictPort: true,
       host: '0.0.0.0',
       proxy: {
-        '/api': createProxyConfig(),
-        '/img': createProxyConfig(),
-        '/backgrounds': createProxyConfig(),
-        '/characters': createProxyConfig(),
-        '/user': createProxyConfig(),
-        '/csrf-token': createProxyConfig(),
-        // Proxy for local API (bypass CORS)
-        '/local-api': {
-          target: 'http://localhost:8045',
+        '/api': {
+          target: `http://127.0.0.1:${zeroclawPort}`,
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/local-api/, ''),
+          secure: false,
+        },
+        '/ws': {
+          target: `ws://127.0.0.1:${zeroclawPort}`,
+          ws: true,
+          changeOrigin: true,
+        },
+        '/health': {
+          target: `http://127.0.0.1:${zeroclawPort}`,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/pair': {
+          target: `http://127.0.0.1:${zeroclawPort}`,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/admin': {
+          target: `http://127.0.0.1:${zeroclawPort}`,
+          changeOrigin: true,
+          secure: false,
         },
       }
     },
-    plugins: [react()],
-    define: {
-      'process.env.GOOGLE_API_KEY': JSON.stringify(geminiApiKey),
-      'process.env.API_KEY': JSON.stringify(geminiApiKey),
-      'process.env.GEMINI_API_KEY': JSON.stringify(geminiApiKey)
-    },
+    plugins: [react(), tailwindcss()],
     test: {
       environment: 'jsdom',
       clearMocks: true,

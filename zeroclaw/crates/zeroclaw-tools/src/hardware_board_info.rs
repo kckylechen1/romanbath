@@ -108,30 +108,7 @@ impl Tool for HardwareBoardInfoTool {
 
         let mut output = String::new();
 
-        #[cfg(feature = "probe")]
-        if board == "nucleo-f401re" || board == "nucleo-f411re" {
-            let chip = if board == "nucleo-f411re" {
-                "STM32F411RETx"
-            } else {
-                "STM32F401RETx"
-            };
-            match probe_board_info(chip) {
-                Ok(info) => {
-                    return Ok(ToolResult {
-                        success: true,
-                        output: info,
-                        error: None,
-                    });
-                }
-                Err(e) => {
-                    use std::fmt::Write;
-                    let _ = write!(
-                        output,
-                        "probe-rs attach failed: {e}. Using static info.\n\n"
-                    );
-                }
-            }
-        }
+        // probe-rs integration removed — probe feature deleted
 
         if let Some(info) = self.static_info_for_board(board) {
             output.push_str(&info);
@@ -153,58 +130,6 @@ impl Tool for HardwareBoardInfoTool {
             error: None,
         })
     }
-}
-
-#[cfg(feature = "probe")]
-fn probe_board_info(chip: &str) -> anyhow::Result<String> {
-    use probe_rs::config::MemoryRegion;
-    use probe_rs::{Session, SessionConfig};
-
-    let session = Session::auto_attach(chip, SessionConfig::default()).map_err(|e| {
-        ::zeroclaw_log::record!(
-            ERROR,
-            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                .with_attrs(::serde_json::json!({
-                    "chip": chip,
-                    "error": format!("{}", e),
-                })),
-            "hardware_board_info: probe-rs auto_attach failed"
-        );
-        anyhow::Error::msg(format!("{}", e))
-    })?;
-    let target = session.target();
-    let arch = session.architecture();
-
-    let mut out = format!(
-        "**Board:** {}\n**Chip:** {}\n**Architecture:** {:?}\n\n**Memory map:**\n",
-        chip, target.name, arch
-    );
-    for region in target.memory_map.iter() {
-        match region {
-            MemoryRegion::Ram(ram) => {
-                let (start, end) = (ram.range.start, ram.range.end);
-                out.push_str(&format!(
-                    "RAM: 0x{:08X} - 0x{:08X} ({} KB)\n",
-                    start,
-                    end,
-                    (end - start) / 1024
-                ));
-            }
-            MemoryRegion::Nvm(flash) => {
-                let (start, end) = (flash.range.start, flash.range.end);
-                out.push_str(&format!(
-                    "Flash: 0x{:08X} - 0x{:08X} ({} KB)\n",
-                    start,
-                    end,
-                    (end - start) / 1024
-                ));
-            }
-            _ => {}
-        }
-    }
-    out.push_str("\n(Info read via USB/SWD — no firmware on target needed.)");
-    Ok(out)
 }
 
 fn memory_map_static(board: &str) -> Option<&'static str> {

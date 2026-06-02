@@ -4,6 +4,7 @@ fluent = "run -p xtask --bin fluent --"
 web = "run -p xtask --bin web --"
 
 [build]
+target-dir = "/tmp/romanbath-zeroclaw-target"
 rustdocflags = ["--default-theme=ayu"]
 
 [target.x86_64-unknown-linux-musl]

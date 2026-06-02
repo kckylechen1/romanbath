@@ -52,7 +52,6 @@ fn test_state(config: Config) -> AppState {
         nextcloud_talk_webhook_secret: None,
         wati: None,
         gmail_push: None,
-        observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
         tools_registry: Arc::new(Vec::new()),
         cost_tracker: None,
         event_tx: tokio::sync::broadcast::channel(16).0,

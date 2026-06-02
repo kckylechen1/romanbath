@@ -15,6 +15,15 @@ dist-ssr
 # Environment variables
 .env
 
+# Local agent / memory (not part of the app)
+.tachi/
+.agent/claude-code-runs/
+zeroclaw/.agent/claude-code-runs/
+
+# Editor backup files
+*.bak.tsx
+*.bak.ts
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

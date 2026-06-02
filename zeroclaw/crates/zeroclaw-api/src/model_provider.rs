@@ -395,6 +395,12 @@ pub trait ModelProvider: Send + Sync + crate::attribution::Attributable {
         }
     }
 
+    /// Override the provider's output-token budget for the current request.
+    /// The override is ephemeral — providers that support per-request max
+    /// tokens apply it to the next API call only. Default impl is a no-op
+    /// so providers that don't use this field are unaffected.
+    fn set_per_request_max_tokens(&self, _max_tokens: Option<u32>) {}
+
     /// Simple one-shot chat (single user message, no explicit system prompt).
     ///
     /// `temperature == None` means "use `self.default_temperature()`". The
@@ -628,6 +634,10 @@ impl<T: ModelProvider + ?Sized> ModelProvider for Arc<T> {
 
     fn convert_tools(&self, tools: &[ToolSpec]) -> ToolsPayload {
         self.as_ref().convert_tools(tools)
+    }
+
+    fn set_per_request_max_tokens(&self, max_tokens: Option<u32>) {
+        self.as_ref().set_per_request_max_tokens(max_tokens);
     }
 
     fn supports_native_tools(&self) -> bool {

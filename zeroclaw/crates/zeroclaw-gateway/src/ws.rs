@@ -99,6 +99,15 @@ struct ConnectParams {
     /// Project root / working directory for this session.
     #[serde(default, alias = "workspaceDir", alias = "workspace_dir")]
     cwd: Option<String>,
+    /// Character card name for personality-driven chat
+    #[serde(default)]
+    character_name: Option<String>,
+    /// Character mode: "play", "soul", "chat"
+    #[serde(default)]
+    character_mode: Option<String>,
+    /// User display name for character card prompt building
+    #[serde(default)]
+    user_name: Option<String>,
 }
 
 /// The sub-protocol we support for the chat WebSocket.
@@ -309,6 +318,9 @@ async fn handle_socket(
     // process it immediately (backward-compatible).
     let mut first_msg_fallback: Option<String> = None;
     let mut requested_cwd = session_cwd;
+    let mut character_name: Option<String> = None;
+    let mut character_mode: Option<String> = None;
+    let mut user_name: Option<String> = None;
 
     if let Some(first) = receiver.next().await {
         match first {
@@ -331,6 +343,11 @@ async fn handle_socket(
                         }
                         if cp.cwd.is_some() {
                             requested_cwd = cp.cwd;
+                        }
+                        if cp.character_name.is_some() {
+                            character_name = cp.character_name;
+                            character_mode = cp.character_mode;
+                            user_name = cp.user_name;
                         }
                         let ack = serde_json::json!({
                             "type": "connected",
@@ -415,6 +432,33 @@ async fn handle_socket(
         agent.seed_history(&stored_messages);
     }
 
+    // ── Character card injection ─────────────────────────────────────
+    if let Some(ref char_name) = character_name {
+        match inject_character_card(&mut agent, char_name, character_mode.as_deref(), user_name.as_deref(), &config.data_dir) {
+            Ok(Some(first_mes)) => {
+                // Send first_mes as initial assistant message
+                let chunk = serde_json::json!({
+                    "type": "chunk",
+                    "content": first_mes,
+                });
+                let _ = sender.send(Message::Text(chunk.to_string().into())).await;
+                let done = serde_json::json!({
+                    "type": "done",
+                    "full_response": first_mes,
+                });
+                let _ = sender.send(Message::Text(done.to_string().into())).await;
+            }
+            Ok(None) => {} // No first_mes, that's fine
+            Err(e) => {
+                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                    .with_attrs(::serde_json::json!({"character": char_name, "error": e.to_string()})),
+                    "Failed to load character card (continuing without persona)"
+                );
+            }
+        }
+    }
+
     // ── Tool-approval back-channel ─────────────────────────────────
     // Connection-level event channel that the WsApprovalChannel shares
     // with the per-turn forward task: it pushes ApprovalRequest frames
@@ -431,6 +475,15 @@ async fn handle_socket(
         pending_approvals.clone(),
         Duration::from_secs(WS_APPROVAL_TIMEOUT_SECS),
     ));
+    // Memory save helper for character chats (best-effort, non-blocking)
+    let mem_data_dir = config.data_dir.clone();
+    let save_user_memory = |content: &str, char_name: &str, user_name: &str| {
+        let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(
+            &std::path::PathBuf::from(&mem_data_dir).join("chat_memory"),
+        );
+        let _ = mem_store.save_chat_memory(char_name, user_name, "user", content);
+    };
+
     agent
         .channel_handles()
         .register_channel("ws", approval_channel.clone());
@@ -462,8 +515,13 @@ async fn handle_socket(
                         &pending_approvals,
                         &content,
                         &session_key,
+                        character_name.clone(),
+                        user_name.clone(),
                     )
                     .await;
+                    if let Some(ref cn) = character_name {
+                        save_user_memory(&content, cn, user_name.as_deref().unwrap_or("User"));
+                    }
                 }
             } else {
                 let unknown_type = parsed["type"].as_str().unwrap_or("unknown");
@@ -603,8 +661,13 @@ async fn handle_socket(
                     &pending_approvals,
                     &content,
                     &session_key,
+                    character_name.clone(),
+                    user_name.clone(),
                 )
                 .await;
+                if let Some(ref cn) = character_name {
+                    save_user_memory(&content, cn, user_name.as_deref().unwrap_or("User"));
+                }
             }
 
             // ── Broadcast event (cron/heartbeat results) ──────────────
@@ -706,6 +769,62 @@ fn has_assistant_chat_message(messages: &[zeroclaw_providers::ConversationMessag
     })
 }
 
+/// Load a character card and inject it into the agent's system prompt.
+/// Also injects relevant memories from past conversations.
+/// Returns `Ok(Some(first_mes))` if the card has an opening message.
+fn inject_character_card(
+    agent: &mut zeroclaw_runtime::agent::Agent,
+    character_name: &str,
+    mode: Option<&str>,
+    user_name: Option<&str>,
+    data_dir: &std::path::Path,
+) -> anyhow::Result<Option<String>> {
+    let mgr = zeroclaw_cards::CardManager::default()?;
+    let card = mgr.load(character_name).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let uname = user_name.unwrap_or("User");
+    let char_mode = mode.unwrap_or("play");
+    let fragments = card.build_prompt(char_mode, uname, "", None);
+
+    let card_prompt = fragments
+        .iter()
+        .map(|f| f.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    // Inject memories from past conversations with this character
+    let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+    let memory_context = mem_store.inject_memories_into_prompt(character_name, "");
+
+    // Tool-use instructions for character chat
+    let tool_instructions = format!(
+        "\n\n## Tool Usage\n\nYou have access to image generation and voice tools. Use them naturally during conversation:\n\
+         - When you want to share a picture, call `xai_image_gen` with a descriptive English prompt\n\
+         - When you want to send a voice message, call `xai_tts` with the text to speak\n\
+         - Do NOT mention that you are using tools — the user sees only the image or hears the audio\n\
+         - Generate images to enhance the scene and atmosphere naturally"
+    );
+
+    let mut full_prompt = format!("{card_prompt}{tool_instructions}");
+    if !memory_context.is_empty() {
+        full_prompt = format!("{full_prompt}\n\n{memory_context}");
+    }
+
+    agent.add_custom_system_section("character_card", full_prompt);
+
+    let first_mes = if card.data.first_mes.is_empty() {
+        None
+    } else {
+        // Apply template substitution to first_mes
+        let rendered = card.data.first_mes
+            .replace("{{char}}", &card.data.name)
+            .replace("{{user}}", uname);
+        Some(rendered)
+    };
+
+    Ok(first_mes)
+}
+
 fn needs_onboarding_ws_error(
     config: &zeroclaw_config::schema::Config,
 ) -> Option<serde_json::Value> {
@@ -740,6 +859,8 @@ async fn process_chat_message(
     pending_approvals: &PendingApprovals,
     content: &str,
     session_key: &str,
+    character_name: Option<String>,
+    user_name: Option<String>,
 ) {
     use futures_util::StreamExt as _;
     use zeroclaw_runtime::agent::TurnEvent;
@@ -1074,6 +1195,15 @@ async fn process_chat_message(
         Ok(outcome) => {
             if let Some(ref backend) = state.session_backend {
                 persist_conversation_messages(backend.as_ref(), session_key, &outcome.new_messages);
+            }
+
+            // Save assistant memory to card SQLite DB
+            if let Some(ref cn) = character_name {
+                let uname = user_name.as_deref().unwrap_or("User");
+                let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(
+                    &std::path::PathBuf::from(&state.config.read().data_dir).join("chat_memory"),
+                );
+                let _ = mem_store.save_chat_memory(cn, uname, "assistant", &outcome.response);
             }
 
             // Fire-and-forget memory consolidation so facts from WS sessions

@@ -101,37 +101,13 @@ impl Tool for HardwareMemoryReadTool {
             .unwrap_or(256)
             .clamp(1, 256);
 
-        #[cfg(feature = "probe")]
-        {
-            match probe_read_memory(chip.unwrap(), _address, _length) {
-                Ok(output) => {
-                    return Ok(ToolResult {
-                        success: true,
-                        output,
-                        error: None,
-                    });
-                }
-                Err(e) => {
-                    return Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!(
-                            "probe-rs read failed: {}. Ensure Nucleo is connected via USB and built with --features probe.",
-                            e
-                        )),
-                    });
-                }
-            }
-        }
-
-        #[cfg(not(feature = "probe"))]
+        // probe-rs integration removed — probe feature deleted
         {
             Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(
-                    "Memory read requires probe feature. Build with: cargo build --features hardware,probe"
-                        .into(),
+                    "Memory read requires probe feature which has been removed.".into(),
                 ),
             })
         }
@@ -141,67 +117,4 @@ impl Tool for HardwareMemoryReadTool {
 fn parse_hex_address(s: &str) -> Option<u64> {
     let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
     u64::from_str_radix(s, 16).ok()
-}
-
-#[cfg(feature = "probe")]
-fn probe_read_memory(chip: &str, address: u64, length: usize) -> anyhow::Result<String> {
-    use probe_rs::MemoryInterface;
-    use probe_rs::Session;
-    use probe_rs::SessionConfig;
-
-    let mut session = Session::auto_attach(chip, SessionConfig::default()).map_err(|e| {
-        ::zeroclaw_log::record!(
-            ERROR,
-            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                .with_attrs(::serde_json::json!({
-                    "chip": chip,
-                    "error": format!("{}", e),
-                })),
-            "hardware_memory_read: probe-rs auto_attach failed"
-        );
-        anyhow::Error::msg(format!("{}", e))
-    })?;
-
-    let mut core = session.core(0)?;
-    let mut buf = vec![0u8; length];
-    core.read_8(address, &mut buf).map_err(|e| {
-        ::zeroclaw_log::record!(
-            ERROR,
-            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                .with_attrs(::serde_json::json!({
-                    "chip": chip,
-                    "address": address,
-                    "length": length,
-                    "error": format!("{}", e),
-                })),
-            "hardware_memory_read: probe-rs read_8 failed"
-        );
-        anyhow::Error::msg(format!("{}", e))
-    })?;
-
-    // Format as hex dump: address | bytes (16 per line)
-    let mut out = format!("Memory read from 0x{:08X} ({} bytes):\n\n", address, length);
-    const COLS: usize = 16;
-    for (i, chunk) in buf.chunks(COLS).enumerate() {
-        let addr = address + (i * COLS) as u64;
-        let hex: String = chunk
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let ascii: String = chunk
-            .iter()
-            .map(|&b| {
-                if b.is_ascii_graphic() || b == b' ' {
-                    b as char
-                } else {
-                    '.'
-                }
-            })
-            .collect();
-        out.push_str(&format!("0x{:08X}  {:48}  {}\n", addr, hex, ascii));
-    }
-    Ok(out)
 }

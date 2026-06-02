@@ -17,22 +17,34 @@ pub fn http_client(timeout_secs: u64) -> reqwest::Client {
         .unwrap_or_default()
 }
 
-/// Resolve xAI credentials from environment variables.
+/// Resolve xAI credentials from environment variables or a config-provided fallback.
 ///
-/// Prefers `XAI_OAUTH_TOKEN` (OAuth bearer); falls back to `XAI_API_KEY`.
+/// Prefers `XAI_OAUTH_TOKEN` (OAuth bearer), then `XAI_API_KEY`, then the
+/// optional `fallback_api_key` (typically read from zeroclaw config).
 /// Returns `(auth_token, base_url)`.
-pub fn resolve_credentials() -> Result<(String, String), String> {
+pub fn resolve_credentials(fallback_api_key: Option<&str>) -> Result<(String, String), String> {
     // Try OAuth token first
     if let Ok(token) = std::env::var("XAI_OAUTH_TOKEN") {
-        return Ok((token, "https://api.x.ai/v1".to_string()));
+        if !token.trim().is_empty() {
+            return Ok((token, "https://api.x.ai/v1".to_string()));
+        }
     }
 
-    // Fallback to API key
+    // Fallback to API key env var
     if let Ok(api_key) = std::env::var("XAI_API_KEY") {
-        return Ok((api_key, "https://api.x.ai/v1".to_string()));
+        if !api_key.trim().is_empty() {
+            return Ok((api_key, "https://api.x.ai/v1".to_string()));
+        }
     }
 
-    Err("XAI_OAUTH_TOKEN or XAI_API_KEY environment variable not set".to_string())
+    // Try config-provided fallback key
+    if let Some(key) = fallback_api_key {
+        if !key.trim().is_empty() {
+            return Ok((key.trim().to_string(), "https://api.x.ai/v1".to_string()));
+        }
+    }
+
+    Err("XAI_OAUTH_TOKEN or XAI_API_KEY environment variable not set, and no fallback API key provided".to_string())
 }
 
 /// Sanitise a user-supplied filename prefix so it cannot escape the intended

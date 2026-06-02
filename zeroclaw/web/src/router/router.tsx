@@ -6,6 +6,7 @@ import {
   AgentWorkspaceExplorer,
   AgentsList,
   Canvas,
+  CharacterChat,
   Config,
   Cron,
   Dashboard,
@@ -33,6 +34,7 @@ export const Router = () => (
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/chat" element={<CharacterChat />} />
         <Route path="/agent" element={<Navigate to="/agents" replace />} />
         <Route path="/agents" element={<AgentsList />} />
         <Route path="/agent/:alias" element={<AgentChat />} />

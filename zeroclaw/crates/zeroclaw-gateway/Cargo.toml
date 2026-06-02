@@ -14,10 +14,9 @@ zeroclaw-infra.workspace = true
 zeroclaw-log.workspace = true
 zeroclaw-memory.workspace = true
 zeroclaw-providers.workspace = true
-zeroclaw-channels = { workspace = true, default-features = true, features = ["channel-acp-server", "channel-email", "channel-telegram"] }
+zeroclaw-channels = { workspace = true, default-features = true, features = ["channel-email", "channel-telegram"] }
 zeroclaw-runtime.workspace = true
 zeroclaw-tools.workspace = true
-zeroclaw-hardware.workspace = true
 zeroclaw-plugins = { workspace = true, optional = true }
 zeroclaw-cards.workspace = true
 zeroclaw-memory-sigil.workspace = true
@@ -36,6 +35,9 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["logg
 
 # Frontend asset MIME type detection (dashboard served from filesystem)
 mime_guess = "2"
+
+# HTTP client for external API calls (image gen, etc.)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Base64 encoding for binary file content in agent workspace `read` responses.
 base64 = "0.22"
@@ -84,14 +86,16 @@ tokio = { version = "1.50", features = ["rt-multi-thread", "macros"] }
 
 [features]
 default = ["schema-export"]
-plugins-wasm = ["dep:zeroclaw-plugins"]
-webauthn = ["zeroclaw-runtime/webauthn"]
-observability-prometheus = ["zeroclaw-runtime/observability-prometheus"]
-channel-nostr = ["zeroclaw-channels/channel-nostr"]
-gateway-voice-duplex = []
 # Enables OPTIONS /api/config* responses with the schemars-generated
 # JSON Schema body and the serde-side schemars derives transitively. Defaults
 # on; turning it off omits OPTIONS schema bodies (returns a small placeholder)
 # and saves a bit of build time. Mirrors zeroclaw-config's `schema-export`.
 schema-export = ["zeroclaw-config/schema-export", "dep:schemars"]
 embedded-web = ["dep:include_dir"]
+gateway-voice-duplex = []
+plugins-wasm = ["dep:zeroclaw-plugins"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(feature, values("webauthn"))',
+] }

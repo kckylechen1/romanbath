@@ -49,7 +49,9 @@ pub struct OpenAiCompatibleModelProvider {
     /// When set, overrides the default `/chat/completions` path detection.
     api_path: Option<String>,
     /// Maximum output tokens to include in API requests.
-    max_tokens: Option<u32>,
+    /// Wrapped in `Arc<Mutex>` so `set_per_request_max_tokens` can override
+    /// it through `&self`, and the struct remains `Clone`.
+    max_tokens: std::sync::Arc<parking_lot::Mutex<Option<u32>>>,
     /// models.dev catalog key for this model_provider (e.g. "xai").
     /// When set, `list_models` fetches from the models.dev catalog.
     models_dev_key: Option<String>,
@@ -279,7 +281,7 @@ impl OpenAiCompatibleModelProvider {
             extra_headers: std::collections::HashMap::new(),
             reasoning_effort: None,
             api_path: None,
-            max_tokens: None,
+            max_tokens: std::sync::Arc::new(parking_lot::Mutex::new(None)),
             models_dev_key: None,
             openrouter_vendor_prefix: None,
             local_model_tool_sanitize: false,
@@ -344,9 +346,14 @@ impl OpenAiCompatibleModelProvider {
     }
 
     /// Set the maximum output tokens for API requests.
-    pub fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
-        self.max_tokens = max_tokens;
+    pub fn with_max_tokens(self, max_tokens: Option<u32>) -> Self {
+        *self.max_tokens.lock() = max_tokens;
         self
+    }
+
+    /// Read the current max_tokens override (config or per-request).
+    fn effective_max_tokens(&self) -> Option<u32> {
+        *self.max_tokens.lock()
     }
 
     /// Set the models.dev catalog key for this model_provider.
@@ -1708,7 +1715,7 @@ impl OpenAiCompatibleModelProvider {
             tool_stream: self.tool_stream_for_tools(has_tool_entries),
             tools,
             tool_choice,
-            max_tokens: self.max_tokens,
+            max_tokens: self.effective_max_tokens(),
         }
     }
 
@@ -2236,7 +2243,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             tool_stream: None,
             tools: None,
             tool_choice: None,
-            max_tokens: self.max_tokens,
+            max_tokens: self.effective_max_tokens(),
         };
 
         let url = self.chat_completions_url();
@@ -2323,7 +2330,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             tool_stream: None,
             tools: None,
             tool_choice: None,
-            max_tokens: self.max_tokens,
+            max_tokens: self.effective_max_tokens(),
         };
 
         let url = self.chat_completions_url();
@@ -2646,7 +2653,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                     }),
                     tools: tools.clone(),
                     tool_choice: tools.as_ref().map(|_| "auto".to_string()),
-                    max_tokens: provider.max_tokens,
+                    max_tokens: provider.effective_max_tokens(),
                 })
             } else {
                 let messages = effective_messages
@@ -2673,7 +2680,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                     }),
                     tools: None,
                     tool_choice: None,
-                    max_tokens: provider.max_tokens,
+                    max_tokens: provider.effective_max_tokens(),
                 })
             };
 
@@ -2816,7 +2823,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 tool_stream: None,
                 tools: None,
                 tool_choice: None,
-                max_tokens: provider.max_tokens,
+                max_tokens: provider.effective_max_tokens(),
             };
 
             let url = provider.chat_completions_url();
@@ -2926,7 +2933,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 tool_stream: None,
                 tools: None,
                 tool_choice: None,
-                max_tokens: provider.max_tokens,
+                max_tokens: provider.effective_max_tokens(),
             };
 
             let url = provider.chat_completions_url();
@@ -2986,6 +2993,10 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             .send()
             .await?;
         Ok(())
+    }
+
+    fn set_per_request_max_tokens(&self, max_tokens: Option<u32>) {
+        *self.max_tokens.lock() = max_tokens;
     }
 }
 

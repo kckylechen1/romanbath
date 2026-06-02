@@ -9,9 +9,9 @@ use zeroclaw::agent::memory_loader::MemoryLoader;
 use zeroclaw::config::MemoryConfig;
 use zeroclaw::memory;
 use zeroclaw::memory::Memory;
-use zeroclaw::observability::{NoopObserver, Observer};
 use zeroclaw::providers::{ChatResponse, ModelProvider, ToolCall};
 use zeroclaw::tools::Tool;
+use zeroclaw_runtime::observability::{NoopObserver, Observer};
 
 /// Create an in-memory "none" backend for tests.
 pub fn make_memory() -> Arc<dyn Memory> {

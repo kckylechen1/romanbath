@@ -26,7 +26,16 @@ impl CardManager {
     /// Returns the imported character's name.
     pub fn import(&self, file_path: &Path) -> Result<String, CardError> {
         let bytes = fs::read(file_path)?;
-        let ext = file_path
+        let filename = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("card.json");
+        self.import_bytes(&bytes, filename)
+    }
+
+    /// Import a character card from raw bytes (PNG, WEBP, or JSON).
+    pub fn import_bytes(&self, bytes: &[u8], filename: &str) -> Result<String, CardError> {
+        let ext = Path::new(filename)
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
@@ -34,35 +43,45 @@ impl CardManager {
 
         let card = match ext.as_str() {
             "json" => {
-                let json = String::from_utf8_lossy(&bytes);
+                let json = String::from_utf8_lossy(bytes);
                 extract_from_json(&json)?
             }
-            "png" | "webp" => extract_from_png_bytes(&bytes)?,
-            _ => {
-                // Try PNG first, fall back to JSON
-                extract_from_png_bytes(&bytes)
-                    .or_else(|_| extract_from_json(&String::from_utf8_lossy(&bytes)))
-                    .map_err(|_| CardError::UnrecognizedFormat)?
-            }
+            "png" | "webp" => extract_from_png_bytes(bytes)?,
+            _ => extract_from_png_bytes(bytes)
+                .or_else(|_| extract_from_json(&String::from_utf8_lossy(bytes)))
+                .map_err(|_| CardError::UnrecognizedFormat)?,
         };
 
+        self.save_card(&card, bytes, &ext)
+    }
+
+    /// Persist a parsed card and optional avatar bytes.
+    fn save_card(
+        &self,
+        card: &CharacterCard,
+        raw_bytes: &[u8],
+        ext: &str,
+    ) -> Result<String, CardError> {
         let name = card.data.name.clone();
         let safe_name = sanitize_filename(&name);
 
         fs::create_dir_all(&self.cards_dir)?;
 
-        // Save card JSON
         let json_path = self.cards_dir.join(format!("{safe_name}.json"));
-        let json = serde_json::to_string_pretty(&card)?;
+        let json = serde_json::to_string_pretty(card)?;
         fs::write(&json_path, json)?;
 
-        // Copy original image as avatar if PNG/WEBP
         if ext == "png" || ext == "webp" {
             let avatar_path = self.cards_dir.join(format!("{safe_name}.png"));
-            fs::write(&avatar_path, &bytes)?;
+            fs::write(avatar_path, raw_bytes)?;
         }
 
         Ok(name)
+    }
+
+    /// Save an already-parsed card (create or update).
+    pub fn save(&self, card: &CharacterCard) -> Result<String, CardError> {
+        self.save_card(card, &[], "json")
     }
 
     /// List all imported character names.

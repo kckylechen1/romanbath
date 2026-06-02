@@ -4,6 +4,7 @@ import {
   Activity,
   Clock,
   LayoutDashboard,
+  MessageCircle,
   MessageSquare,
   Monitor,
   Puzzle,
@@ -23,6 +24,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
+  { to: '/chat', icon: MessageCircle, labelKey: 'nav.chat' },
   { to: '/agents', icon: MessageSquare, labelKey: 'nav.agents' },
   { to: '/tools', icon: Wrench, labelKey: 'nav.tools' },
   { to: '/cron', icon: Clock, labelKey: 'nav.cron' },

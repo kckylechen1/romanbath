@@ -13,8 +13,6 @@ pub mod orchestrator;
 pub mod util;
 
 // Always-compiled channels and utilities (no feature gate)
-#[cfg(feature = "channel-acp-server")]
-pub mod acp_channel;
 pub mod cli;
 pub mod link_enricher;
 pub mod transcription;
@@ -67,10 +65,6 @@ pub mod slack;
 pub mod telegram;
 #[cfg(feature = "channel-twitter")]
 pub mod twitter;
-#[cfg(feature = "channel-voice-call")]
-pub mod voice_call;
-#[cfg(feature = "voice-wake")]
-pub mod voice_wake;
 #[cfg(feature = "channel-wati")]
 pub mod wati;
 #[cfg(feature = "channel-webhook")]

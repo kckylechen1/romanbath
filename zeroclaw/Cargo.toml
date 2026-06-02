@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/zeroclaw-api", "crates/zeroclaw-infra", "crates/zeroclaw-config", "crates/zeroclaw-log", "crates/zeroclaw-providers", "crates/zeroclaw-memory", "crates/zeroclaw-channels", "crates/zeroclaw-tools", "crates/zeroclaw-runtime", "crates/zeroclaw-tui", "crates/zeroclaw-plugins", "crates/zeroclaw-gateway", "crates/zeroclaw-hardware", "crates/zeroclaw-tool-call-parser", "crates/zeroclaw-cards", "crates/zeroclaw-memory-sigil", "crates/robot-kit", "crates/aardvark-sys", "crates/zeroclaw-macros", "apps/tauri", "tools/fill-translations", "xtask"]
+members = [".", "crates/zeroclaw-api", "crates/zeroclaw-infra", "crates/zeroclaw-config", "crates/zeroclaw-log", "crates/zeroclaw-providers", "crates/zeroclaw-memory", "crates/zeroclaw-channels", "crates/zeroclaw-tools", "crates/zeroclaw-runtime", "crates/zeroclaw-tui", "crates/zeroclaw-plugins", "crates/zeroclaw-gateway", "crates/zeroclaw-tool-call-parser", "crates/zeroclaw-cards", "crates/zeroclaw-memory-sigil", "crates/zeroclaw-macros", "apps/tauri", "tools/fill-translations", "xtask"]
 resolver = "2"
 exclude = ["plugins/image-gen-fal"]
 
@@ -23,12 +23,10 @@ zeroclaw-runtime = { path = "crates/zeroclaw-runtime", version = "0.8.0-beta-1",
 zeroclaw-tui = { path = "crates/zeroclaw-tui", version = "0.8.0-beta-1" }
 zeroclaw-plugins = { path = "crates/zeroclaw-plugins", version = "0.8.0-beta-1" }
 zeroclaw-gateway = { path = "crates/zeroclaw-gateway", version = "0.8.0-beta-1" }
-zeroclaw-hardware = { path = "crates/zeroclaw-hardware", version = "0.8.0-beta-1" }
 zeroclaw-tool-call-parser = { path = "crates/zeroclaw-tool-call-parser", version = "0.8.0-beta-1" }
 zeroclaw-macros = { path = "crates/zeroclaw-macros", version = "0.8.0-beta-1" }
 zeroclaw-cards = { path = "crates/zeroclaw-cards", version = "0.8.0-beta-1" }
 zeroclaw-memory-sigil = { path = "crates/zeroclaw-memory-sigil", version = "0.8.0-beta-1" }
-aardvark-sys = { path = "crates/aardvark-sys", version = "0.1.0" }
 
 [package]
 name = "zeroclawlabs"
@@ -63,11 +61,6 @@ include = [
 name = "zeroclaw"
 path = "src/main.rs"
 
-[[bin]]
-name = "zeroclaw-acp-bridge"
-path = "src/bin/zeroclaw-acp-bridge.rs"
-required-features = ["acp-bridge"]
-
 [lib]
 name = "zeroclaw"
 path = "src/lib.rs"
@@ -86,7 +79,6 @@ zeroclaw-runtime = { workspace = true, optional = true }
 zeroclaw-tui = { workspace = true, optional = true }
 zeroclaw-plugins = { workspace = true, optional = true }
 zeroclaw-gateway = { workspace = true, optional = true }
-zeroclaw-hardware = { workspace = true, optional = true }
 zeroclaw-tool-call-parser.workspace = true
 zeroclaw-macros.workspace = true
 # CLI - minimal and fast
@@ -144,9 +136,6 @@ zip = { version = "8.1", default-features = false, features = ["deflate-flate2"]
 anyhow = "1.0"
 thiserror = "2.0"
 
-# Aardvark I2C/SPI/GPIO USB adapter (Total Phase) — stub when SDK absent
-aardvark-sys.workspace = true
-
 # UUID generation
 uuid = { version = "1.22", default-features = false, features = ["v4", "std"] }
 
@@ -170,17 +159,12 @@ parking_lot = "0.12"
 # Async traits
 async-trait = "0.1"
 
-# HMAC-SHA256 (Zhipu/GLM JWT auth)
-ring = { version = "0.17", optional = true }
-
 # LRU cache for bounded sender state
 lru = { version = "0.16", optional = true }
 
 # Memory / persistence (migration.rs, behind agent-runtime)
 rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
-chrono-tz = { version = "0.10", optional = true }
-cron = { version = "0.15", optional = true }
 
 # Interactive CLI prompts (memory CLI uses dialoguer unconditionally)
 dialoguer = { version = "0.12", features = ["fuzzy-select"] }
@@ -189,15 +173,6 @@ console = "0.16"
 # TUI onboarding (ratatui + crossterm)
 ratatui = { version = "0.30", default-features = true, optional = true }
 crossterm = { version = "0.29", features = ["event-stream"], optional = true }
-
-# Hardware discovery (device path globbing)
-glob = { version = "0.3", optional = true }
-
-# Nostr key validation for wizard (behind channel-nostr feature)
-nostr-sdk = { version = "0.44", default-features = false, optional = true }
-
-# Binary discovery (init system detection)
-which = { version = "8.0", optional = true }
 
 # WebSocket client channels (Discord/Lark/DingTalk/Nostr)
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"], optional = true }
@@ -242,10 +217,8 @@ libc = "0.2"
 default = [
     "agent-runtime",
     "default-channels",
-    "acp-bridge",
     "gateway",
     "tui-onboarding",
-    "observability-prometheus",
     "schema-export",
 ]
 
@@ -255,7 +228,7 @@ default = [
 agent-runtime = [
     "dep:zeroclaw-runtime", "dep:zeroclaw-channels", "dep:zeroclaw-tools",
     "dep:rusqlite",
-    "dep:ring", "dep:lru", "dep:chrono-tz", "dep:cron", "dep:glob", "dep:which",
+    "dep:lru",
     "dep:ratatui", "dep:crossterm",
     "dep:tokio-tungstenite", "dep:tokio-socks", "dep:hostname",
     "dep:rustls", "dep:rustls-pemfile", "dep:rustls-pki-types", "dep:tokio-rustls", "dep:webpki-roots",
@@ -271,8 +244,7 @@ default-channels = [
     "channel-twitter", "channel-reddit", "channel-notion", "channel-mqtt",
     "channel-linq", "channel-wati", "channel-nextcloud",
     "channel-mochat", "channel-wecom", "channel-wecom-ws", "channel-clawdtalk",
-    "channel-webhook", "channel-acp-server", "channel-whatsapp-cloud",
-    "channel-voice-call",
+    "channel-webhook", "channel-whatsapp-cloud",
 ]
 
 # Major subsystems — each forwards to exactly ONE crate
@@ -283,13 +255,16 @@ gateway = [
 ]
 tui-onboarding = ["dep:zeroclaw-tui"]
 schema-export = ["zeroclaw-config/schema-export"]
-acp-bridge = ["dep:tokio-tungstenite"]
+plugins-wasm = [
+    "dep:zeroclaw-plugins",
+    "zeroclaw-runtime?/plugins-wasm",
+    "zeroclaw-gateway?/plugins-wasm",
+]
 
 # Channels — each forwards to zeroclaw-channels.
 channel-email = ["zeroclaw-channels/channel-email", "dep:lettre", "dep:mail-parser", "dep:async-imap"]
 channel-telegram = ["zeroclaw-channels/channel-telegram"]
 channel-lark = ["zeroclaw-channels/channel-lark"]
-channel-nostr = ["zeroclaw-channels/channel-nostr", "dep:nostr-sdk"]
 channel-matrix = ["zeroclaw-channels/channel-matrix"]
 channel-discord = ["zeroclaw-channels/channel-discord"]
 channel-slack = ["zeroclaw-channels/channel-slack"]
@@ -313,48 +288,27 @@ channel-wecom = ["zeroclaw-channels/channel-wecom"]
 channel-wecom-ws = ["zeroclaw-channels/channel-wecom-ws"]
 channel-clawdtalk = ["zeroclaw-channels/channel-clawdtalk"]
 channel-webhook = ["zeroclaw-channels/channel-webhook"]
-channel-acp-server = ["zeroclaw-channels/channel-acp-server"]
 channel-whatsapp-cloud = ["zeroclaw-channels/channel-whatsapp-cloud"]
-channel-voice-call = ["zeroclaw-channels/channel-voice-call"]
 channel-line = ["zeroclaw-channels/channel-line"]
 channel-feishu = ["channel-lark"]
-whatsapp-web = ["zeroclaw-channels/whatsapp-web"]
-voice-wake = ["zeroclaw-channels/voice-wake"]
 memory-postgres = ["zeroclaw-memory/memory-postgres"]
 
-# Backends and platform flags — each forwards to ONE crate
-observability-prometheus = [
-    "zeroclaw-runtime/observability-prometheus",
-    "zeroclaw-gateway/observability-prometheus",
-]
-observability-otel = ["zeroclaw-runtime/observability-otel"]
-hardware = ["dep:zeroclaw-hardware", "zeroclaw-hardware/hardware"]
-peripheral-rpi = ["dep:zeroclaw-hardware", "zeroclaw-hardware/peripheral-rpi"]
-sandbox-landlock = ["zeroclaw-runtime/sandbox-landlock"]
-sandbox-bubblewrap = ["zeroclaw-runtime/sandbox-bubblewrap"]
-browser-native = ["zeroclaw-tools/browser-native"]
-plugins-wasm = ["dep:zeroclaw-plugins", "zeroclaw-runtime/plugins-wasm"]
-probe = ["dep:zeroclaw-hardware", "zeroclaw-hardware/probe"]
-rag-pdf = ["zeroclaw-tools/rag-pdf", "zeroclaw-runtime/rag-pdf"]
-webauthn = ["zeroclaw-runtime/webauthn", "zeroclaw-gateway?/webauthn"]
-embedded-web = ["zeroclaw-gateway/embedded-web"]
-
 # Backward-compatible aliases
-fantoccini = ["browser-native"]
-landlock = ["sandbox-landlock"]
-metrics = ["observability-prometheus"]
+landlock = []
+metrics = []
 
 # CI meta-feature
 ci-all = [
     "agent-runtime",
     "default-channels",
-    "channel-nostr", "channel-matrix", "whatsapp-web",
-    "observability-prometheus", "observability-otel",
-    "hardware", "peripheral-rpi",
-    "sandbox-landlock", "sandbox-bubblewrap",
-    "browser-native", "plugins-wasm", "probe", "rag-pdf",
-    "webauthn", "memory-postgres",
+    "channel-matrix",
+    "memory-postgres",
 ]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(feature, values("webauthn"))',
+] }
 
 [profile.dev]
 incremental = true

@@ -19,33 +19,21 @@
 //! change guidelines.
 
 pub mod audit;
-#[cfg(feature = "sandbox-bubblewrap")]
-pub mod bubblewrap;
 pub mod detect;
-pub mod docker;
 
 // Prompt injection defense (contributed from RustyClaw, MIT licensed)
 pub mod domain_matcher;
 pub mod estop;
-#[cfg(target_os = "linux")]
-pub mod firejail;
 pub mod iam_policy;
-#[cfg(feature = "sandbox-landlock")]
-pub mod landlock;
 pub mod leak_detector;
 pub mod nevis;
 pub mod otp;
 pub mod pairing;
 pub mod playbook;
 pub mod policy;
-pub mod prompt_guard;
-#[cfg(target_os = "macos")]
-pub mod seatbelt;
 pub mod secrets;
 pub mod traits;
 pub mod vulnerability;
-#[cfg(feature = "webauthn")]
-pub mod webauthn;
 
 #[allow(unused_imports)]
 pub use audit::{AuditEvent, AuditEventType, AuditLogger};
@@ -73,7 +61,6 @@ pub use nevis::{NevisAuthProvider, NevisIdentity};
 #[allow(unused_imports)]
 pub use leak_detector::{LeakDetector, LeakResult};
 #[allow(unused_imports)]
-pub use prompt_guard::{GuardAction, GuardResult, PromptGuard};
 
 /// Redact sensitive values for safe logging. Shows first 4 characters + "***" suffix.
 /// Uses char-boundary-safe indexing to avoid panics on multi-byte UTF-8 strings.

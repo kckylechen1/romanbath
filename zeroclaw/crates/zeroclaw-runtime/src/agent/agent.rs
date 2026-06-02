@@ -668,6 +668,14 @@ impl Agent {
         }
     }
 
+    /// Append a custom section to the system prompt builder (e.g. character card).
+    pub fn add_custom_system_section(&mut self, name: impl Into<String>, content: impl Into<String>) {
+        self.prompt_builder = std::mem::take(&mut self.prompt_builder)
+            .add_section(Box::new(
+                crate::agent::prompt::CustomSection::new(name, content),
+            ));
+    }
+
     /// Hydrate the agent with a full `ConversationMessage` history (e.g. restored
     /// from an ACP session store). Preserves all variants including `AssistantToolCalls`
     /// and `ToolResults` — use this for ACP restore; use `seed_history` for flat
@@ -837,17 +845,6 @@ impl Agent {
         )
         .await?;
 
-        let composio_key = if config.composio.enabled {
-            config.composio.api_key.as_deref()
-        } else {
-            None
-        };
-        let composio_entity_id = if config.composio.enabled {
-            Some(config.composio.entity_id.as_str())
-        } else {
-            None
-        };
-
         let (
             mut tools,
             delegate_handle,
@@ -862,8 +859,6 @@ impl Agent {
             agent_alias,
             runtime,
             memory.clone(),
-            composio_key,
-            composio_entity_id,
             &config.browser,
             &config.http_request,
             &config.web_fetch,

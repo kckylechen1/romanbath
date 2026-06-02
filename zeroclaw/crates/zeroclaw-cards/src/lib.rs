@@ -4,10 +4,12 @@
 //! normalizes across versions, and manages a local character library.
 
 mod manager;
+pub mod tokenizer;
 mod types;
 
 pub use manager::CardManager;
-pub use types::*;
+pub use tokenizer::TokenMessage;
+pub use types::{PromptOrder, *};
 
 /// PNG signature bytes.
 const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];

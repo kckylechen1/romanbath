@@ -26,6 +26,7 @@ import {
   deleteGroupChat,
 } from '../services/groupChatService';
 import { useLanguage } from '../i18n';
+import { CharacterAvatar } from './CharacterAvatar';
 
 interface GroupChatManagerProps {
   characters: Character[];
@@ -122,21 +123,21 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-[#0a0a0c] border border-white/10 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-[#120e0a] border border-white/10 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-black/40">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-black/30">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-purple-500/10 border border-purple-500/20">
-              <Users size={20} className="text-purple-400" />
+            <div className="p-2 rounded-xl bg-bath-500/10 border border-bath-500/20">
+              <Users size={20} className="text-bath-400" />
             </div>
             <div>
               <h2 className="text-lg font-bold text-white">Group Chats</h2>
-              <p className="text-xs text-slate-500">Chat with multiple characters</p>
+              <p className="text-xs text-stone-500">Chat with multiple characters</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+            className="p-2 text-stone-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
           >
             <X size={20} />
           </button>
@@ -148,22 +149,22 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
           {!isCreating ? (
             <button
               onClick={() => setIsCreating(true)}
-              className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-white/10 hover:border-purple-500/30 hover:bg-purple-500/5 text-slate-400 hover:text-purple-300 transition-all group"
+              className="w-full flex items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-white/10 hover:border-bath-500/30 hover:bg-bath-500/5 text-stone-400 hover:text-bath-300 transition-all group"
             >
               <Plus size={20} className="group-hover:scale-110 transition-transform" />
               <span className="font-medium">Create New Group</span>
             </button>
           ) : (
-            <div className="p-4 rounded-xl bg-purple-500/5 border border-purple-500/20 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="p-4 rounded-xl bg-bath-500/5 border border-bath-500/20 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-purple-300">New Group Chat</h3>
+                <h3 className="text-sm font-semibold text-bath-300">New Group Chat</h3>
                 <button
                   onClick={() => {
                     setIsCreating(false);
                     setNewGroupName('');
                     setSelectedCharacterIds([]);
                   }}
-                  className="p-1 text-slate-400 hover:text-white rounded"
+                  className="p-1 text-stone-400 hover:text-white rounded"
                 >
                   <X size={16} />
                 </button>
@@ -175,13 +176,13 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                 value={newGroupName}
                 onChange={(e) => setNewGroupName(e.target.value)}
                 placeholder="Group name..."
-                className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/40"
+                className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:border-bath-500/40"
                 autoFocus
               />
 
               {/* Character Selection */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                <label className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
                   Select Characters (min 2)
                 </label>
                 <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto custom-scrollbar">
@@ -191,21 +192,20 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                       onClick={() => toggleCharacterSelection(char.id)}
                       className={`flex items-center gap-2 p-2 rounded-lg border text-left transition-all ${
                         selectedCharacterIds.includes(char.id)
-                          ? 'bg-purple-500/20 border-purple-500/40 text-white'
-                          : 'bg-black/20 border-white/5 text-slate-400 hover:border-white/10'
+                          ? 'bg-bath-500/20 border-bath-500/40 text-white'
+                          : 'bg-black/20 border-white/5 text-stone-400 hover:border-white/10'
                       }`}
                     >
-                      <img
-                        src={char.avatar}
-                        alt={char.name}
-                        className="w-8 h-8 rounded-lg object-cover"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = '/default-avatar.png';
-                        }}
+                      <CharacterAvatar
+                        name={char.name}
+                        avatar={char.avatar}
+                        size="sm"
+                        rounded="lg"
+                        ringClassName="ring-transparent"
                       />
                       <span className="text-sm font-medium truncate flex-1">{char.name}</span>
                       {selectedCharacterIds.includes(char.id) && (
-                        <Check size={14} className="text-purple-400 shrink-0" />
+                        <Check size={14} className="text-bath-400 shrink-0" />
                       )}
                     </button>
                   ))}
@@ -214,7 +214,7 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
 
               {/* Activation Mode */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                <label className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
                   Speaking Order
                 </label>
                 <div className="grid grid-cols-3 gap-2">
@@ -224,8 +224,8 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                       onClick={() => setActivationMode(mode)}
                       className={`flex items-center justify-center gap-2 p-2 rounded-lg border text-xs font-medium transition-all ${
                         activationMode === mode
-                          ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
-                          : 'bg-black/20 border-white/5 text-slate-400 hover:border-white/10'
+                          ? 'bg-bath-500/20 border-bath-500/40 text-bath-300'
+                          : 'bg-black/20 border-white/5 text-stone-400 hover:border-white/10'
                       }`}
                     >
                       {getModeIcon(mode)}
@@ -233,7 +233,7 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                     </button>
                   ))}
                 </div>
-                <p className="text-[10px] text-slate-500">
+                <p className="text-[10px] text-stone-500">
                   {activationMode === 'natural' && 'Characters respond naturally based on context'}
                   {activationMode === 'round-robin' && 'Characters take turns in order'}
                   {activationMode === 'random' && 'Random character responds each time'}
@@ -244,7 +244,7 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
               <button
                 onClick={handleCreateGroup}
                 disabled={!newGroupName.trim() || selectedCharacterIds.length < 2}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-bath-600 hover:bg-bath-500 text-white font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Plus size={16} />
                 Create Group
@@ -254,12 +254,12 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
 
           {/* Existing Groups */}
           <div className="mt-6 space-y-3">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+            <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
               Your Groups ({groups.length})
             </h3>
 
             {groups.length === 0 ? (
-              <div className="text-center py-8 text-slate-600 text-sm">
+              <div className="text-center py-8 text-stone-600 text-sm">
                 No group chats yet. Create one to chat with multiple characters!
               </div>
             ) : (
@@ -269,7 +269,7 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                     key={group.id}
                     className={`p-4 rounded-xl border transition-all ${
                       selectedGroupId === group.id
-                        ? 'bg-purple-500/10 border-purple-500/30'
+                        ? 'bg-bath-500/10 border-bath-500/30'
                         : 'bg-black/20 border-white/5 hover:border-white/10'
                     }`}
                   >
@@ -279,20 +279,23 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                         {group.characterIds.slice(0, 3).map((charId, i) => {
                           const char = getCharacterById(charId);
                           return char ? (
-                            <img
+                            <div
                               key={charId}
-                              src={char.avatar}
-                              alt={char.name}
-                              className="w-10 h-10 rounded-lg border-2 border-[#0a0a0c] object-cover"
+                              className="border-2 border-[#120e0a]"
                               style={{ zIndex: 3 - i }}
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).src = '/default-avatar.png';
-                              }}
-                            />
+                            >
+                              <CharacterAvatar
+                                name={char.name}
+                                avatar={char.avatar}
+                                size="md"
+                                rounded="lg"
+                                ringClassName="ring-transparent"
+                              />
+                            </div>
                           ) : null;
                         })}
                         {group.characterIds.length > 3 && (
-                          <div className="w-10 h-10 rounded-lg border-2 border-[#0a0a0c] bg-slate-800 flex items-center justify-center text-xs font-bold text-slate-400">
+                          <div className="w-10 h-10 rounded-lg border-2 border-[#120e0a] bg-stone-800 flex items-center justify-center text-xs font-bold text-stone-400">
                             +{group.characterIds.length - 3}
                           </div>
                         )}
@@ -302,12 +305,12 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <h4 className="font-semibold text-white truncate">{group.name}</h4>
-                          <span className="flex items-center gap-1 text-[10px] text-slate-500 bg-white/5 px-1.5 py-0.5 rounded">
+                          <span className="flex items-center gap-1 text-[10px] text-stone-500 bg-white/5 px-1.5 py-0.5 rounded">
                             {getModeIcon(group.activationMode)}
                             {getModeLabel(group.activationMode)}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-500 mt-0.5">
+                        <p className="text-xs text-stone-500 mt-0.5">
                           {group.characterIds.map(id => getCharacterById(id)?.name).filter(Boolean).join(', ')}
                         </p>
                       </div>
@@ -316,7 +319,7 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                       <div className="flex items-center gap-1 shrink-0">
                         <button
                           onClick={() => onSelectGroup(group)}
-                          className="px-3 py-1.5 text-xs font-medium text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 rounded-lg transition-colors"
+                          className="px-3 py-1.5 text-xs font-medium text-bath-300 bg-bath-500/10 hover:bg-bath-500/20 rounded-lg transition-colors"
                         >
                           {selectedGroupId === group.id ? 'Active' : 'Select'}
                         </button>
@@ -337,7 +340,7 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-white/5 bg-black/20">
-          <p className="text-[10px] text-slate-600 text-center">
+          <p className="text-[10px] text-stone-600 text-center">
             Group chats let multiple characters interact with you and each other.
           </p>
         </div>

@@ -5,8 +5,8 @@ pub use zeroclaw_runtime::heartbeat::*;
 mod tests {
     use crate::config::HeartbeatConfig;
     use crate::heartbeat::engine::HeartbeatEngine;
-    use crate::observability::NoopObserver;
     use std::sync::Arc;
+    use zeroclaw_runtime::observability::NoopObserver;
 
     #[test]
     fn heartbeat_engine_is_constructible_via_module_export() {

@@ -3,6 +3,14 @@ export enum Role {
   Model = "model",
 }
 
+export interface ToolCallInfo {
+  toolName: string;
+  status: "running" | "done" | "error";
+  output?: string;
+  mediaUrl?: string;
+  mediaType?: "image" | "audio" | "video";
+}
+
 export interface Message {
   id: string;
   role: Role;
@@ -14,6 +22,9 @@ export interface Message {
   swipes?: string[]; // Array of alternative responses
   swipeId?: number; // Currently selected swipe index (0-based)
   swipeTimestamps?: number[]; // Timestamp for each swipe
+
+  // Tool call info (for WS chat with image gen / TTS)
+  toolCalls?: ToolCallInfo[];
 
   // Generation metadata
   extra?: {
@@ -61,6 +72,7 @@ export interface GroupMessage extends Message {
 }
 
 export interface TTSConfig {
+  provider: "browser" | "grok";
   enabled: boolean;
   voice: string;
   rate: number;
@@ -247,12 +259,12 @@ export interface ChatConfig {
   fontSize: number;
   backgroundBlur: number;
 
-  // --- Safety ---
-  safetySettings: "block_none" | "block_some" | "block_most";
-
   // --- TTS (New) ---
   tts: TTSConfig;
 
   // --- Prompt Templates (New) ---
   promptTemplate?: string;
+
+  // --- Scene Mode ---
+  sceneMode: boolean;
 }

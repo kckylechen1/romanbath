@@ -8,6 +8,7 @@ import { SettingsModal } from '@/components/SettingsModal';
 
 const routeTitles: Record<string, string> = {
   '/': 'nav.dashboard',
+  '/chat': 'nav.chat',
   '/agent': 'nav.agent',
   '/tools': 'nav.tools',
   '/cron': 'nav.cron',

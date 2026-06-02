@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  /* Re-mapped "bath" scale to Midnight Teal */
+  --color-bath-50: #f0fdfc;
+  --color-bath-100: #ccfbf9;
+  --color-bath-200: #99f6f3;
+  --color-bath-300: #5cebe9;
+  --color-bath-400: #2dd4d6;
+  --color-bath-500: #14b8ba;
+  --color-bath-600: #109498;
+  --color-bath-700: #12767a;
+  --color-bath-800: #145f63;
+  --color-bath-900: #154f53;
+  --color-bath-950: #072a2e;
+
+  --color-glass: rgba(14, 18, 23, 0.7);
+  --color-glass-border: rgba(102, 252, 241, 0.08);
+  --color-primary: #66FCF1;
+  --color-secondary: #45A29E;
+  --color-accent: #E5C07B;
+
+  --blur-xs: 2px;
+}
+
+body {
+  /* Deep Slate/Navy gradient */
+  background: linear-gradient(160deg, #090B0E 0%, #0E1217 30%, #0B0E12 60%, #11151A 100%);
+  color: #E2E8F0;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(102, 252, 241, 0.2);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(102, 252, 241, 0.4);
+}
+
+.glass-panel {
+  background: rgba(14, 18, 23, 0.65);
+  backdrop-filter: blur(32px) saturate(1.2);
+  -webkit-backdrop-filter: blur(32px) saturate(1.2);
+  border: 1px solid rgba(102, 252, 241, 0.12);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Message entrance animation */
+@keyframes messageIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-message-in {
+  animation: messageIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Subtle glow for focused inputs */
+@keyframes subtleGlow {
+  0%, 100% { box-shadow: 0 0 12px rgba(102, 252, 241, 0.15), inset 0 0 4px rgba(102, 252, 241, 0.05); }
+  50% { box-shadow: 0 0 20px rgba(102, 252, 241, 0.3), inset 0 0 8px rgba(102, 252, 241, 0.1); }
+}
+
+/* Typing cursor blink */
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; text-shadow: 0 0 8px rgba(102, 252, 241, 0.6); }
+  50% { opacity: 0.3; text-shadow: none; }
+}
+
+.typing-cursor::after {
+  content: '|';
+  animation: cursorBlink 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  color: #66FCF1;
+  margin-left: 2px;
+}
+
+/* Warm shimmer for loading states */
+@keyframes neonShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer-warm {
+  background: linear-gradient(90deg, transparent 0%, rgba(102, 252, 241, 0.15) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: neonShimmer 2.5s infinite linear;
+}

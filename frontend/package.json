@@ -6,16 +6,17 @@
   "scripts": {
     "start": "npm run dev:full",
     "dev": "vite",
-    "dev:full": "node -e \"const { spawn } = require('child_process'); const { existsSync } = require('fs'); const { join } = require('path'); const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'; const backendDir = '../backend/SillyTavern'; let backend; let frontend; const stop = () => { if (backend && !backend.killed) backend.kill('SIGINT'); if (frontend && !frontend.killed) frontend.kill('SIGINT'); }; process.on('SIGINT', stop); process.on('SIGTERM', stop); const run = (args, opts) => new Promise((resolve, reject) => { const p = spawn(npmCmd, args, opts); p.on('exit', (code) => code === 0 ? resolve() : reject(new Error(args.join(' ') + ' failed'))); }); const startFrontend = () => { frontend = spawn(npmCmd, ['run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173', '--open'], { stdio: 'inherit' }); frontend.on('exit', (code) => { if (typeof code === 'number' && code !== 0) process.exit(code); }); }; const ensureBackendDeps = async () => { if (existsSync(join(backendDir, 'node_modules'))) return; try { await run(['ci'], { cwd: backendDir, stdio: 'inherit' }); } catch { await run(['install'], { cwd: backendDir, stdio: 'inherit' }); } }; const waitForBackend = async () => { const deadline = Date.now() + 60000; while (Date.now() < deadline) { try { const res = await fetch('http://127.0.0.1:8000/'); if (res.ok) return; } catch {} await new Promise(r => setTimeout(r, 500)); } throw new Error('Backend did not become ready on 127.0.0.1:8000'); }; (async () => { try { const backendOk = existsSync(backendDir) && existsSync(join(backendDir, 'package.json')); if (!backendOk) { console.warn('SillyTavern submodule not found at ../backend/SillyTavern. Run: git submodule update --init --recursive'); console.warn('Starting frontend only (some features will not work without the backend).'); startFrontend(); return; } await ensureBackendDeps(); backend = spawn(npmCmd, ['start'], { cwd: backendDir, stdio: 'inherit' }); backend.on('exit', (code) => { if (typeof code === 'number' && code !== 0) process.exit(code); }); await waitForBackend(); startFrontend(); } catch (e) { console.error(String(e && e.message ? e.message : e)); stop(); process.exit(1); } })();\"",
+    "dev:full": "node scripts/dev-full.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run --environment jsdom"
   },
   "dependencies": {
-    "@google/genai": "^1.30.0",
+    "@tailwindcss/vite": "^4.3.0",
     "lucide-react": "^0.554.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^4.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

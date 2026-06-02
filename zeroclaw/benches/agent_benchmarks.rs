@@ -18,9 +18,9 @@ use zeroclaw::agent::dispatcher::{NativeToolDispatcher, ToolDispatcher, XmlToolD
 use zeroclaw::config::MemoryConfig;
 use zeroclaw::memory;
 use zeroclaw::memory::{Memory, MemoryCategory};
-use zeroclaw::observability::{NoopObserver, Observer};
 use zeroclaw::providers::{ChatRequest, ChatResponse, ModelProvider, ToolCall};
 use zeroclaw::tools::{Tool, ToolResult};
+use zeroclaw_runtime::observability::{NoopObserver, Observer};
 
 use anyhow::Result;
 use async_trait::async_trait;

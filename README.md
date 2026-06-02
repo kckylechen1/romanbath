@@ -3,7 +3,7 @@
   
   # 🏛️ 罗马大浴场 Roman Bath
   
-  **A Modern, Glassmorphic Frontend for SillyTavern**
+  **A modern glassmorphic frontend for character roleplay — powered by ZeroClaw**
   
   [![Made with React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -15,27 +15,18 @@
 
 ## 📖 About
 
-**罗马大浴场 (Roman Bath)** is a modern, sleek frontend redesign for [SillyTavern](https://github.com/SillyTavern/SillyTavern). It provides a premium glassmorphic UI experience while connecting to your existing SillyTavern backend for AI-powered roleplay conversations.
+**罗马大浴场 (Roman Bath)** is a sleek, dark-themed UI for AI character chat. It connects to the **[ZeroClaw](zeroclaw/) Gateway** for streaming chat, character cards, TTS, and image generation. Roman Bath is the frontend; ZeroClaw handles models, prompts, and lorebooks server-side.
 
 ### ✨ Features
 
-- 🎨 **Premium Glassmorphic Design** - Dark theme with frosted glass panels, smooth animations, and modern aesthetics
-- 🌐 **Multi-Language Support** - English, 简体中文, 繁體中文
-- 🤖 **Multiple AI Providers** - Supports SillyTavern backend, OpenRouter, OpenAI, Google Gemini, Claude, and more
-- 💬 **Real-time Streaming** - Live character responses with typing indicators
-- 👤 **Character Management** - Browse and select characters from your SillyTavern library
-- ⚙️ **Advanced Settings** - Fine-tune generation parameters (temperature, top-p, penalties, etc.)
-- 📱 **Responsive Design** - Works on desktop and mobile devices
-
----
-
-## 🖼️ Screenshots
-
-<div align="center">
-  <i>Screenshots coming soon...</i>
-  <!-- Add your screenshots here -->
-  <!-- <img src="screenshots/chat.png" alt="Chat Interface" width="80%" /> -->
-</div>
+- 🎨 **Glassmorphic design** — dark theme, frosted panels, smooth animations
+- 🌐 **Multi-language UI** — English, 简体中文, 繁體中文
+- 💬 **Streaming chat** — SSE via `POST /api/chat`
+- 👤 **Character management** — import, create, edit, export cards (`~/.zeroclaw/characters/`)
+- 👥 **Group chat** — multiple characters in one thread
+- 🔊 **TTS & image gen** — via ZeroClaw gateway endpoints
+- ⚙️ **Generation tuning** — temperature, top-p, penalties, scene mode
+- 📱 **Responsive** — desktop and mobile
 
 ---
 
@@ -43,113 +34,100 @@
 
 ### Prerequisites
 
-- **Node.js** (v18 or higher)
-- (Recommended) **Git submodules** enabled (this repo vendors SillyTavern as a submodule)
+- **Node.js** 18+
+- **Rust** (for ZeroClaw) — [rustup.rs](https://rustup.rs/)
+- An LLM provider configured in ZeroClaw (`~/.zeroclaw/config.toml`)
 
 ### Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone --recurse-submodules https://github.com/kckylechen1/romanbath.git
-   cd romanbath
-   ```
+```bash
+git clone https://github.com/kckylechen1/romanbath.git
+cd romanbath/frontend && npm install
+```
 
-   If you already cloned without submodules:
-   ```bash
-   git submodule update --init --recursive
-   ```
+Optional environment file (repo root):
 
-2. **Install dependencies**
-   ```bash
-   cd frontend && npm install
-   ```
+```bash
+cp .env.example .env
+# Default gateway port is 42617 — change VITE_ZEROCLAW_PORT if needed
+```
 
-3. **Configure environment**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your API keys (optional - for direct API access)
-   ```
+### Run (recommended)
 
-4. **Run the development server**
-   ```bash
-   cd frontend && npm start
-   ```
+```bash
+cd frontend && npm start
+```
 
-   This launches:
-   - SillyTavern backend at `http://127.0.0.1:8000`
-   - Roman Bath frontend at `http://127.0.0.1:5173`
+This starts:
 
-5. **Open in browser**
-   Navigate to `http://localhost:5173`
+| Service | URL |
+|---------|-----|
+| ZeroClaw Gateway | `http://127.0.0.1:42617` |
+| Roman Bath (Vite) | `http://127.0.0.1:5173` |
+
+Open **http://127.0.0.1:5173** in your browser. On first launch the frontend auto-pairs with the gateway.
+
+### Run separately
+
+```bash
+# Terminal 1 — gateway
+cd zeroclaw && cargo run -- gateway start -p 42617
+
+# Terminal 2 — frontend only
+cd frontend && npm run dev
+```
 
 ---
 
 ## ⚙️ Configuration
 
-### Connecting to SillyTavern
+### Models & API keys
 
-By default, Roman Bath connects to SillyTavern at `http://127.0.0.1:8000`.
+Roman Bath does **not** hold LLM API keys. Configure providers in ZeroClaw:
 
-If you use `npm start` from `frontend/`, SillyTavern is started automatically.
+```bash
+# Typical location
+~/.zeroclaw/config.toml
+```
 
-If you run the frontend only (`npm run dev` from `frontend/`), you must start SillyTavern separately and ensure it is reachable.
+Use **Settings → Backend** in the UI to test gateway connectivity.
 
-Troubleshooting:
-- If `backend/SillyTavern` is missing, you cloned without submodules. Run `git submodule update --init --recursive`.
+### Characters
 
-### Direct API Access (Optional)
+- Cards live in `~/.zeroclaw/characters/*.json`
+- Optional avatars: `~/.zeroclaw/characters/<Name>.png`
+- Import via **Import Character** in the sidebar (SillyTavern V2 JSON / PNG cards)
+- Sample cards in repo: `characters/`
 
-You can also use AI providers directly without SillyTavern:
+### Chat history
 
-| Provider | Environment Variable | Get API Key |
-|----------|---------------------|-------------|
-| OpenRouter | `VITE_OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
-| OpenAI | `VITE_OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/api-keys) |
-| Google Gemini | `VITE_GOOGLE_API_KEY` | [aistudio.google.com](https://aistudio.google.com/apikey) |
-| Claude | `VITE_CLAUDE_API_KEY` | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+Conversations are stored in **browser localStorage** (`romanbath_chat_history_v1`). Clearing site data removes history.
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_ZEROCLAW_PORT` | `42617` | Gateway port for Vite dev proxy |
 
 ---
 
 ## 🕹️ How to Use
 
-1. **Import a character**
-   - Click **Import Character** in the left sidebar and select a character card.
-
-2. **Pick a character / start a chat**
-   - Select a character from **Contacts**.
-   - Use **New Chat** to start fresh.
-
-3. **Configure your AI provider**
-   - Open **Settings → API 连接 / API**.
-   - Choose a provider (SillyTavern, OpenAI, OpenRouter, Google Gemini, Grok/xAI, Perplexity, etc.).
-   - Paste your API key and set the model name (free-form input).
-
-4. **Chat with streaming responses**
-   - Type in the composer, send, and watch tokens stream in real time.
-
-5. **Go beyond 1:1 chats**
-   - Create **Group Chats** and manage members.
-   - Enable **TTS** if you want voice output.
-   - Use bookmarks and history tools to keep long sessions manageable.
-
----
-
-## ✅ What This Project Delivers
-
-- A modern, glassmorphic SillyTavern frontend with a faster workflow
-- One-command local dev (`npm start`) that boots backend + frontend
-- Multi-provider support with flexible model naming (no hardcoded dropdown)
-- Roleplay-first UX: character browsing, import, groups, streaming, and tuning controls
+1. **Import or create a character** — sidebar → Import Character / Create Character
+2. **Select a character** — click a contact in the left panel
+3. **Chat** — type and send; Enter sends, Shift+Enter newline (IME-safe for Chinese)
+4. **Tune generation** — Settings → Generation (temperature, max tokens, scene mode, …)
+5. **Group chats** — add multiple characters and switch activation modes
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: React 19, TypeScript, Vite
-- **Styling**: TailwindCSS (via CDN), Glassmorphism design
-- **Icons**: Lucide React
-- **Fonts**: Inter, JetBrains Mono
-- **Backend Integration**: SillyTavern API (vendored as a Git submodule)
+| Layer | Stack |
+|-------|--------|
+| Frontend | React 19, TypeScript, Vite, Tailwind (CDN), Lucide |
+| Backend | ZeroClaw Gateway (Rust) — chat, characters, TTS, image-gen |
+| Cards | SillyTavern V2 format via `zeroclaw-cards` |
 
 ---
 
@@ -157,63 +135,58 @@ You can also use AI providers directly without SillyTavern:
 
 ```
 romanbath/
-├── frontend/              # React frontend
+├── frontend/                 # Roman Bath UI
 │   ├── src/
-│   │   ├── components/    # React components
-│   │   │   ├── ApiProviderSelector.tsx
-│   │   │   ├── CharacterList.tsx
-│   │   │   ├── GroupChatManager.tsx
-│   │   │   ├── MessageBubble.tsx
-│   │   │   └── SettingsPanel.tsx
-│   │   ├── services/      # API and data services
-│   │   │   ├── chatService.ts
-│   │   │   ├── groupChatService.ts
-│   │   │   ├── geminiService.ts
-│   │   │   └── sillyTavernService.ts
-│   │   ├── App.tsx        # Main application component
-│   │   ├── constants.ts   # Configuration constants
-│   │   ├── i18n.ts        # Internationalization
-│   │   ├── types.ts       # TypeScript type definitions
-│   │   └── index.tsx      # Entry point
-│   ├── index.html         # Entry HTML file
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── vite.config.ts
-├── backend/               # SillyTavern submodule
-│   └── SillyTavern/
-├── zeroclaw/              # Rust backend (memory system)
-├── characters/            # Character cards
-├── docs/                  # Documentation
-├── plugins/               # Plugins
-├── .env.example
-└── README.md
+│   │   ├── components/       # CharacterList, MessageBubble, SettingsPanel, …
+│   │   ├── services/
+│   │   │   ├── zeroclawService.ts   # Gateway client (chat, characters, TTS)
+│   │   │   ├── chatService.ts       # localStorage chat history
+│   │   │   └── …
+│   │   └── App.tsx
+│   └── scripts/dev-full.mjs  # npm start — gateway + vite
+├── zeroclaw/                 # ZeroClaw (Rust) — gateway & runtime
+├── characters/               # Example character cards
+├── backend/SillyTavern/      # Legacy submodule (optional, not used by default)
+└── .env.example
 ```
+
+---
+
+## 🔧 Development
+
+```bash
+cd frontend
+npm run dev          # frontend only (gateway must be running)
+npm start            # gateway + frontend
+npm run build        # production static build
+npm test             # vitest
+```
+
+Gateway API (dev proxy forwards `/api`, `/health`, `/pair`):
+
+- `GET /api/characters` — list cards
+- `POST /api/chat` — SSE streaming chat
+- `POST /api/tts`, `POST /api/image-gen` — media
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+Contributions welcome. Fork, branch, PR.
 
 ---
 
 ## 📜 License
 
-This project is licensed under the AGPL-3.0 License - see the [LICENSE](LICENSE) file for details.
+AGPL-3.0 — see [LICENSE](LICENSE).
 
 ---
 
 ## 🙏 Acknowledgments
 
-- [SillyTavern](https://github.com/SillyTavern/SillyTavern) - The amazing backend that makes this possible
-- [TailwindCSS](https://tailwindcss.com/) - For the beautiful utility-first CSS framework
-- [Lucide](https://lucide.dev/) - For the gorgeous icon set
+- [ZeroClaw](zeroclaw/) — gateway and character runtime
+- [SillyTavern](https://github.com/SillyTavern/SillyTavern) — character card format ecosystem
+- [TailwindCSS](https://tailwindcss.com/) · [Lucide](https://lucide.dev/)
 
 ---
 

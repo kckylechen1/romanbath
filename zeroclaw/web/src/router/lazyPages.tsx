@@ -1,6 +1,7 @@
 import { lazy } from 'react';
 
 export const Dashboard = lazy(() => import('../pages/Dashboard'));
+export const CharacterChat = lazy(() => import('../pages/CharacterChat'));
 export const AgentChat = lazy(() => import('../pages/AgentChat'));
 export const AgentsList = lazy(() => import('../pages/AgentsList'));
 export const AgentWorkspaceExplorer = lazy(() => import('../pages/AgentWorkspaceExplorer'));
