@@ -261,16 +261,21 @@ pub async fn handle_export_character(
     }
 
     match export_character(&name) {
-        Ok(json) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{name}.json\""),
-            )
-            .body(Body::from(json))
-            .unwrap()
-            .into_response(),
+        Ok(json) => {
+            // Sanitize before interpolation: a CR/LF or `"` in the name would
+            // let an authenticated operator inject a new response header.
+            let safe_name = sanitize_attachment_name(&name);
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{safe_name}.json\""),
+                )
+                .body(Body::from(json))
+                .unwrap()
+                .into_response()
+        }
         Err(e) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -441,5 +446,67 @@ pub async fn handle_character_avatar(
             Json(serde_json::json!({"error": "No avatar for this character"})),
         )
             .into_response(),
+    }
+}
+
+/// Make a string safe to drop into a `Content-Disposition: filename="..."`
+/// header value. Strips CR/LF, control bytes, `"`, `\`, `/`, `;` and anything
+/// outside printable ASCII; truncates to 128 chars. Returns `"unknown"` when
+/// the input is empty or sanitizes to empty.
+fn sanitize_attachment_name(name: &str) -> String {
+    const MAX: usize = 128;
+    let sanitized: String = name
+        .chars()
+        .filter(|&c| {
+            let b = c as u32;
+            (0x20..=0x7e).contains(&b) && !matches!(c, '"' | '\\' | '/' | ';')
+        })
+        .take(MAX)
+        .collect();
+    match sanitized.trim() {
+        s if s.is_empty() => "unknown".to_owned(),
+        s => s.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_attachment_name;
+
+    #[test]
+    fn strips_header_injection_payloads() {
+        // CR/LF stripped — the rest is printable ASCII that the filter
+        // passes through. The point of sanitization is to prevent the
+        // *injection vector* (CR/LF and the surrounding quote), not to
+        // strip every character that looks like a header.
+        assert_eq!(
+            sanitize_attachment_name("foo\r\nSet-Cookie: x"),
+            "fooSet-Cookie: x"
+        );
+        assert_eq!(sanitize_attachment_name("a\"b"), "ab");
+        assert_eq!(sanitize_attachment_name("a/b\\c"), "abc");
+        assert_eq!(sanitize_attachment_name("semi;colon"), "semicolon");
+        // Pure CRLF input falls back to the "unknown" placeholder.
+        assert_eq!(sanitize_attachment_name("\r\n"), "unknown");
+    }
+
+    #[test]
+    fn truncates_long_names() {
+        let long = "a".repeat(200);
+        assert_eq!(sanitize_attachment_name(&long).len(), 128);
+    }
+
+    #[test]
+    fn empty_or_all_unsafe_falls_back() {
+        assert_eq!(sanitize_attachment_name(""), "unknown");
+        assert_eq!(sanitize_attachment_name("\r\n\";\\"), "unknown");
+        assert_eq!(sanitize_attachment_name("   "), "unknown");
+    }
+
+    #[test]
+    fn preserves_normal_names() {
+        assert_eq!(sanitize_attachment_name("Suwan Ning"), "Suwan Ning");
+        assert_eq!(sanitize_attachment_name("character_v2"), "character_v2");
+        assert_eq!(sanitize_attachment_name("テスト"), "unknown");
     }
 }
