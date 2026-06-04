@@ -770,25 +770,28 @@ pub fn all_tools_with_runtime(
         )));
     }
 
-    // xAI image gen + TTS — gated on configured provider api_key
-    if let Some(xai_key) = root_config
+    // xAI image gen + TTS — gated on available runtime credentials, including
+    // API key or XAI OAuth env overrides.
+    let xai_fallback_key = root_config
         .first_model_provider()
-        .and_then(|p| p.api_key.as_deref())
-        && !xai_key.trim().is_empty()
-    {
+        .and_then(|p| p.api_key.as_deref());
+    let xai_has_credentials = zeroclaw_tools::xai_common::resolve_credentials(xai_fallback_key).is_ok();
+
+    if xai_has_credentials {
+        let xai_key = xai_fallback_key.map(std::string::ToString::to_string);
         tool_arcs.push(Arc::new(XaiImageGenTool::new(
             security.clone(),
             workspace_dir.to_path_buf(),
             "grok-imagine-image".to_string(),
             "1k".to_string(),
-            Some(xai_key.to_string()),
+            xai_key.clone(),
         )));
         tool_arcs.push(Arc::new(XaiTtsTool::new(
             security.clone(),
             workspace_dir.to_path_buf(),
             "ara".to_string(),
             "en-US".to_string(),
-            Some(xai_key.to_string()),
+            xai_key,
         )));
     }
 
@@ -1007,7 +1010,66 @@ pub fn all_tools_with_runtime(
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use zeroclaw_config::schema::{BrowserConfig, Config, MemoryConfig};
+    use zeroclaw_config::schema::{
+        BrowserConfig, Config, MemoryConfig, ModelProviderConfig, XaiModelProviderConfig,
+    };
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+
+    static XAI_ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn with_env_var_kv(name: &str, value: Option<&str>) {
+        match value {
+            Some(v) => unsafe { std::env::set_var(name, v) },
+            None => unsafe { std::env::remove_var(name) },
+        }
+    }
+
+    struct EnvGuard {
+        oauth_token: Option<OsString>,
+        api_key: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set_for_test(oauth: Option<&str>, api_key: Option<&str>) -> Self {
+            let oauth_token = std::env::var_os("XAI_OAUTH_TOKEN");
+            let api_key_value = std::env::var_os("XAI_API_KEY");
+            with_env_var_kv("XAI_OAUTH_TOKEN", oauth);
+            with_env_var_kv("XAI_API_KEY", api_key);
+            Self {
+                oauth_token,
+                api_key: api_key_value,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.oauth_token.clone() {
+                Some(v) => unsafe { std::env::set_var("XAI_OAUTH_TOKEN", v) },
+                None => unsafe { std::env::remove_var("XAI_OAUTH_TOKEN") },
+            }
+            match self.api_key.clone() {
+                Some(v) => unsafe { std::env::set_var("XAI_API_KEY", v) },
+                None => unsafe { std::env::remove_var("XAI_API_KEY") },
+            }
+        }
+    }
+
+    fn build_xai_root_config(tmp: &TempDir) -> Config {
+        let mut cfg = test_config(tmp);
+        cfg.providers.models.xai.insert(
+            "default".to_string(),
+            XaiModelProviderConfig {
+                base: ModelProviderConfig {
+                    model: Some("grok-imagine-image".to_string()),
+                    api_key: None,
+                    ..Default::default()
+                },
+            },
+        );
+        cfg
+    }
 
     fn test_config(tmp: &TempDir) -> Config {
         Config {
@@ -1359,5 +1421,81 @@ mod tests {
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"read_skill"));
+    }
+
+    #[test]
+    fn all_tools_includes_xai_tools_with_oauth_token_and_empty_config_key() {
+        let _guard = XAI_ENV_MUTEX.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(zeroclaw_memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let http = zeroclaw_config::schema::HttpRequestConfig::default();
+        let cfg = build_xai_root_config(&tmp);
+        let _env_guard = EnvGuard::set_for_test(Some("oauth-test-token"), None);
+
+        let (tools, _, _, _, _, _) = all_tools(
+            Arc::new(cfg.clone()),
+            &security,
+            &zeroclaw_config::schema::RiskProfileConfig::default(),
+            "test-agent",
+            mem,
+            &browser,
+            &http,
+            &zeroclaw_config::schema::WebFetchConfig::default(),
+            tmp.path(),
+            &HashMap::new(),
+            None,
+            &cfg,
+            None,
+            false,
+        );
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"xai_image_gen"));
+        assert!(names.contains(&"xai_tts"));
+    }
+
+    #[test]
+    fn all_tools_excludes_xai_tools_when_no_credentials() {
+        let _guard = XAI_ENV_MUTEX.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(zeroclaw_memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let http = zeroclaw_config::schema::HttpRequestConfig::default();
+        let cfg = build_xai_root_config(&tmp);
+        let _env_guard = EnvGuard::set_for_test(None, None);
+
+        let (tools, _, _, _, _, _) = all_tools(
+            Arc::new(cfg.clone()),
+            &security,
+            &zeroclaw_config::schema::RiskProfileConfig::default(),
+            "test-agent",
+            mem,
+            &browser,
+            &http,
+            &zeroclaw_config::schema::WebFetchConfig::default(),
+            tmp.path(),
+            &HashMap::new(),
+            None,
+            &cfg,
+            None,
+            false,
+        );
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(!names.contains(&"xai_image_gen"));
+        assert!(!names.contains(&"xai_tts"));
     }
 }
