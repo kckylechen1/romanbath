@@ -812,6 +812,210 @@ fn build_channel_system_prompt(
     prompt
 }
 
+fn is_channel_photo_request(content: &str) -> bool {
+    let text = content.trim().to_lowercase();
+    if text.is_empty() {
+        return false;
+    }
+
+    let photo_terms = [
+        "照片",
+        "自拍",
+        "图片",
+        "相片",
+        "photo",
+        "picture",
+        "selfie",
+        "pic",
+    ];
+    let request_terms = [
+        "发", "来", "给", "看看", "看一下", "拍", "send", "show", "take", "make", "generate",
+    ];
+
+    photo_terms.iter().any(|term| text.contains(term))
+        && request_terms.iter().any(|term| text.contains(term))
+}
+
+fn profile_text<'a>(
+    profile: &'a serde_json::Map<String, serde_json::Value>,
+    snake: &str,
+    camel: &str,
+) -> Option<&'a str> {
+    profile
+        .get(snake)
+        .or_else(|| profile.get(camel))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn card_image_profile_prompt(card: &zeroclaw_cards::CharacterCard, request_text: &str) -> String {
+    let mut parts = vec![format!(
+        "Create a photorealistic in-character image of {} for this user request: {}.",
+        card.data.name,
+        request_text.trim()
+    )];
+
+    if let Some(profile) = card
+        .data
+        .extensions
+        .get("image_profile")
+        .or_else(|| card.data.extensions.get("imageProfile"))
+        .and_then(serde_json::Value::as_object)
+    {
+        if let Some(scene_prefix) = profile_text(profile, "scene_prefix", "scenePrefix") {
+            parts.push(scene_prefix.to_string());
+        }
+        if let Some(identity_prompt) = profile_text(profile, "identity_prompt", "identityPrompt") {
+            parts.push(format!("Identity anchor: {identity_prompt}"));
+        }
+        if let Some(style_prompt) = profile_text(profile, "style_prompt", "stylePrompt") {
+            parts.push(format!("Visual style: {style_prompt}"));
+        }
+        if let Some(negative_prompt) = profile_text(profile, "negative_prompt", "negativePrompt") {
+            parts.push(format!("Avoid: {negative_prompt}"));
+        }
+    }
+
+    parts.push(
+        "Keep the same face, body type, proportions, age, skin tone, hair, and distinctive cues across future images; only the scene, pose, wardrobe, and lighting may change."
+            .to_string(),
+    );
+
+    parts.join("\n")
+}
+
+fn resolve_photo_character_card(
+    agent_alias: &str,
+    request_text: &str,
+) -> Option<zeroclaw_cards::CharacterCard> {
+    let manager = zeroclaw_cards::CardManager::default().ok()?;
+
+    if let Ok(card) = manager.load(agent_alias) {
+        return Some(card);
+    }
+
+    let names = manager.list().ok()?;
+    let request_lower = request_text.to_lowercase();
+    for name in &names {
+        if request_lower.contains(&name.to_lowercase())
+            && let Ok(card) = manager.load(name)
+        {
+            return Some(card);
+        }
+    }
+
+    None
+}
+
+fn build_channel_photo_prompt(agent_alias: &str, request_text: &str, system_prompt: &str) -> String {
+    if let Some(card) = resolve_photo_character_card(agent_alias, request_text) {
+        return card_image_profile_prompt(&card, request_text);
+    }
+
+    format!(
+        "Create a photorealistic roleplay image for this user request: {}.\nUse the active persona and continuity cues from the system prompt when available. Keep identity consistent across future images; only the scene, pose, wardrobe, and lighting may change.\nPersona context:\n{}",
+        request_text.trim(),
+        system_prompt.chars().take(4000).collect::<String>()
+    )
+}
+
+fn outbound_image_markers_supported(channel_name: &str) -> bool {
+    !matches!(channel_name, "wecom_ws")
+}
+
+async fn maybe_handle_channel_photo_request(
+    ctx: &ChannelRuntimeContext,
+    msg: &zeroclaw_api::channel::ChannelMessage,
+    target_channel: Option<&Arc<dyn Channel>>,
+    history_key: &str,
+    system_prompt: &str,
+) -> bool {
+    if !outbound_image_markers_supported(msg.channel.as_str())
+        || !is_channel_photo_request(&msg.content)
+    {
+        return false;
+    }
+
+    let Some(channel) = target_channel else {
+        return false;
+    };
+    let Some(tool) = ctx
+        .tools_registry
+        .iter()
+        .find(|tool| tool.name() == "xai_image_gen")
+    else {
+        return false;
+    };
+
+    let prompt = build_channel_photo_prompt(ctx.agent_alias.as_str(), &msg.content, system_prompt);
+    let output_filename = format!(
+        "{}_channel_photo",
+        ctx.agent_alias
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            })
+            .collect::<String>()
+    );
+    let args = serde_json::json!({
+        "prompt": prompt,
+        "resolution": "1k",
+        "output_filename": output_filename,
+    });
+
+    let content = match tool.execute(args).await {
+        Ok(result) if result.success => {
+            match serde_json::from_str::<serde_json::Value>(&result.output)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("image")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                }) {
+                Some(image) if image.starts_with("http://") || image.starts_with("https://") => {
+                    format!("[IMAGE:{image}]")
+                }
+                Some(image) => {
+                    let path = Path::new(&image);
+                    let absolute = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        ctx.workspace_dir.join(path)
+                    };
+                    format!("[IMAGE:{}]", absolute.display())
+                }
+                None => {
+                    "Image generation succeeded but did not return an image path.".to_string()
+                }
+            }
+        }
+        Ok(result) => format!(
+            "Image generation failed: {}",
+            result.error.unwrap_or_else(|| "unknown error".to_string())
+        ),
+        Err(err) => format!("Image generation failed: {err}"),
+    };
+
+    append_sender_turn(ctx, history_key, ChatMessage::assistant(&content));
+    if let Err(err) = channel
+        .send(&SendMessage::new(&content, &msg.reply_target).in_thread(msg.thread_ts.clone()))
+        .await
+    {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({"error": err.to_string()})),
+            "failed to deliver channel photo response"
+        );
+    }
+    true
+}
+
 fn normalize_cached_channel_turns(turns: Vec<ChatMessage>) -> Vec<ChatMessage> {
     let mut normalized = Vec::with_capacity(turns.len());
     let mut expecting_user = true;
@@ -3787,6 +3991,18 @@ async fn process_channel_message_body(
                 })),
             "channel_message_no_reply"
         );
+        return;
+    }
+
+    if maybe_handle_channel_photo_request(
+        ctx.as_ref(),
+        &msg,
+        target_channel.as_ref(),
+        &history_key,
+        &history[0].content,
+    )
+    .await
+    {
         return;
     }
 
@@ -17228,6 +17444,44 @@ Done."#;
         assert!(result.contains("Done."));
         assert!(!result.contains("toolcalls"));
         assert!(!result.contains("shell"));
+    }
+
+    #[test]
+    fn channel_photo_request_detects_cn_and_en_requests() {
+        assert!(is_channel_photo_request("发张照片看看"));
+        assert!(is_channel_photo_request("send me a selfie"));
+        assert!(is_channel_photo_request("show a picture"));
+        assert!(!is_channel_photo_request("这张照片不错"));
+        assert!(!is_channel_photo_request("hello there"));
+    }
+
+    #[test]
+    fn card_image_profile_prompt_uses_consistency_fields() {
+        let card: zeroclaw_cards::CharacterCard = serde_json::from_value(serde_json::json!({
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": "Jayne",
+                "description": "desc",
+                "first_mes": "hi",
+                "extensions": {
+                    "image_profile": {
+                        "identity_prompt": "same face and dark eyes",
+                        "style_prompt": "cinematic photorealistic",
+                        "scene_prefix": "keep Jayne physically consistent",
+                        "negative_prompt": "anime, different face"
+                    }
+                }
+            }
+        }))
+        .expect("valid card");
+
+        let prompt = card_image_profile_prompt(&card, "发张照片看看");
+        assert!(prompt.contains("Jayne"));
+        assert!(prompt.contains("same face and dark eyes"));
+        assert!(prompt.contains("cinematic photorealistic"));
+        assert!(prompt.contains("keep Jayne physically consistent"));
+        assert!(prompt.contains("anime, different face"));
     }
 
     // ── Tests for strip_think_tags_inline (streaming draft sanitization) ──
