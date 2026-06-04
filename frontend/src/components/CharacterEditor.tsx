@@ -1,6 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, User, Save, Trash2, Upload, Sparkles } from 'lucide-react';
-import { CharacterFormData, getCharacterDetails } from '../services/zeroclawService';
+import { X, Save, Trash2, Upload, Sparkles } from 'lucide-react';
+import {
+  CharacterFormData,
+  deleteCharacterAvatar,
+  getCharacterDetails,
+  hasCharacterAvatar,
+  uploadCharacterAvatar,
+} from '../services/zeroclawService';
+import LorebookEditor from './LorebookEditor';
 
 interface CharacterEditorProps {
   characterId?: string; // undefined = new character, string = editing existing
@@ -15,10 +22,34 @@ const TABS = [
   { id: 'personality', label: 'Personality' },
   { id: 'greeting', label: 'First Message' },
   { id: 'dialogue', label: 'Example Dialogue' },
+  { id: 'lorebook', label: 'Lorebook' },
   { id: 'advanced', label: 'Advanced' },
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
+
+const emptyForm = (): CharacterFormData => ({
+  name: '',
+  description: '',
+  personality: '',
+  scenario: '',
+  firstMessage: '',
+  alternateGreetings: [],
+  exampleDialogue: '',
+  systemPrompt: '',
+  postHistoryInstructions: '',
+  creatorNotes: '',
+  tags: [],
+  creator: '',
+  characterVersion: '',
+  nickname: '',
+  groupOnlyGreetings: [],
+  source: [],
+  characterBook: null,
+  extensions: {},
+  avatarFile: null,
+  removeAvatar: false,
+});
 
 const CharacterEditor: React.FC<CharacterEditorProps> = ({
   characterId,
@@ -33,66 +64,52 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [formData, setFormData] = useState<CharacterFormData>({
-    name: '',
-    description: '',
-    personality: '',
-    scenario: '',
-    firstMessage: '',
-    alternateGreetings: [],
-    exampleDialogue: '',
-    systemPrompt: '',
-    postHistoryInstructions: '',
-    creatorNotes: '',
-    tags: [],
-  });
+  const [formData, setFormData] = useState<CharacterFormData>(emptyForm);
 
   // Load character data if editing
   useEffect(() => {
     if (isOpen && characterId) {
       setIsLoading(true);
+      setAvatarPreview(null);
       getCharacterDetails(characterId).then(data => {
         if (data) {
-          setFormData(data);
-          if (typeof data.avatar === 'string') {
-            setAvatarPreview(data.avatar);
-          }
+          setFormData({ ...emptyForm(), ...data, avatarFile: null, removeAvatar: false });
+          hasCharacterAvatar(data.name).then((hasAvatar) => {
+            if (hasAvatar) {
+              setAvatarPreview(`/api/characters/${encodeURIComponent(data.name)}/avatar`);
+            } else {
+              setAvatarPreview(null);
+            }
+          });
         }
         setIsLoading(false);
       });
     } else if (isOpen && !characterId) {
-      // Reset form for new character
-      setFormData({
-        name: '',
-        description: '',
-        personality: '',
-        scenario: '',
-        firstMessage: '',
-        alternateGreetings: [],
-        exampleDialogue: '',
-        systemPrompt: '',
-        postHistoryInstructions: '',
-        creatorNotes: '',
-        tags: [],
-      });
+      setFormData(emptyForm());
       setAvatarPreview(null);
     }
   }, [isOpen, characterId]);
 
-  const handleChange = (field: keyof CharacterFormData, value: string | string[]) => {
+  const handleChange = (field: keyof CharacterFormData, value: CharacterFormData[keyof CharacterFormData]) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setFormData(prev => ({ ...prev, avatar: file }));
+      setFormData(prev => ({ ...prev, avatarFile: file, removeAvatar: false }));
       const reader = new FileReader();
       reader.onload = () => {
         setAvatarPreview(reader.result as string);
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const clearAvatar = () => {
+    setFormData(prev => ({ ...prev, avatarFile: null, removeAvatar: true }));
+    setAvatarPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSubmit = async () => {
@@ -104,6 +121,20 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
     setIsSaving(true);
     try {
       await onSave(formData);
+      // After the card data is persisted, push the avatar separately if the
+      // user staged a new file. Avatar failures are surfaced to the user but
+      // don't roll back the card write — the operator can re-upload.
+      if (formData.avatarFile) {
+        const avatarResult = await uploadCharacterAvatar(formData.name, formData.avatarFile);
+        if (!avatarResult.success) {
+          alert(`Character saved, but avatar upload failed: ${avatarResult.error ?? 'unknown'}`);
+        }
+      } else if (formData.removeAvatar) {
+        const avatarResult = await deleteCharacterAvatar(formData.name);
+        if (!avatarResult.success) {
+          alert(`Character saved, but avatar removal failed: ${avatarResult.error ?? 'unknown'}`);
+        }
+      }
       onClose();
     } catch (error) {
       console.error('Failed to save character:', error);
@@ -193,7 +224,7 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                     <div className="shrink-0">
                       <div
                         onClick={() => fileInputRef.current?.click()}
-                        className="w-32 h-32 rounded-2xl bg-stone-800border-2 border-dashed border-stone-600 hover:border-bath-500/50 flex items-center justify-center cursor-pointer transition-colors overflow-hidden group"
+                        className="w-32 h-32 rounded-2xl bg-stone-800 border-2 border-dashed border-stone-600 hover:border-bath-500/50 flex items-center justify-center cursor-pointer transition-colors overflow-hidden group"
                       >
                         {avatarPreview ? (
                           <img src={avatarPreview} alt="Avatar" className="w-full h-full object-cover" />
@@ -207,10 +238,19 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                       <input
                         ref={fileInputRef}
                         type="file"
-                        accept="image/*"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
                         onChange={handleAvatarChange}
                         className="hidden"
                       />
+                      {avatarPreview && (
+                        <button
+                          type="button"
+                          onClick={clearAvatar}
+                          className="mt-2 w-full text-xs text-stone-500 hover:text-red-400 transition-colors"
+                        >
+                          Clear avatar
+                        </button>
+                      )}
                     </div>
                     <div className="flex-1 space-y-4">
                       <div>
@@ -222,6 +262,18 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                           value={formData.name}
                           onChange={(e) => handleChange('name', e.target.value)}
                           placeholder="Enter character name"
+                          className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-stone-400 mb-2">
+                          Nickname <span className="text-stone-600">(optional, V3)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.nickname ?? ''}
+                          onChange={(e) => handleChange('nickname', e.target.value)}
+                          placeholder="Short alias or call name"
                           className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50"
                         />
                       </div>
@@ -348,9 +400,24 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
 {{user}}: What do you like to do for fun?
 {{char}}: Oh, so many things! I love reading, going on adventures, and trying new foods. *eyes light up* Have you ever tried the pastries from the bakery downtown? They're amazing!`}
                       rows={12}
-                      className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50 resize-none font-mono text-sm"
-                    />
+                       className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50 resize-none font-mono text-sm"
+                     />
                   </div>
+                </div>
+              )}
+
+              {/* Lorebook Tab */}
+              {activeTab === 'lorebook' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-stone-500">
+                    Lorebook entries inject context into the prompt when their keywords appear
+                    in the conversation. Changes here are sent back to the gateway as part of
+                    the character card on save.
+                  </p>
+                  <LorebookEditor
+                    value={formData.characterBook ?? null}
+                    onChange={(book) => handleChange('characterBook', book)}
+                  />
                 </div>
               )}
 

@@ -45,7 +45,11 @@ pub async fn handle_list_characters(
     }
 
     match list_characters() {
-        Ok(chars) => (StatusCode::OK, Json(CharactersResponse { characters: chars })).into_response(),
+        Ok(chars) => (
+            StatusCode::OK,
+            Json(CharactersResponse { characters: chars }),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -56,31 +60,30 @@ pub async fn handle_list_characters(
 
 fn list_characters() -> anyhow::Result<Vec<CharacterSummary>> {
     let mgr = CardManager::default()?;
-    let names = mgr.list()?;
-
-    let mut summaries = Vec::with_capacity(names.len());
-    for name in names {
-        let has_avatar = mgr.avatar_path(&name).is_some();
-        match mgr.load(&name) {
-            Ok(card) => {
-                summaries.push(summary_from_card(&card, has_avatar));
-            }
-            Err(_) => {
-                summaries.push(CharacterSummary {
-                    name,
-                    description: String::new(),
-                    personality: String::new(),
-                    scenario: String::new(),
-                    first_mes: String::new(),
-                    tags: Vec::new(),
-                    creator: String::new(),
-                    character_version: String::new(),
-                    has_avatar,
-                });
-            }
-        }
+    let dir = mgr.cards_dir();
+    if !dir.exists() {
+        return Ok(Vec::new());
     }
 
+    let mut summaries = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let card: CharacterCard = match serde_json::from_slice(&bytes) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let has_avatar = mgr.avatar_path(&card.data.name).is_some();
+        summaries.push(summary_from_card(&card, has_avatar));
+    }
+    summaries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(summaries)
 }
 
@@ -232,11 +235,7 @@ pub async fn handle_delete_character(
     }
 
     match delete_character(&name) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"success": true})),
-        )
-            .into_response(),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -261,16 +260,21 @@ pub async fn handle_export_character(
     }
 
     match export_character(&name) {
-        Ok(json) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{name}.json\""),
-            )
-            .body(Body::from(json))
-            .unwrap()
-            .into_response(),
+        Ok(json) => {
+            // Sanitize before interpolation: a CR/LF or `"` in the name would
+            // let an authenticated operator inject a new response header.
+            let safe_name = sanitize_attachment_name(&name);
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{safe_name}.json\""),
+                )
+                .body(Body::from(json))
+                .unwrap()
+                .into_response()
+        }
         Err(e) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -385,16 +389,29 @@ pub async fn handle_update_character(
 fn save_character_data(data: CharacterData) -> anyhow::Result<String> {
     let mgr = CardManager::default()?;
     let card = default_card(data);
-    mgr.save(&card).map_err(|e| anyhow::anyhow!("{e}"))
+    mgr.save(&card)
+        .map_err(|e| anyhow::Error::msg(format!("{e}")))
 }
 
 fn update_character_data(previous_name: &str, data: CharacterData) -> anyhow::Result<String> {
     let mgr = CardManager::default()?;
     if previous_name != data.name {
+        // Move the avatar file from the old safe name to the new one (if any)
+        // so a rename doesn't strand the avatar. `mgr.delete(previous_name)`
+        // after this only removes the old JSON; the avatar is now under the
+        // new safe name and survives.
+        if let Some(old_avatar) = mgr.avatar_path(previous_name) {
+            let safe_name = sanitize_filename_safe(&data.name);
+            let new_avatar = mgr.cards_dir().join(format!("{safe_name}.png"));
+            if old_avatar != new_avatar {
+                let _ = std::fs::rename(&old_avatar, &new_avatar);
+            }
+        }
         let _ = mgr.delete(previous_name);
     }
     let card = default_card(data);
-    mgr.save(&card).map_err(|e| anyhow::anyhow!("{e}"))
+    mgr.save(&card)
+        .map_err(|e| anyhow::Error::msg(format!("{e}")))
 }
 
 pub async fn handle_character_avatar(
@@ -441,5 +458,211 @@ pub async fn handle_character_avatar(
             Json(serde_json::json!({"error": "No avatar for this character"})),
         )
             .into_response(),
+    }
+}
+
+// ── Avatar upload (POST /api/characters/{name}/avatar) ───────────
+//
+// Mirrors the shape of `handle_upload_character` (base64-in-JSON) so the
+// frontend can reuse the same FileReader path. Writes a `<safe_name>.png`
+// next to the card JSON. We always write `.png` regardless of the source
+// file extension so the avatar MIME type is stable for `handle_character_avatar`'s
+// `mime_guess` lookup; the existing PNG bytes are what we store.
+
+#[derive(Debug, Deserialize)]
+pub struct UploadAvatarRequest {
+    /// Base64-encoded image bytes. PNG, JPEG, WebP and GIF are accepted by
+    /// the browser via FileReader; we write them verbatim to disk.
+    pub data_base64: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UploadAvatarResponse {
+    pub success: bool,
+    pub has_avatar: bool,
+}
+
+pub async fn handle_upload_character_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(body): Json<UploadAvatarRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(&body.data_base64) {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Invalid base64: {e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let mgr = match CardManager::default() {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    // Write directly to the canonical avatar path. We don't load the card
+    // first: an avatar upload is valid even when the JSON is still being
+    // edited, and we want the avatar to land atomically.
+    let avatar_path = match mgr.avatar_path(&name) {
+        Some(existing) => existing,
+        None => {
+            // No existing avatar — derive a fresh path. `avatar_path` only
+            // returns `Some` when the file already exists, so for a brand
+            // new avatar we build the path manually.
+            let safe_name = sanitize_filename_safe(&name);
+            mgr.cards_dir().join(format!("{safe_name}.png"))
+        }
+    };
+
+    if let Err(e) = std::fs::write(&avatar_path, &bytes) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(UploadAvatarResponse {
+            success: true,
+            has_avatar: true,
+        }),
+    )
+        .into_response()
+}
+
+pub async fn handle_delete_character_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+
+    let mgr = match CardManager::default() {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    if let Some(path) = mgr.avatar_path(&name) {
+        if let Err(e) = std::fs::remove_file(&path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(UploadAvatarResponse {
+            success: true,
+            has_avatar: false,
+        }),
+    )
+        .into_response()
+}
+
+/// Filename-safe copy of the character name (matches `CardManager`'s internal
+/// `sanitize_filename` so the avatar lands next to the card JSON).
+fn sanitize_filename_safe(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .replace(' ', "_")
+}
+
+/// Make a string safe to drop into a `Content-Disposition: filename="..."`
+/// header value. Strips CR/LF, control bytes, `"`, `\`, `/`, `;` and anything
+/// outside printable ASCII; truncates to 128 chars. Returns `"unknown"` when
+/// the input is empty or sanitizes to empty.
+fn sanitize_attachment_name(name: &str) -> String {
+    const MAX: usize = 128;
+    let sanitized: String = name
+        .chars()
+        .filter(|&c| {
+            let b = c as u32;
+            (0x20..=0x7e).contains(&b) && !matches!(c, '"' | '\\' | '/' | ';')
+        })
+        .take(MAX)
+        .collect();
+    if sanitized.trim().is_empty() {
+        "unknown".to_owned()
+    } else {
+        sanitized.trim().to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_attachment_name;
+
+    #[test]
+    fn strips_header_injection_payloads() {
+        // CR/LF stripped — the rest is printable ASCII that the filter
+        // passes through. The point of sanitization is to prevent the
+        // *injection vector* (CR/LF and the surrounding quote), not to
+        // strip every character that looks like a header.
+        assert_eq!(
+            sanitize_attachment_name("foo\r\nSet-Cookie: x"),
+            "fooSet-Cookie: x"
+        );
+        assert_eq!(sanitize_attachment_name("a\"b"), "ab");
+        assert_eq!(sanitize_attachment_name("a/b\\c"), "abc");
+        assert_eq!(sanitize_attachment_name("semi;colon"), "semicolon");
+        // Pure CRLF input falls back to the "unknown" placeholder.
+        assert_eq!(sanitize_attachment_name("\r\n"), "unknown");
+    }
+
+    #[test]
+    fn truncates_long_names() {
+        let long = "a".repeat(200);
+        assert_eq!(sanitize_attachment_name(&long).len(), 128);
+    }
+
+    #[test]
+    fn empty_or_all_unsafe_falls_back() {
+        assert_eq!(sanitize_attachment_name(""), "unknown");
+        assert_eq!(sanitize_attachment_name("\r\n\";\\"), "unknown");
+        assert_eq!(sanitize_attachment_name("   "), "unknown");
+    }
+
+    #[test]
+    fn preserves_normal_names() {
+        assert_eq!(sanitize_attachment_name("Suwan Ning"), "Suwan Ning");
+        assert_eq!(sanitize_attachment_name("character_v2"), "character_v2");
+        assert_eq!(sanitize_attachment_name("テスト"), "unknown");
     }
 }

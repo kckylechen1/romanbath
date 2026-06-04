@@ -67,6 +67,11 @@ impl_prop_kind!(
 impl HasPropKind for Vec<String> {
     const PROP_KIND: PropKind = PropKind::StringArray;
 }
+// `Vec<PathBuf>` serializes as a TOML string array; the dashboard renders
+// it the same way as `Vec<String>`.
+impl HasPropKind for Vec<std::path::PathBuf> {
+    const PROP_KIND: PropKind = PropKind::StringArray;
+}
 
 // The per-category provider-ref newtypes (defined in `crate::providers`)
 // serialize as plain strings; the schema-tooling layer treats them as

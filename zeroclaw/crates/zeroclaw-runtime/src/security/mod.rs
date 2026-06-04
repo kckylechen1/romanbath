@@ -60,7 +60,6 @@ pub use nevis::{NevisAuthProvider, NevisIdentity};
 // Prompt injection defense exports
 #[allow(unused_imports)]
 pub use leak_detector::{LeakDetector, LeakResult};
-#[allow(unused_imports)]
 
 /// Redact sensitive values for safe logging. Shows first 4 characters + "***" suffix.
 /// Uses char-boundary-safe indexing to avoid panics on multi-byte UTF-8 strings.

@@ -23,10 +23,11 @@ Every such field is now banned by this rule.
 ### Forcing mechanism — what happens when you violate
 
 Adding a duplicate state field is an automatic-revert-on-detect change. The
-pre-push gate runs `dev/ci.sh dry-check`. If it fires, the maintainer will
-`git reset --hard` your branch back to the prior good state, and the time you
-spent is wasted. Save yourself the burn: do not write the duplicate in the
-first place.
+pre-push gate runs `cargo fmt --all -- --check`, `cargo clippy --all-targets
+-- -D warnings`, and the full test matrix (`./dev/ci.sh all` is the canonical
+wrapper). If a check fires, the maintainer will `git reset --hard` your
+branch back to the prior good state, and the time you spent is wasted. Save
+yourself the burn: do not write the duplicate in the first place.
 
 ### Pre-edit ritual — before any new struct field, channel/handle field, schema field, config entry
 
@@ -117,7 +118,6 @@ Every workspace crate carries a stability tier per the Microkernel Architecture 
 | `zeroclaw-gateway` | Experimental | Separate binary at v0.9.0 |
 | `zeroclaw-tui` | Experimental | TUI onboarding wizard |
 | `zeroclaw-plugins` | Experimental | WASM plugin system — foundation for v1.0.0 plugin ecosystem |
-| `zeroclaw-hardware` | Experimental | USB discovery, peripherals, serial |
 | `zeroclaw-macros` | Beta | Tightly coupled to config schema |
 
 **Tiers**: Stable = covered by breaking-change policy. Beta = breaking changes permitted in MINOR with changelog notes. Experimental = no stability guarantee.
@@ -140,7 +140,6 @@ Tiers are promoted, never demoted, through deliberate team decision.
 - `crates/zeroclaw-memory/` — memory backends (markdown, sqlite, embeddings, vector merge)
 - `crates/zeroclaw-infra/` — shared infrastructure (debounce, session, stall watchdog)
 - `crates/zeroclaw-gateway/` — webhook/gateway server (separate binary)
-- `crates/zeroclaw-hardware/` — USB discovery, peripherals, serial, GPIO
 - `crates/zeroclaw-tui/` — TUI onboarding wizard
 - `crates/zeroclaw-plugins/` — WASM plugin system
 - `crates/zeroclaw-tool-call-parser/` — tool call parsing
@@ -183,6 +182,33 @@ Branch/commit/PR rules:
 - Do not suppress unused production code with underscore prefixes or `#[allow(dead_code)]`; delete it, wire it into behavior, or track a follow-up issue. Reserve underscore names for required but intentionally unused API, trait, or callback parameters.
 - Do not leave `unwrap()` / `expect()` in production paths; propagate errors or document the invariant that makes panic impossible.
 - Do not include personal identity or sensitive information in test data, examples, docs, or commits.
+
+## Sandbox deprecation
+
+All OS-level sandbox backends (Docker, Firejail, Bubblewrap, Landlock,
+Seatbelt) were removed. `create_sandbox` in
+`crates/zeroclaw-runtime/src/security/detect.rs` now unconditionally
+returns `NoopSandbox`. The `SandboxConfig` fields
+(`enabled`, `backend`) remain on the schema for backward compatibility
+and are tolerated silently — except that `create_sandbox` emits:
+
+- a one-shot global `WARN` on first call (so every operator sees the
+  notice at least once in the log), and
+- a per-call `WARN` whenever the caller's `SandboxConfig` shows explicit
+  sandbox intent (`enabled = Some(true)` or a non-`None`/`Auto` backend).
+
+Consequences for operators:
+
+- Agent tool execution is no longer OS-isolated. The agent runtime
+  workspace is the only remaining boundary.
+- `[risk_profiles.*].sandbox_enabled` and `sandbox_backend` config keys
+  are ignored at runtime. Remove them from your config to silence the
+  per-call WARN.
+- Do not introduce a new dependency on sandbox isolation when adding
+  features. If a future feature genuinely needs OS-level isolation, it
+  must be added as a new trait implementation on `Sandbox` (not by
+  reviving a removed backend), and the new path must be flagged in this
+  section.
 
 ## Skills
 

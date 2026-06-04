@@ -5226,6 +5226,28 @@ pub struct GatewayConfig {
     /// Default: 600s (10 minutes).
     #[serde(default = "default_gateway_long_running_request_timeout_secs")]
     pub long_running_request_timeout_secs: u64,
+
+    /// Allowlist of session working directories for the `/ws/chat` endpoint.
+    ///
+    /// A paired client may request a per-session `cwd` via the `?cwd=` query
+    /// parameter or the first `connect` frame. Without an entry here, the
+    /// request is rejected and the session falls back to the gateway's
+    /// `data_dir` workspace — **never** the requested path. This is the only
+    /// boundary on where agent file/shell tools operate after the sandbox
+    /// backends were removed; treat it as a security gate.
+    ///
+    /// Each entry is an absolute path. Entries are **canonicalized at config
+    /// load time** (see `Config::load_or_init`); symlinks and `.`/`..` are
+    /// resolved once, then matched component-wise against the requested cwd
+    /// (which is canonicalized in-flight on the blocking pool — see
+    /// `resolve_session_cwd`). Bad entries are skipped with a startup WARN.
+    /// Globs and string-prefix matching are not supported — the requested
+    /// cwd must be a child of one of these directories.
+    ///
+    /// Default: empty (deny all client-supplied cwd). Operators that need to
+    /// operate outside `data_dir` must enumerate the permitted roots here.
+    #[serde(default)]
+    pub allowed_session_cwds: Vec<PathBuf>,
 }
 
 fn default_gateway_port() -> u16 {
@@ -5294,6 +5316,7 @@ impl Default for GatewayConfig {
             tls: None,
             request_timeout_secs: default_gateway_request_timeout_secs(),
             long_running_request_timeout_secs: default_gateway_long_running_request_timeout_secs(),
+            allowed_session_cwds: Vec::new(),
         }
     }
 }
@@ -13800,6 +13823,42 @@ impl Config {
             config.config_path = config_path.clone();
             config.data_dir = workspace_dir;
 
+            // Canonicalize the workspace and the gateway cwd-allowlist once
+            // at config load. The gateway runtime now trusts these as the
+            // canonical form and does no per-request canonicalize on the
+            // daemon's hot path (only the client-supplied cwd, which is
+            // canonicalized on the blocking pool). Bad allowlist entries are
+            // skipped with a WARN; the operator's effective allowlist
+            // becomes the surviving entries.
+            if let Ok(canonical_data) = std::fs::canonicalize(&config.data_dir) {
+                config.data_dir = canonical_data;
+            }
+            config.gateway.allowed_session_cwds = config
+                .gateway
+                .allowed_session_cwds
+                .into_iter()
+                .filter_map(|entry| match std::fs::canonicalize(&entry) {
+                    Ok(canonical) => Some(canonical),
+                    Err(e) => {
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Note
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                            .with_attrs(::serde_json::json!({
+                                "entry": entry.display().to_string(),
+                                "error": format!("{}", e),
+                            })),
+                            "gateway.allowed_session_cwds entry could not be canonicalized \
+                             at config load; the entry is dropped from the effective allowlist"
+                        );
+                        None
+                    }
+                })
+                .collect();
+
             // Ensure each configured skill-bundle's resolved directory
             // exists on disk so the bundle has somewhere for skills to
             // land immediately. Idempotent.
@@ -13857,6 +13916,36 @@ impl Config {
                 data_dir: workspace_dir,
                 ..Config::default()
             };
+            // Canonicalize the workspace and the gateway cwd-allowlist once
+            // at config load. Mirror of the load-existing branch above.
+            if let Ok(canonical_data) = std::fs::canonicalize(&config.data_dir) {
+                config.data_dir = canonical_data;
+            }
+            config.gateway.allowed_session_cwds = config
+                .gateway
+                .allowed_session_cwds
+                .into_iter()
+                .filter_map(|entry| match std::fs::canonicalize(&entry) {
+                    Ok(canonical) => Some(canonical),
+                    Err(e) => {
+                        ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Note
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                            .with_attrs(::serde_json::json!({
+                                "entry": entry.display().to_string(),
+                                "error": format!("{}", e),
+                            })),
+                            "gateway.allowed_session_cwds entry could not be canonicalized \
+                             at config load; the entry is dropped from the effective allowlist"
+                        );
+                        None
+                    }
+                })
+                .collect();
             // Save defaults FIRST so env-injected values never reach the
             // freshly-created config file. Env overrides apply post-save to
             // populate the in-memory Config for the running process.
@@ -18220,6 +18309,7 @@ allowed_numbers = ["+1", "+2"]
             tls: None,
             request_timeout_secs: 30,
             long_running_request_timeout_secs: 600,
+            allowed_session_cwds: vec!["/srv/projects".into()],
         };
         let toml_str = toml::to_string(&g).unwrap();
         let parsed: GatewayConfig = toml::from_str(&toml_str).unwrap();
@@ -18235,6 +18325,10 @@ allowed_numbers = ["+1", "+2"]
         assert_eq!(parsed.rate_limit_max_keys, 2048);
         assert_eq!(parsed.idempotency_ttl_secs, 600);
         assert_eq!(parsed.idempotency_max_keys, 4096);
+        assert_eq!(
+            parsed.allowed_session_cwds,
+            vec![PathBuf::from("/srv/projects")]
+        );
     }
 
     #[test]
@@ -19045,8 +19139,13 @@ wire_api = "ws"
         // (the shared databases root); the install root holds
         // `config.toml`. No synthesized `agents/default/workspace/` is
         // created at boot — `default` is migration-only, and per-agent
-        // workspaces are created lazily at agent-loop entry.
-        assert_eq!(config.data_dir, workspace_dir.join("data"));
+        // workspaces are created lazily at agent-loop entry. `data_dir`
+        // is canonicalized at config load (so on macOS, `/var/...`
+        // resolves to `/private/var/...`).
+        assert_eq!(
+            config.data_dir,
+            workspace_dir.canonicalize().unwrap().join("data")
+        );
         assert_eq!(config.config_path, workspace_dir.join("config.toml"));
         assert!(workspace_dir.join("config.toml").exists());
         assert!(
@@ -19087,7 +19186,11 @@ wire_api = "ws"
         // ZEROCLAW_WORKSPACE env var (deprecated alias) resolved to the
         // legacy config layout where the install root is the parent of
         // the env-var path; data sits at `<install>/data/`.
-        assert_eq!(config.data_dir, legacy_config_dir.join("data"));
+        // Canonicalized at config load.
+        assert_eq!(
+            config.data_dir,
+            legacy_config_dir.canonicalize().unwrap().join("data")
+        );
         assert_eq!(config.config_path, legacy_config_path);
         assert!(config.config_path.exists());
 
@@ -19133,8 +19236,11 @@ default_model = "legacy-model"
         // V3: `config.data_dir` resolves to `<install>/data/` under
         // the install root (the directory holding the existing
         // `config.toml`), regardless of the ZEROCLAW_WORKSPACE
-        // (deprecated) override.
-        assert_eq!(config.data_dir, legacy_config_dir.join("data"));
+        // (deprecated) override. Canonicalized at config load.
+        assert_eq!(
+            config.data_dir,
+            legacy_config_dir.canonicalize().unwrap().join("data")
+        );
         assert_eq!(config.config_path, legacy_config_path);
         assert_eq!(
             config
@@ -19247,7 +19353,11 @@ default_model = "persisted-profile"
         // ZEROCLAW_WORKSPACE env var (deprecated alias for
         // ZEROCLAW_DATA_DIR) pinned the install root, so data_dir is
         // `<install>/data/` derived from the resolved root.
-        assert_eq!(config.data_dir, workspace_dir.join("data"));
+        // Canonicalized at config load.
+        assert_eq!(
+            config.data_dir,
+            workspace_dir.canonicalize().unwrap().join("data")
+        );
         assert_eq!(config.config_path, config_path);
         assert_eq!(
             config

@@ -14,11 +14,22 @@ impl CardManager {
     }
 
     /// Default cards directory: `~/.zeroclaw/characters/`
+    ///
+    /// Inherent associated function (not `Default::default`) because
+    /// construction can fail on directories resolution — `#[allow]` keeps
+    /// the public name stable while satisfying clippy's `should_implement_trait`
+    /// lint.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> anyhow::Result<Self> {
         let home = directories::UserDirs::new()
             .map(|d| d.home_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         Ok(Self::new(home.join(".zeroclaw").join("characters")))
+    }
+
+    /// Storage directory for character cards.
+    pub fn cards_dir(&self) -> &Path {
+        &self.cards_dir
     }
 
     /// Import a character card from a file path (PNG, WEBP, or JSON).
@@ -94,17 +105,17 @@ impl CardManager {
         for entry in fs::read_dir(&self.cards_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    // Try to read the actual name from the card
-                    if let Ok(bytes) = fs::read(&path) {
-                        if let Ok(card) = serde_json::from_slice::<CharacterCard>(&bytes) {
-                            names.push(card.data.name);
-                            continue;
-                        }
-                    }
-                    names.push(stem.to_string());
+            if path.extension().and_then(|e| e.to_str()) == Some("json")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                // Try to read the actual name from the card
+                if let Ok(bytes) = fs::read(&path)
+                    && let Ok(card) = serde_json::from_slice::<CharacterCard>(&bytes)
+                {
+                    names.push(card.data.name);
+                    continue;
                 }
+                names.push(stem.to_string());
             }
         }
         names.sort();

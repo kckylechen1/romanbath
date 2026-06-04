@@ -57,12 +57,7 @@ pub fn decay_score(entry: &MemoryEntry) -> f64 {
         .last_access
         .as_ref()
         .and_then(|s| s.parse::<chrono::DateTime<Utc>>().ok())
-        .or_else(|| {
-            entry
-                .timestamp
-                .parse::<chrono::DateTime<Utc>>()
-                .ok()
-        })
+        .or_else(|| entry.timestamp.parse::<chrono::DateTime<Utc>>().ok())
         .unwrap_or(now);
 
     let age_days = (now - reference).num_seconds().max(0) as f64 / 86_400.0;
@@ -160,10 +155,7 @@ pub fn hybrid_score(
     symbolic_scores: &HashMap<String, f64>,
     weights: &HybridWeights,
 ) -> HashMap<String, HybridScore> {
-    let all_ids: HashSet<&String> = fts_scores
-        .keys()
-        .chain(symbolic_scores.keys())
-        .collect();
+    let all_ids: HashSet<&String> = fts_scores.keys().chain(symbolic_scores.keys()).collect();
 
     let mut out: HashMap<String, HybridScore> = HashMap::new();
 
@@ -175,8 +167,7 @@ pub fn hybrid_score(
             .map(|e| decay_score(e))
             .unwrap_or(0.0);
 
-        let final_score =
-            weights.fts * fs + weights.symbolic * ss + weights.decay * ds;
+        let final_score = weights.fts * fs + weights.symbolic * ss + weights.decay * ds;
 
         out.insert(
             id.clone(),

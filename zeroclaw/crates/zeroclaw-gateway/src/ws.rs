@@ -368,7 +368,25 @@ async fn handle_socket(
         }
     }
 
-    let session_cwd = match resolve_session_cwd(requested_cwd.as_deref(), &config.data_dir) {
+    // `resolve_session_cwd` does synchronous `std::fs::canonicalize` on the
+    // client-supplied cwd. The default workspace and the allowlist are
+    // already canonical (Config::load_or_init resolves them at config load),
+    // so the only blocking syscall is the one for the requested path. Run
+    // the call on the blocking pool so the async Tokio runtime thread is
+    // never stalled on that single realpath() (slow disk or network FS
+    // could otherwise pin a worker).
+    let session_cwd = match tokio::task::spawn_blocking({
+        let requested = requested_cwd.clone();
+        let data_dir = config.data_dir.clone();
+        let allowed = config.gateway.allowed_session_cwds.clone();
+        move || resolve_session_cwd(requested.as_deref(), &data_dir, &allowed)
+    })
+    .await
+    .unwrap_or_else(|join_err| {
+        Err(anyhow::Error::msg(format!(
+            "ws session cwd resolution task panicked: {join_err}"
+        )))
+    }) {
         Ok(cwd) => cwd,
         Err(e) => {
             let err = serde_json::json!({
@@ -434,7 +452,13 @@ async fn handle_socket(
 
     // ── Character card injection ─────────────────────────────────────
     if let Some(ref char_name) = character_name {
-        match inject_character_card(&mut agent, char_name, character_mode.as_deref(), user_name.as_deref(), &config.data_dir) {
+        match inject_character_card(
+            &mut agent,
+            char_name,
+            character_mode.as_deref(),
+            user_name.as_deref(),
+            &config.data_dir,
+        ) {
             Ok(Some(first_mes)) => {
                 // Send first_mes as initial assistant message
                 let chunk = serde_json::json!({
@@ -450,9 +474,13 @@ async fn handle_socket(
             }
             Ok(None) => {} // No first_mes, that's fine
             Err(e) => {
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                    .with_attrs(::serde_json::json!({"character": char_name, "error": e.to_string()})),
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                        .with_attrs(
+                            ::serde_json::json!({"character": char_name, "error": e.to_string()})
+                        ),
                     "Failed to load character card (continuing without persona)"
                 );
             }
@@ -714,26 +742,60 @@ async fn handle_socket(
 fn resolve_session_cwd(
     requested_cwd: Option<&str>,
     default_workspace: &Path,
+    allowed_session_cwds: &[PathBuf],
 ) -> anyhow::Result<PathBuf> {
-    let cwd = requested_cwd
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default_workspace.to_path_buf());
-    std::fs::canonicalize(&cwd).map_err(|e| {
+    // No client-supplied cwd → use the gateway's own data_dir. The allowlist
+    // only constrains what a paired client can request. `default_workspace` is
+    // already canonical (Config::load_or_init resolves it once at startup).
+    let Some(raw) = requested_cwd else {
+        return Ok(default_workspace.to_path_buf());
+    };
+
+    let canonical = std::fs::canonicalize(raw).map_err(|e| {
         ::zeroclaw_log::record!(
             WARN,
             ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
                 .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                 .with_attrs(::serde_json::json!({
-                    "cwd": cwd.display().to_string(),
+                    "cwd": raw,
                     "error": format!("{}", e),
                 })),
-            "ws session cwd rejected"
+            "ws session cwd canonicalize failed"
         );
-        anyhow::Error::msg(format!(
-            "cwd is not a usable directory ({}): {e}",
-            cwd.display()
-        ))
-    })
+        anyhow::Error::msg(format!("cwd is not a usable directory ({raw}): {e}"))
+    })?;
+
+    if !cwd_in_allowlist(&canonical, allowed_session_cwds) {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "cwd": canonical.display().to_string(),
+                    "allowed_session_cwds": allowed_session_cwds,
+                })),
+            "ws session cwd denied (not in allowlist)"
+        );
+        return Err(anyhow::Error::msg(format!(
+            "cwd `{}` is not in gateway.allowed_session_cwds; add the directory to \
+             [gateway].allowed_session_cwds in config.toml, or omit the cwd query \
+             parameter to fall back to the gateway default workspace",
+            canonical.display()
+        )));
+    }
+
+    Ok(canonical)
+}
+
+/// Component-wise prefix check (`Path::starts_with` matches on path
+/// components, not raw string prefixes — so `/foo/barbaz` does not match
+/// an allowlist entry of `/foo/bar`). Both the requested cwd and the
+/// allowlist entries are canonicalized at config load (allowlist) or on
+/// the blocking pool (requested cwd) — no canonicalize happens here.
+fn cwd_in_allowlist(canonical_cwd: &Path, allowed: &[PathBuf]) -> bool {
+    allowed
+        .iter()
+        .any(|allowed_root| canonical_cwd.starts_with(allowed_root))
 }
 
 fn session_queue_ws_error_code(error: &crate::session_queue::SessionQueueError) -> &'static str {
@@ -780,7 +842,9 @@ fn inject_character_card(
     data_dir: &std::path::Path,
 ) -> anyhow::Result<Option<String>> {
     let mgr = zeroclaw_cards::CardManager::default()?;
-    let card = mgr.load(character_name).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let card = mgr
+        .load(character_name)
+        .map_err(|e| anyhow::Error::msg(format!("{e}")))?;
 
     let uname = user_name.unwrap_or("User");
     let char_mode = mode.unwrap_or("play");
@@ -816,7 +880,9 @@ fn inject_character_card(
         None
     } else {
         // Apply template substitution to first_mes
-        let rendered = card.data.first_mes
+        let rendered = card
+            .data
+            .first_mes
             .replace("{{char}}", &card.data.name)
             .replace("{{user}}", uname);
         Some(rendered)
@@ -1556,9 +1622,14 @@ mod tests {
     fn resolve_session_cwd_uses_requested_cwd() {
         let requested = tempfile::tempdir().unwrap();
         let fallback = tempfile::tempdir().unwrap();
+        let allowed = vec![requested.path().canonicalize().unwrap()];
 
-        let resolved =
-            resolve_session_cwd(Some(requested.path().to_str().unwrap()), fallback.path()).unwrap();
+        let resolved = resolve_session_cwd(
+            Some(requested.path().to_str().unwrap()),
+            &fallback.path().canonicalize().unwrap(),
+            &allowed,
+        )
+        .unwrap();
 
         assert_eq!(resolved, requested.path().canonicalize().unwrap());
     }
@@ -1567,7 +1638,8 @@ mod tests {
     fn resolve_session_cwd_uses_default_workspace_without_request() {
         let fallback = tempfile::tempdir().unwrap();
 
-        let resolved = resolve_session_cwd(None, fallback.path()).unwrap();
+        let resolved =
+            resolve_session_cwd(None, &fallback.path().canonicalize().unwrap(), &[]).unwrap();
 
         assert_eq!(resolved, fallback.path().canonicalize().unwrap());
     }
@@ -1577,10 +1649,49 @@ mod tests {
         let fallback = tempfile::tempdir().unwrap();
         let missing = fallback.path().join("missing");
 
-        let err = resolve_session_cwd(Some(missing.to_str().unwrap()), fallback.path())
-            .expect_err("missing cwd should be rejected");
+        let err = resolve_session_cwd(
+            Some(missing.to_str().unwrap()),
+            &fallback.path().canonicalize().unwrap(),
+            &[],
+        )
+        .expect_err("missing cwd should be rejected");
 
         assert!(err.to_string().contains("cwd is not a usable directory"));
+    }
+
+    #[test]
+    fn resolve_session_cwd_rejects_cwd_outside_allowlist() {
+        let requested = tempfile::tempdir().unwrap();
+        let fallback = tempfile::tempdir().unwrap();
+        // Allowlist points at an unrelated path; the requested cwd is
+        // canonical and exists but is not in the allowlist.
+        let unrelated = tempfile::tempdir().unwrap();
+        let allowed = vec![unrelated.path().canonicalize().unwrap()];
+
+        let err = resolve_session_cwd(
+            Some(requested.path().to_str().unwrap()),
+            &fallback.path().canonicalize().unwrap(),
+            &allowed,
+        )
+        .expect_err("cwd outside allowlist should be rejected");
+
+        assert!(err.to_string().contains("allowed_session_cwds"));
+    }
+
+    #[test]
+    fn resolve_session_cwd_rejects_any_cwd_when_allowlist_empty() {
+        let requested = tempfile::tempdir().unwrap();
+        let fallback = tempfile::tempdir().unwrap();
+
+        // No allowed_session_cwds entries — every client-supplied cwd is denied.
+        let err = resolve_session_cwd(
+            Some(requested.path().to_str().unwrap()),
+            &fallback.path().canonicalize().unwrap(),
+            &[],
+        )
+        .expect_err("empty allowlist should deny client-supplied cwd");
+
+        assert!(err.to_string().contains("allowed_session_cwds"));
     }
 
     #[test]

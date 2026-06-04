@@ -1330,8 +1330,7 @@ impl AuthProviderFlow for XaiFlow {
         device_code: bool,
         _import: Option<&std::path::Path>,
     ) -> Result<()> {
-        let endpoints =
-            crate::auth::xai_oauth::discover_endpoints(ctx.client).await;
+        let endpoints = crate::auth::xai_oauth::discover_endpoints(ctx.client).await;
 
         if device_code {
             let device = crate::auth::xai_oauth::start_device_code_flow(
@@ -1341,9 +1340,7 @@ impl AuthProviderFlow for XaiFlow {
             )
             .await
             .map_err(|e| {
-                println!(
-                    "xAI device-code flow unavailable: {e}. Falling back to browser flow."
-                );
+                println!("xAI device-code flow unavailable: {e}. Falling back to browser flow.");
                 e
             })
             .ok();
@@ -1407,8 +1404,7 @@ impl AuthProviderFlow for XaiFlow {
             None => return Ok(RefreshStatus::NoProfile),
         };
 
-        let endpoints =
-            crate::auth::xai_oauth::discover_endpoints(ctx.client).await;
+        let endpoints = crate::auth::xai_oauth::discover_endpoints(ctx.client).await;
 
         let refreshed = crate::auth::xai_oauth::refresh_token(
             ctx.client,
@@ -1417,7 +1413,7 @@ impl AuthProviderFlow for XaiFlow {
             &endpoints.token_url,
         )
         .await
-        .map_err(|e| anyhow::anyhow!("xAI token refresh failed: {}", e))?;
+        .map_err(|e| anyhow::Error::msg(format!("xAI token refresh failed: {e}")))?;
 
         let profile_name = profile.profile_name.clone();
         ctx.auth_service

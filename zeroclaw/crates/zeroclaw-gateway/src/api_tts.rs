@@ -5,10 +5,10 @@
 
 use super::AppState;
 use axum::{
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
-    Json,
 };
 use serde::Deserialize;
 

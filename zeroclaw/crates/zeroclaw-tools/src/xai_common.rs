@@ -24,24 +24,24 @@ pub fn http_client(timeout_secs: u64) -> reqwest::Client {
 /// Returns `(auth_token, base_url)`.
 pub fn resolve_credentials(fallback_api_key: Option<&str>) -> Result<(String, String), String> {
     // Try OAuth token first
-    if let Ok(token) = std::env::var("XAI_OAUTH_TOKEN") {
-        if !token.trim().is_empty() {
-            return Ok((token, "https://api.x.ai/v1".to_string()));
-        }
+    if let Ok(token) = std::env::var("XAI_OAUTH_TOKEN")
+        && !token.trim().is_empty()
+    {
+        return Ok((token, "https://api.x.ai/v1".to_string()));
     }
 
     // Fallback to API key env var
-    if let Ok(api_key) = std::env::var("XAI_API_KEY") {
-        if !api_key.trim().is_empty() {
-            return Ok((api_key, "https://api.x.ai/v1".to_string()));
-        }
+    if let Ok(api_key) = std::env::var("XAI_API_KEY")
+        && !api_key.trim().is_empty()
+    {
+        return Ok((api_key, "https://api.x.ai/v1".to_string()));
     }
 
     // Try config-provided fallback key
-    if let Some(key) = fallback_api_key {
-        if !key.trim().is_empty() {
-            return Ok((key.trim().to_string(), "https://api.x.ai/v1".to_string()));
-        }
+    if let Some(key) = fallback_api_key
+        && !key.trim().is_empty()
+    {
+        return Ok((key.trim().to_string(), "https://api.x.ai/v1".to_string()));
     }
 
     Err("XAI_OAUTH_TOKEN or XAI_API_KEY environment variable not set, and no fallback API key provided".to_string())

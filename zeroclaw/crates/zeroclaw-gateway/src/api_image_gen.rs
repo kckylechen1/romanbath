@@ -6,10 +6,10 @@
 
 use super::AppState;
 use axum::{
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
-    Json,
 };
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,11 @@ pub async fn handle_image_gen(
 
     let resolution = if req.resolution == "2k" { "2k" } else { "1k" };
 
-    let api_key = state.config.read().first_model_provider().and_then(|e| e.api_key.clone());
+    let api_key = state
+        .config
+        .read()
+        .first_model_provider()
+        .and_then(|e| e.api_key.clone());
 
     match generate_xai_image(&req.prompt, resolution, api_key.as_deref()).await {
         Ok(data_url) => (
@@ -97,7 +101,11 @@ pub async fn handle_image_gen(
     }
 }
 
-async fn generate_xai_image(prompt: &str, resolution: &str, api_key: Option<&str>) -> Result<String, String> {
+async fn generate_xai_image(
+    prompt: &str,
+    resolution: &str,
+    api_key: Option<&str>,
+) -> Result<String, String> {
     let (auth_token, base_url) = resolve_xai_credentials(api_key)?;
 
     let url = format!("{}/images/generations", base_url);

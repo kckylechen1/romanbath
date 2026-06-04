@@ -104,8 +104,7 @@ impl MemoryEnricher {
         entry_text: &str,
         recall_count: i64,
     ) -> anyhow::Result<bool> {
-        let system_prompt =
-            "You are a memory consolidation evaluator. Decide whether a memory should be \
+        let system_prompt = "You are a memory consolidation evaluator. Decide whether a memory should be \
              promoted from \"raw\" to \"consolidated\" tier based on its significance and \
              retrieval patterns. Reply ONLY \"yes\" or \"no\".";
 
@@ -150,9 +149,7 @@ impl MemoryEnricher {
              Output ONLY valid JSON, no other text."
         );
 
-        let user_msg = format!(
-            "Consolidated memories from the past week:\n\n{memories}"
-        );
+        let user_msg = format!("Consolidated memories from the past week:\n\n{memories}");
 
         let response = self
             .distill_provider
@@ -200,10 +197,7 @@ fn parse_extract_response(raw: &str) -> anyhow::Result<(String, Vec<String>, Vec
         })
         .unwrap_or_default();
 
-    let importance = v["importance"]
-        .as_f64()
-        .unwrap_or(0.7)
-        .clamp(0.0, 1.0);
+    let importance = v["importance"].as_f64().unwrap_or(0.7).clamp(0.0, 1.0);
 
     Ok((summary, keywords, entities, importance))
 }

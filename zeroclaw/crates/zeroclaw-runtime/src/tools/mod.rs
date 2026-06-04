@@ -68,8 +68,6 @@ pub use zeroclaw_tools::hardware_memory_map::HardwareMemoryMapTool;
 pub use zeroclaw_tools::hardware_memory_read::HardwareMemoryReadTool;
 pub use zeroclaw_tools::http_request::HttpRequestTool;
 pub use zeroclaw_tools::image_gen::ImageGenTool;
-pub use zeroclaw_tools::xai_image_gen::XaiImageGenTool;
-pub use zeroclaw_tools::xai_tts::XaiTtsTool;
 pub use zeroclaw_tools::image_info::ImageInfoTool;
 pub use zeroclaw_tools::knowledge_tool::KnowledgeTool;
 pub use zeroclaw_tools::llm_task::LlmTaskTool;
@@ -103,6 +101,8 @@ pub use zeroclaw_tools::weather_tool::WeatherTool;
 pub use zeroclaw_tools::web_fetch::WebFetchTool;
 pub use zeroclaw_tools::web_search_tool::WebSearchTool;
 pub use zeroclaw_tools::wrappers::{PathGuardedTool, RateLimitedTool};
+pub use zeroclaw_tools::xai_image_gen::XaiImageGenTool;
+pub use zeroclaw_tools::xai_tts::XaiTtsTool;
 
 // Traits from zeroclaw-api
 pub use zeroclaw_api::schema::{CleaningStrategy, SchemaCleanr};
@@ -774,23 +774,22 @@ pub fn all_tools_with_runtime(
     if let Some(xai_key) = root_config
         .first_model_provider()
         .and_then(|p| p.api_key.as_deref())
+        && !xai_key.trim().is_empty()
     {
-        if !xai_key.trim().is_empty() {
-            tool_arcs.push(Arc::new(XaiImageGenTool::new(
-                security.clone(),
-                workspace_dir.to_path_buf(),
-                "grok-imagine-image".to_string(),
-                "1k".to_string(),
-                Some(xai_key.to_string()),
-            )));
-            tool_arcs.push(Arc::new(XaiTtsTool::new(
-                security.clone(),
-                workspace_dir.to_path_buf(),
-                "ara".to_string(),
-                "en-US".to_string(),
-                Some(xai_key.to_string()),
-            )));
-        }
+        tool_arcs.push(Arc::new(XaiImageGenTool::new(
+            security.clone(),
+            workspace_dir.to_path_buf(),
+            "grok-imagine-image".to_string(),
+            "1k".to_string(),
+            Some(xai_key.to_string()),
+        )));
+        tool_arcs.push(Arc::new(XaiTtsTool::new(
+            security.clone(),
+            workspace_dir.to_path_buf(),
+            "ara".to_string(),
+            "en-US".to_string(),
+            Some(xai_key.to_string()),
+        )));
     }
 
     // File upload tool — enabled iff [file_upload].url is set

@@ -45,7 +45,7 @@ export default defineConfig(({ mode }) => {
       environment: 'jsdom',
       clearMocks: true,
       include: ['**/*.{test,spec}.{ts,tsx}'],
-      exclude: ['node_modules/**', 'dist/**', 'backend/**'],
+      exclude: ['node_modules/**', 'dist/**', 'backend/**', '**/._*'],
     },
     resolve: {
       alias: {

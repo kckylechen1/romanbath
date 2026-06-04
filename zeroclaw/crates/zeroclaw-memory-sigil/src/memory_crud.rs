@@ -4,7 +4,7 @@
 // Uses FTS5 for full-text search and path-based partitioning by character.
 
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::HashMap;
 
 use crate::types::{MemoryCategory, MemoryEntry, MemoryScope, MemorySource};
@@ -156,7 +156,14 @@ pub fn upsert(conn: &mut Connection, entry: &MemoryEntry) -> Result<(), MemoryEr
     tx.execute(
         "INSERT INTO memories_fts(id, path, summary, text, keywords, entities)
          VALUES (?1,?2,?3,?4,?5,?6)",
-        params![entry.id, &entry.path, &clean_summary, &clean_text, kws, ents],
+        params![
+            entry.id,
+            &entry.path,
+            &clean_summary,
+            &clean_text,
+            kws,
+            ents
+        ],
     )?;
 
     tx.commit()?;
@@ -226,9 +233,7 @@ pub fn search_fts(
     let safe_query: String = query
         .chars()
         .filter(|c| {
-            c.is_alphanumeric()
-                || c.is_whitespace()
-                || matches!(c, '"' | '\'' | '-' | '_' | '.')
+            c.is_alphanumeric() || c.is_whitespace() || matches!(c, '"' | '\'' | '-' | '_' | '.')
         })
         .collect();
 
@@ -282,7 +287,10 @@ pub fn search_fts(
         return Ok(HashMap::new());
     }
 
-    let max_score = raw.iter().map(|(_, s)| *s).fold(f64::NEG_INFINITY, f64::max);
+    let max_score = raw
+        .iter()
+        .map(|(_, s)| *s)
+        .fold(f64::NEG_INFINITY, f64::max);
     let max_score = if max_score <= 0.0 { 1.0 } else { max_score };
 
     Ok(raw
@@ -343,8 +351,7 @@ pub fn record_access(
 
     let now = now_utc_iso();
     let query_hash = query.map(fnv1a_hash).unwrap_or_default();
-    let fts_set: std::collections::HashSet<&str> =
-        fts_hits.iter().map(String::as_str).collect();
+    let fts_set: std::collections::HashSet<&str> = fts_hits.iter().map(String::as_str).collect();
 
     let tx = conn.unchecked_transaction()?;
 
@@ -481,6 +488,9 @@ mod crud_tests {
 
         let results = search_fts(&conn, "dark", 10, Some("/chat/test_char/memories")).unwrap();
         eprintln!("FTS with prefix results: {:?}", results);
-        assert!(!results.is_empty(), "FTS search should find 'dark' in entry");
+        assert!(
+            !results.is_empty(),
+            "FTS search should find 'dark' in entry"
+        );
     }
 }

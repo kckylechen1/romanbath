@@ -6,13 +6,11 @@
 //! 3. Model picker (FuzzySelect from catalog)
 //! 4. Persist selection to config
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use console::style;
 use dialoguer::{FuzzySelect, Input, Password};
 use std::io::IsTerminal;
-use zeroclaw_providers::auth::{
-    AuthFlowContext, AuthProvider, AuthProviderFlow, AuthService,
-};
+use zeroclaw_providers::auth::{AuthFlowContext, AuthProvider, AuthProviderFlow, AuthService};
 
 use crate::config::Config;
 
@@ -66,11 +64,9 @@ impl InteractiveProvider {
         }
     }
 
-    fn auth_kind(&self) -> AuthKind {
+    fn auth_kind(self) -> AuthKind {
         match self {
-            Self::Anthropic
-            | Self::OpenRouter
-            | Self::Deepseek => AuthKind::ApiKey,
+            Self::Anthropic | Self::OpenRouter | Self::Deepseek => AuthKind::ApiKey,
             Self::OpenaiCodex | Self::Gemini | Self::Xai => AuthKind::OAuth,
             Self::Ollama => AuthKind::None,
         }
@@ -86,7 +82,7 @@ impl InteractiveProvider {
         }
     }
 
-    fn has_api_key_in_config(&self, config: &Config) -> bool {
+    fn has_api_key_in_config(self, config: &Config) -> bool {
         config
             .get_prop(&format!(
                 "model_providers.{}.default.api_key",
@@ -119,12 +115,9 @@ pub async fn run(
 
     // --set <model>: persist directly and exit
     if let Some(model_id) = set_override {
-        let family = provider_override.unwrap_or_else(|| {
-            config
-                .first_model_provider_type()
-                .unwrap_or("openrouter")
-        });
-        persist_model(config, family, model_id).await?;
+        let family = provider_override
+            .unwrap_or_else(|| config.first_model_provider_type().unwrap_or("openrouter"));
+        Box::pin(persist_model(config, family, model_id)).await?;
         return Ok(());
     }
 
@@ -156,14 +149,21 @@ pub async fn run(
         || provider.has_api_key_in_config(config);
 
     if !is_ready {
-        ensure_authenticated(provider, config, &auth_service, &client, device_code).await?;
+        Box::pin(ensure_authenticated(
+            provider,
+            config,
+            &auth_service,
+            &client,
+            device_code,
+        ))
+        .await?;
     }
 
     // Stage 3: Pick model
     let model = pick_model(provider, config).await?;
 
     // Stage 4: Persist
-    persist_model(config, provider.canonical_family(), &model).await
+    Box::pin(persist_model(config, provider.canonical_family(), &model)).await
 }
 
 /// Pre-compute auth status for all providers in async context.
@@ -184,14 +184,12 @@ async fn compute_auth_statuses(
                     .is_some()
                     || p.has_api_key_in_config(config)
             }
-            AuthKind::OAuth => {
-                auth_service
-                    .get_profile(p.auth_provider_name(), None)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some()
-            }
+            AuthKind::OAuth => auth_service
+                .get_profile(p.auth_provider_name(), None)
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
         };
         results.push((*p, ready));
     }
@@ -222,10 +220,7 @@ async fn pick_provider(
             } else {
                 style("setup needed").dim().to_string()
             };
-            let current = if p
-                .canonical_family()
-                .eq_ignore_ascii_case(&current_family)
-            {
+            let current = if p.canonical_family().eq_ignore_ascii_case(&current_family) {
                 style(" <-- active").dim().to_string()
             } else {
                 String::new()
@@ -260,10 +255,10 @@ async fn ensure_authenticated(
 ) -> Result<()> {
     match provider.auth_kind() {
         AuthKind::None => Ok(()),
-        AuthKind::ApiKey => prompt_api_key(provider, config).await,
-        AuthKind::OAuth => run_oauth_login(provider, config, auth_service, client, device_code)
-            .await
-            .map(|_| ()),
+        AuthKind::ApiKey => Box::pin(prompt_api_key(provider, config)).await,
+        AuthKind::OAuth => {
+            run_oauth_login(provider, config, auth_service, client, device_code).await
+        }
     }
 }
 
@@ -283,8 +278,8 @@ async fn prompt_api_key(provider: InteractiveProvider, config: &mut Config) -> R
         }
     );
 
-    let key = tokio::task::spawn_blocking(|| Password::new().with_prompt("API key").interact())
-        .await??;
+    let key =
+        tokio::task::spawn_blocking(|| Password::new().with_prompt("API key").interact()).await??;
 
     if key.trim().is_empty() {
         bail!("API key cannot be empty");
@@ -292,7 +287,7 @@ async fn prompt_api_key(provider: InteractiveProvider, config: &mut Config) -> R
 
     let prop = format!("model_providers.{family}.default.api_key");
     config.set_prop_persistent(&prop, key.trim())?;
-    config.save().await?;
+    Box::pin(config.save()).await?;
     println!("{} API key saved.", style("OK").green());
     Ok(())
 }
@@ -403,7 +398,7 @@ async fn pick_model(provider: InteractiveProvider, config: &Config) -> Result<St
 async fn persist_model(config: &mut Config, family: &str, model: &str) -> Result<()> {
     let prop = format!("model_providers.{family}.default.model");
     config.set_prop_persistent(&prop, model)?;
-    config.save().await?;
+    Box::pin(config.save()).await?;
     println!(
         "{} Model set to: {} (via {})",
         style("OK").green(),
@@ -432,9 +427,7 @@ fn parse_provider(slug: &str) -> Result<InteractiveProvider> {
     let slug_lower = slug.to_ascii_lowercase();
     for p in InteractiveProvider::all() {
         if p.canonical_family() == slug_lower
-            || p.display_name()
-                .to_ascii_lowercase()
-                .contains(&slug_lower)
+            || p.display_name().to_ascii_lowercase().contains(&slug_lower)
         {
             return Ok(*p);
         }

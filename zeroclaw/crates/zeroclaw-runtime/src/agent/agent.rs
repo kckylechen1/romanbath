@@ -669,11 +669,14 @@ impl Agent {
     }
 
     /// Append a custom section to the system prompt builder (e.g. character card).
-    pub fn add_custom_system_section(&mut self, name: impl Into<String>, content: impl Into<String>) {
-        self.prompt_builder = std::mem::take(&mut self.prompt_builder)
-            .add_section(Box::new(
-                crate::agent::prompt::CustomSection::new(name, content),
-            ));
+    pub fn add_custom_system_section(
+        &mut self,
+        name: impl Into<String>,
+        content: impl Into<String>,
+    ) {
+        self.prompt_builder = std::mem::take(&mut self.prompt_builder).add_section(Box::new(
+            crate::agent::prompt::CustomSection::new(name, content),
+        ));
     }
 
     /// Hydrate the agent with a full `ConversationMessage` history (e.g. restored
