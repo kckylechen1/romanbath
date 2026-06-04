@@ -775,7 +775,8 @@ pub fn all_tools_with_runtime(
     let xai_fallback_key = root_config
         .first_model_provider()
         .and_then(|p| p.api_key.as_deref());
-    let xai_has_credentials = zeroclaw_tools::xai_common::resolve_credentials(xai_fallback_key).is_ok();
+    let xai_has_credentials =
+        zeroclaw_tools::xai_common::resolve_credentials(xai_fallback_key).is_ok();
 
     if xai_has_credentials {
         let xai_key = xai_fallback_key.map(std::string::ToString::to_string);
@@ -1009,12 +1010,12 @@ pub fn all_tools_with_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
     use tempfile::TempDir;
     use zeroclaw_config::schema::{
         BrowserConfig, Config, MemoryConfig, ModelProviderConfig, XaiModelProviderConfig,
     };
-    use std::ffi::OsString;
-    use std::sync::Mutex;
 
     static XAI_ENV_MUTEX: Mutex<()> = Mutex::new(());
 
