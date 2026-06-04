@@ -22,6 +22,24 @@ pub struct XaiImageGenTool {
 }
 
 impl XaiImageGenTool {
+    fn output_path_to_relative(output_path: &Path, workspace_dir: &Path) -> String {
+        output_path
+            .strip_prefix(workspace_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| output_path.to_string_lossy().to_string())
+    }
+
+    fn output_value(output_path: &Path, workspace_dir: &Path) -> String {
+        let relative = Self::output_path_to_relative(output_path, workspace_dir);
+        if relative.starts_with('/') {
+            relative.trim_start_matches('/').to_string()
+        } else {
+            relative
+        }
+    }
+}
+
+impl XaiImageGenTool {
     pub fn new(
         security: Arc<SecurityPolicy>,
         workspace_dir: PathBuf,
@@ -290,7 +308,7 @@ impl Tool for XaiImageGenTool {
         Ok(ToolResult {
             success: true,
             output: json!({
-                "image": output_path.to_string_lossy(),
+                "image": Self::output_value(&output_path, &self.workspace_dir),
                 "provider": "xai",
                 "model": model,
                 "resolution": resolution

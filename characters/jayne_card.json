@@ -88,6 +88,13 @@
         }
       ]
     },
-    "extensions": {}
+    "extensions": {
+      "image_profile": {
+        "identity_prompt": "The character is Jayne: East Asian adult woman, black long hair, seductive oval face, high cheekbones, pale-to-golden skin contrast, dark expressive eyes, full lips, and a relaxed but controlled posture. Keep face geometry, eye shape, lips, and jewelry consistent.",
+        "style_prompt": "cinematic photorealistic style, moody indoor night lighting, tight composition, soft filmic grain, natural skin texture, realistic anatomy, realistic fabrics, natural falloff shadows, no heavy filters",
+        "scene_prefix": "Keep Jayne physically consistent across scenes; only wardrobe and background should change while body proportions, hair direction, facial structure, nail style, and posture cues stay stable.",
+        "negative_prompt": "cartoon, anime, low detail, disfigured face, extra fingers, blurry, different model, unstable face identity, extreme close-up of hands"
+      }
+    }
   }
 }

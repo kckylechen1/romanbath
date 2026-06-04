@@ -7,9 +7,10 @@ interface ToolCallCardProps {
 }
 
 const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
-  const isImage = toolCall.toolName.includes("image_gen") || toolCall.toolName.includes("imagegen");
-  const isTts = toolCall.toolName.includes("tts");
-  const isVideo = toolCall.toolName.includes("video");
+  const toolName = toolCall.toolName.toLowerCase();
+  const isImage = toolName.includes("image_gen") || toolName.includes("imagegen") || toolName.includes("photo") || toolName.includes("xai_image");
+  const isTts = toolName.includes("tts");
+  const isVideo = toolName.includes("video");
   const label = isImage ? "Image" : isTts ? "Voice" : isVideo ? "Video" : toolCall.toolName;
 
   return (

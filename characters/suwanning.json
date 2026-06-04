@@ -99,6 +99,14 @@
           "position": "before_char"
         }
       ]
+    },
+    "extensions": {
+      "image_profile": {
+        "identity_prompt": "The character is Su Wanning: a 26-year-old Chinese office assistant, black low ponytail, cold but controlled facial expression, deep gray professional blouse with second button often loose, dark gray fitted skirt, flesh-colored stockings, black high heels, and subtle tension in shoulders and hands.",
+        "style_prompt": "cinematic noir photorealistic style, realistic Chinese office and hotel interiors, cinematic directional lighting, precise fabric folds, natural skin texture, restrained color grading, high body-identity consistency",
+        "scene_prefix": "Keep Su Wanning's core body and face identity stable across scenes, including hairstyle, eyes, jawline, collarbone structure, body proportions, and posture tension while switching scenes and emotional states.",
+        "negative_prompt": "cartoon, anime, exaggerated body proportions, different face, extra limbs, wrong ethnicity, bright pastel filters"
+      }
     }
   }
 }

@@ -1,7 +1,7 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zeroclaw_api::tool::{Tool, ToolResult};
 use zeroclaw_config::policy::{SecurityPolicy, ToolOperation};
@@ -20,6 +20,22 @@ pub struct XaiTtsTool {
 }
 
 impl XaiTtsTool {
+    fn output_path_to_relative(output_path: &Path, workspace_dir: &Path) -> String {
+        output_path
+            .strip_prefix(workspace_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| output_path.to_string_lossy().to_string())
+    }
+
+    fn output_value(output_path: &Path, workspace_dir: &Path) -> String {
+        let relative = Self::output_path_to_relative(output_path, workspace_dir);
+        if relative.starts_with('/') {
+            relative.trim_start_matches('/').to_string()
+        } else {
+            relative
+        }
+    }
+
     pub fn new(
         security: Arc<SecurityPolicy>,
         workspace_dir: PathBuf,
@@ -196,7 +212,8 @@ impl Tool for XaiTtsTool {
         Ok(ToolResult {
             success: true,
             output: json!({
-                "audio_file": output_path.to_string_lossy(),
+                "audio": Self::output_value(&output_path, &self.workspace_dir),
+                "audio_file": Self::output_value(&output_path, &self.workspace_dir),
                 "format": "mp3",
                 "voice_id": voice_id,
                 "language": language,

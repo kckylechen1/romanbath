@@ -823,21 +823,54 @@ const WS_URL = (agentAlias: string = "default", token?: string) => {
 };
 
 function resolveMediaUrl(toolName: string, output: string): { url: string; type: "image" | "audio" | "video" } | null {
+  const isRemoteUrl = (value: string): boolean => /^https?:\/\//i.test(value);
+
+  const normalizePath = (value: string): string => {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("/api/files/")) {
+      return trimmed.replace(/^\/api\/files\//, "");
+    }
+    return trimmed.replace(/^\/+/, "");
+  };
+
+  const resolveCandidate = (candidate?: unknown): string | null => {
+    if (typeof candidate !== "string") return null;
+    const value = candidate.trim();
+    if (!value) return null;
+    if (isRemoteUrl(value)) return value;
+    if (!value.startsWith("images/") && !value.startsWith("audio/") && !value.startsWith("videos/") && !value.startsWith("/api/files/")) {
+      return null;
+    }
+    return `/api/files/${normalizePath(value)}`;
+  };
+
   try {
     const data = JSON.parse(output);
-    let filePath: string | undefined;
-    if (toolName.includes("image_gen") || toolName.includes("imagegen")) {
-      filePath = data.image || data.path || data.output;
-      if (filePath) return { url: `/api/files/${filePath}`, type: "image" };
+    if (toolName.includes("image_gen") || toolName.includes("imagegen") || toolName.includes("photo")) {
+      const filePath = resolveCandidate(data.image || data.image_url || data.imageUrl || data.path || data.output);
+      if (filePath) return { url: filePath, type: "image" };
     }
     if (toolName.includes("tts")) {
-      filePath = data.audio || data.path || data.output;
-      if (filePath) return { url: `/api/files/${filePath}`, type: "audio" };
+      const filePath = resolveCandidate(data.audio || data.audio_file || data.audioFile || data.path || data.output);
+      if (filePath) return { url: filePath, type: "audio" };
     }
     if (toolName.includes("video")) {
-      filePath = data.video || data.path || data.output;
-      if (filePath) return { url: `/api/files/${filePath}`, type: "video" };
+      const filePath = resolveCandidate(data.video || data.video_url || data.videoUrl || data.path || data.output);
+      if (filePath) return { url: filePath, type: "video" };
     }
+
+    const genericCandidate = resolveCandidate(
+      data.file || data.file_path || data.filePath || data.url,
+    );
+    if (genericCandidate) {
+      const type = genericCandidate.includes("/audio/")
+        ? ("audio" as const)
+        : genericCandidate.includes("/videos/")
+          ? ("video" as const)
+          : ("image" as const);
+      return { url: genericCandidate, type };
+    }
+
     // Generic: check if output contains a path-like string in images/ or audio/
     const pathMatch = output.match(/"(images\/[^"]+|audio\/[^"]+|videos\/[^"]+)"/);
     if (pathMatch) {
@@ -846,6 +879,17 @@ function resolveMediaUrl(toolName: string, output: string): { url: string; type:
       return { url: `/api/files/${path}`, type };
     }
   } catch { /* not JSON */ }
+
+  const fallbackMatch = output.match(/(\bapi\/files\/[^"]+|\b(images|audio|videos)\/[^"]+)/);
+  if (fallbackMatch) {
+    const normalized = normalizePath(fallbackMatch[0]);
+    const path = normalized.startsWith("api/files/")
+      ? normalized.replace(/^api\/files\//, "")
+      : normalized;
+    const type = path.startsWith("audio/") ? ("audio" as const) : path.startsWith("videos/") ? ("video" as const) : ("image" as const);
+    return { url: `/api/files/${path}`, type };
+  }
+
   return null;
 }
 

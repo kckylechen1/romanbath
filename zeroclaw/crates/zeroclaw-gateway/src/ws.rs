@@ -856,6 +856,8 @@ fn inject_character_card(
         .collect::<Vec<_>>()
         .join("\n\n");
 
+    let image_contract = image_consistency_instructions(&card.data.extensions);
+
     // Inject memories from past conversations with this character
     let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
     let memory_context = mem_store.inject_memories_into_prompt(character_name, "");
@@ -863,11 +865,17 @@ fn inject_character_card(
     // Tool-use instructions for character chat
     let tool_instructions = format!(
         "\n\n## Tool Usage\n\nYou have access to image generation and voice tools. Use them naturally during conversation:\n\
-         - When you want to share a picture, call `xai_image_gen` with a descriptive English prompt\n\
-         - When you want to send a voice message, call `xai_tts` with the text to speak\n\
-         - Do NOT mention that you are using tools — the user sees only the image or hears the audio\n\
-         - Generate images to enhance the scene and atmosphere naturally"
+         - For photos, call `xai_image_gen` with a clear English prompt that includes enough scene detail\n\
+         - For voice messages, call `xai_tts` with the spoken text\n\
+         - Do NOT mention that you are using tools — the user sees only the generated image or hears the audio\n\
+         - Generate images to enhance the scene and atmosphere naturally\n\
+         - If this character has explicit image consistency requirements, always keep those rules in the prompt"
     );
+    let tool_instructions = if image_contract.is_empty() {
+        tool_instructions
+    } else {
+        format!("{tool_instructions}\n\n{image_contract}")
+    };
 
     let mut full_prompt = format!("{card_prompt}{tool_instructions}");
     if !memory_context.is_empty() {
@@ -889,6 +897,57 @@ fn inject_character_card(
     };
 
     Ok(first_mes)
+}
+
+fn image_consistency_instructions(extensions: &serde_json::Value) -> String {
+    let profile = match extensions
+        .get("image_profile")
+        .or_else(|| extensions.get("imageProfile"))
+        .and_then(|p| p.as_object())
+    {
+        Some(profile) => profile,
+        None => return String::new(),
+    };
+
+    let identity_prompt = profile
+        .get("identity_prompt")
+        .or_else(|| profile.get("identityPrompt"))
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty());
+    let style_prompt = profile
+        .get("style_prompt")
+        .or_else(|| profile.get("stylePrompt"))
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty());
+    let scene_prefix = profile
+        .get("scene_prefix")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty());
+
+    if identity_prompt.is_none() && style_prompt.is_none() && scene_prefix.is_none() {
+        return String::new();
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    parts.push("- Keep the same physical identity, clothing cues, and body language across all images in this conversation.".to_string());
+
+    if let Some(identity_prompt) = identity_prompt {
+        parts.push(format!("- Identity anchor: {identity_prompt}"));
+    }
+    if let Some(style_prompt) = style_prompt {
+        parts.push(format!("- Visual style anchor: {style_prompt}"));
+    }
+    if let Some(scene_prefix) = scene_prefix {
+        parts.push(format!("- Scene continuity anchor: {scene_prefix}"));
+    }
+
+    if let Some(negatives) = profile.get("negative_prompt").and_then(|v| v.as_str())
+        && !negatives.trim().is_empty()
+    {
+        parts.push(format!("- Avoid: {negatives}"));
+    }
+
+    format!("- [Image consistency rule]\n{}", parts.join("\n"))
 }
 
 fn needs_onboarding_ws_error(
