@@ -25,25 +25,11 @@ const parseMarkdown = (text: string): React.ReactNode[] => {
         const inlineElements: React.ReactNode[] = [];
         let inlineKey = 0;
 
-        // Process text for inline elements
-        // Order matters: process multi-char patterns before single-char
-        const patterns = [
-            // Bold: **text** or __text__
-            { regex: /\*\*(.+?)\*\*|__(.+?)__/g, render: (m: string[]) => <strong key={`b-${inlineKey++}`} className="font-semibold text-white">{m[1] || m[2]}</strong> },
-            // Italic: *text* or _text_ (but not inside asterisk actions)
-            { regex: /(?<!\*)\*([^*]+)\*(?!\*)|(?<!_)_([^_]+)_(?!_)/g, render: (m: string[]) => <em key={`i-${inlineKey++}`} className="italic text-slate-300">{m[1] || m[2]}</em> },
-            // Inline code: `code`
-            { regex: /`([^`]+)`/g, render: (m: string[]) => <code key={`c-${inlineKey++}`} className="px-1.5 py-0.5 rounded bg-slate-800/80 text-emerald-400 font-mono text-sm">{m[1]}</code> },
-            // Links: [text](url)
-            { regex: /\[([^\]]+)\]\(([^)]+)\)/g, render: (m: string[]) => <a key={`a-${inlineKey++}`} href={m[2]} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">{m[1]}</a> },
-        ];
-
         // For roleplay: detect *action* patterns (single asterisks around text)
         // We'll handle this specially to show actions in a different color
         const roleplayActionRegex = /\*([^*]+)\*/g;
 
         // First, let's just do a simple split and process approach
-        let remaining = text;
         let lastPos = 0;
 
         // Process roleplay actions (*action*)
@@ -82,7 +68,7 @@ const parseMarkdown = (text: string): React.ReactNode[] => {
         const blockElements: React.ReactNode[] = [];
         let blockKey = 0;
 
-        lines.forEach((line, idx) => {
+        lines.forEach((line) => {
             // Headers
             if (line.startsWith('### ')) {
                 blockElements.push(

@@ -4,7 +4,7 @@
  * Stored in the browser; ZeroClaw gateway has no chat-history endpoint.
  */
 
-import { Message, Role } from '../types';
+import { Message } from '../types';
 
 const STORAGE_KEY = 'romanbath_chat_history_v1';
 
@@ -45,8 +45,39 @@ const readStore = (): ChatStore => {
   }
 };
 
-const writeStore = (store: ChatStore): void => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+const writeStore = (store: ChatStore): boolean => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    return true;
+  } catch (e) {
+    if (
+      e instanceof DOMException &&
+      (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED")
+    ) {
+      // Try to free space by removing oldest chats across all characters
+      let freed = false;
+      for (const characterId of Object.keys(store)) {
+        const list = store[characterId];
+        if (list.length > 1) {
+          list.pop(); // Remove oldest
+          freed = true;
+        } else if (list.length === 1) {
+          delete store[characterId];
+          freed = true;
+        }
+        if (freed) break;
+      }
+      if (freed) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+          return true;
+        } catch {
+          // Still failing after cleanup
+        }
+      }
+    }
+    return false;
+  }
 };
 
 const toChatInfo = (chat: StoredChat): ChatInfo => {
@@ -103,8 +134,7 @@ export const saveChat = async (
     }
 
     store[characterId] = list;
-    writeStore(store);
-    return true;
+    return writeStore(store);
   } catch (error) {
     console.error('Error saving chat:', error);
     return false;
@@ -173,8 +203,7 @@ export const deleteChat = async (characterId: string, chatFileName: string): Pro
     const store = readStore();
     const list = store[characterId] ?? [];
     store[characterId] = list.filter((c) => c.fileName !== chatFileName);
-    writeStore(store);
-    return true;
+    return writeStore(store);
   } catch (error) {
     console.error('Error deleting chat:', error);
     return false;
@@ -193,8 +222,7 @@ export const renameChat = async (
     if (!chat) return false;
     chat.fileName = newFileName;
     chat.updatedAt = Date.now();
-    writeStore(store);
-    return true;
+    return writeStore(store);
   } catch (error) {
     console.error('Error renaming chat:', error);
     return false;

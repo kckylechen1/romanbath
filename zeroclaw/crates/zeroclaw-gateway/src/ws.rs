@@ -451,13 +451,25 @@ async fn handle_socket(
     }
 
     // ── Character card injection ─────────────────────────────────────
+    let memory_context = if let Some(char_name) = character_name.clone() {
+        let data_dir = config.data_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+            mem_store.inject_memories_into_prompt(&char_name, "")
+        })
+        .await
+        .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     if let Some(ref char_name) = character_name {
         match inject_character_card(
             &mut agent,
             char_name,
             character_mode.as_deref(),
             user_name.as_deref(),
-            &config.data_dir,
+            &memory_context,
         ) {
             Ok(Some(first_mes)) => {
                 // Send first_mes as initial assistant message
@@ -503,13 +515,19 @@ async fn handle_socket(
         pending_approvals.clone(),
         Duration::from_secs(WS_APPROVAL_TIMEOUT_SECS),
     ));
-    // Memory save helper for character chats (best-effort, non-blocking)
+    // Memory save helper for character chats (offloaded to blocking thread)
     let mem_data_dir = config.data_dir.clone();
     let save_user_memory = |content: &str, char_name: &str, user_name: &str| {
-        let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(
-            &std::path::PathBuf::from(&mem_data_dir).join("chat_memory"),
-        );
-        let _ = mem_store.save_chat_memory(char_name, user_name, "user", content);
+        let mem_data_dir = mem_data_dir.clone();
+        let content = content.to_string();
+        let char_name = char_name.to_string();
+        let user_name = user_name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(
+                &std::path::PathBuf::from(&mem_data_dir).join("chat_memory"),
+            );
+            let _ = mem_store.save_chat_memory(&char_name, &user_name, "user", &content);
+        });
     };
 
     agent
@@ -839,7 +857,7 @@ fn inject_character_card(
     character_name: &str,
     mode: Option<&str>,
     user_name: Option<&str>,
-    data_dir: &std::path::Path,
+    memory_context: &str,
 ) -> anyhow::Result<Option<String>> {
     let mgr = zeroclaw_cards::CardManager::default()?;
     let card = mgr
@@ -857,10 +875,6 @@ fn inject_character_card(
         .join("\n\n");
 
     let image_contract = image_consistency_instructions(&card.data.extensions);
-
-    // Inject memories from past conversations with this character
-    let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
-    let memory_context = mem_store.inject_memories_into_prompt(character_name, "");
 
     // Tool-use instructions for character chat
     let tool_instructions = format!(
@@ -1019,7 +1033,6 @@ async fn process_chat_message(
         state
             .cancel_tokens
             .lock()
-            .expect("cancel_tokens lock poisoned")
             .insert(session_key.to_string(), cancel_token.clone());
     }
 
@@ -1238,7 +1251,6 @@ async fn process_chat_message(
         state
             .cancel_tokens
             .lock()
-            .expect("cancel_tokens lock poisoned")
             .remove(session_key);
     }
 
@@ -1322,13 +1334,18 @@ async fn process_chat_message(
                 persist_conversation_messages(backend.as_ref(), session_key, &outcome.new_messages);
             }
 
-            // Save assistant memory to card SQLite DB
+            // Save assistant memory to card SQLite DB (offloaded to blocking thread)
             if let Some(ref cn) = character_name {
-                let uname = user_name.as_deref().unwrap_or("User");
-                let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(
-                    &std::path::PathBuf::from(&state.config.read().data_dir).join("chat_memory"),
-                );
-                let _ = mem_store.save_chat_memory(cn, uname, "assistant", &outcome.response);
+                let uname = user_name.as_deref().unwrap_or("User").to_string();
+                let response = outcome.response.clone();
+                let data_dir = state.config.read().data_dir.clone();
+                let cn = cn.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(
+                        &std::path::PathBuf::from(&data_dir).join("chat_memory"),
+                    );
+                    let _ = mem_store.save_chat_memory(&cn, &uname, "assistant", &response);
+                });
             }
 
             // Fire-and-forget memory consolidation so facts from WS sessions

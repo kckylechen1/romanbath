@@ -5,12 +5,12 @@ import { getTimeSinceLastChat } from "./services/chatPersistenceService";
 
 // Hooks
 import { useAppLogic } from "./hooks/useAppLogic";
+import { useEscapeKey } from "./hooks/useEscapeKey";
 
 // Components
 import { LeftSidebar } from "./components/layout/LeftSidebar";
 import { ChatHeader } from "./components/chat/ChatHeader";
 import { ChatInput } from "./components/chat/ChatInput";
-import { CharacterAvatar } from "./components/CharacterAvatar";
 import CharacterList from "./components/CharacterList";
 import MessageBubble from "./components/MessageBubble";
 import SettingsPanel from "./components/SettingsPanel";
@@ -18,10 +18,20 @@ import GroupChatManager from "./components/GroupChatManager";
 import ImageGenModal from "./components/ImageGenModal";
 import CharacterEditor from "./components/CharacterEditor";
 import { useToast } from "./components/Toast";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const AppContent: React.FC = () => {
   const logic = useAppLogic();
   const toast = useToast();
+
+  // Escape key handlers for modals and sidebars
+  useEscapeKey(() => logic.setMobileMenuOpen(false), logic.mobileMenuOpen);
+  useEscapeKey(() => logic.setMobileSettingsOpen(false), logic.mobileSettingsOpen);
+  useEscapeKey(() => logic.setRightSidebarOpen(false), logic.rightSidebarOpen);
+  useEscapeKey(() => logic.setShowGroupManager(false), logic.showGroupManager);
+  useEscapeKey(() => logic.setShowImageGen(false), logic.showImageGen);
+  useEscapeKey(() => logic.setShowCharacterEditor(false), logic.showCharacterEditor);
+  useEscapeKey(logic.handleStartFresh, logic.showRestorePrompt);
 
   return (
     <div
@@ -45,7 +55,7 @@ const AppContent: React.FC = () => {
       {/* Restore Chat Modal */}
       {logic.showRestorePrompt && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-[#0e1217]/95 backdrop-blur-2xl border border-white/10 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-4 duration-300">
+          <div role="dialog" aria-modal="true" className="bg-[#0e1217]/95 backdrop-blur-2xl border border-white/10 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-4 duration-300">
             <div className="flex items-center gap-4 mb-6">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-bath-500/20 to-bath-600/20 flex items-center justify-center border border-bath-500/30">
                 <MessageCircle className="text-stone-400" size={28} />
@@ -119,6 +129,7 @@ const AppContent: React.FC = () => {
               <button
                 onClick={() => logic.setMobileMenuOpen(false)}
                 className="text-stone-400"
+                aria-label="Close menu"
               >
                 <X />
               </button>
@@ -170,7 +181,7 @@ const AppContent: React.FC = () => {
           />
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
+          <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar bath-reveal bath-reveal-delay-3" style={{ contain: "layout" }}>
             <div
               className={`max-w-4xl mx-auto transition-transform ${logic.leftSidebarOpen ? "" : "md:-translate-x-10"}`}
             >
@@ -214,6 +225,12 @@ const AppContent: React.FC = () => {
         </main>
 
         {/* Right Sidebar (Settings) */}
+        {logic.rightSidebarOpen && (
+          <div
+            className="fixed inset-0 z-[35] bg-black/40 backdrop-blur-sm hidden md:block"
+            onClick={() => logic.setRightSidebarOpen(false)}
+          />
+        )}
         <div
           className={`
             absolute top-0 right-0 h-full z-40
@@ -233,14 +250,20 @@ const AppContent: React.FC = () => {
 
         {/* Mobile Settings Drawer */}
         {logic.mobileSettingsOpen && (
-          <div className="absolute inset-0 z-50 md:hidden animate-in fade-in slide-in-from-right-10 duration-200">
-            <SettingsPanel
+          <>
+            <div
+              className="fixed inset-0 z-[45] bg-black/60 backdrop-blur-sm md:hidden"
+              onClick={() => logic.setMobileSettingsOpen(false)}
+            />
+            <div className="absolute inset-0 z-50 md:hidden animate-in fade-in slide-in-from-right-10 duration-200">
+              <SettingsPanel
               config={logic.config}
               onConfigChange={logic.handleConfigChange}
               isOpen={true}
               onClose={() => logic.setMobileSettingsOpen(false)}
             />
           </div>
+          </>
         )}
       </div>
 
@@ -279,7 +302,9 @@ const AppContent: React.FC = () => {
 const App: React.FC = () => {
   return (
     <LanguageProvider>
-      <AppContent />
+      <ErrorBoundary>
+        <AppContent />
+      </ErrorBoundary>
     </LanguageProvider>
   );
 };

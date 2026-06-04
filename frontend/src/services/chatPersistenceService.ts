@@ -29,10 +29,23 @@ const getItemWithLegacyFallback = (primaryKey: string, legacyKeys: string[]): st
     return null;
 };
 
-const setItemForAllKeys = (primaryKey: string, legacyKeys: string[], value: string): void => {
-    localStorage.setItem(primaryKey, value);
-    for (const legacyKey of legacyKeys) {
-        localStorage.setItem(legacyKey, value);
+const setItemForAllKeys = (primaryKey: string, legacyKeys: string[], value: string): boolean => {
+    try {
+        localStorage.setItem(primaryKey, value);
+        for (const legacyKey of legacyKeys) {
+            localStorage.setItem(legacyKey, value);
+        }
+        return true;
+    } catch (e) {
+        if (
+            e instanceof DOMException &&
+            (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED")
+        ) {
+            console.warn("localStorage quota exceeded — chat persistence disabled");
+        } else {
+            console.error("Failed to write to localStorage:", e);
+        }
+        return false;
     }
 };
 
@@ -52,7 +65,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 };
 
 // Save chat state for a character
-export const saveChatState = (characterId: string, messages: Message[], chatFileName?: string): void => {
+export const saveChatState = (characterId: string, messages: Message[], chatFileName?: string): boolean => {
     try {
         const state: ChatPersistenceState = {
             characterId,
@@ -60,9 +73,10 @@ export const saveChatState = (characterId: string, messages: Message[], chatFile
             ...(chatFileName ? { chatFileName } : {}),
             lastUpdated: Date.now(),
         };
-        setItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS, JSON.stringify(state));
+        return setItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS, JSON.stringify(state));
     } catch (e) {
         console.error('Failed to save chat state:', e);
+        return false;
     }
 };
 
@@ -111,13 +125,14 @@ export const getAppSettings = (): AppSettings => {
 };
 
 // Save app settings
-export const saveAppSettings = (settings: Partial<AppSettings>): void => {
+export const saveAppSettings = (settings: Partial<AppSettings>): boolean => {
     try {
         const current = getAppSettings();
         const updated = { ...current, ...settings };
-        setItemForAllKeys(APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS, JSON.stringify(updated));
+        return setItemForAllKeys(APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS, JSON.stringify(updated));
     } catch (e) {
         console.error('Failed to save app settings:', e);
+        return false;
     }
 };
 

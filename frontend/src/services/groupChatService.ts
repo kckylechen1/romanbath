@@ -135,7 +135,7 @@ export const removeCharacterFromGroup = (groupId: string, characterId: string): 
 export const selectNextCharacter = (
   group: GroupChat,
   characters: Character[],
-  lastMessage?: string
+  _lastMessage?: string
 ): Character | null => {
   const groupCharacters = characters.filter(c => group.characterIds.includes(c.id));
 

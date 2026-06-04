@@ -1404,7 +1404,6 @@ pub async fn handle_api_session_delete(
     let token = state
         .cancel_tokens
         .lock()
-        .expect("cancel_tokens lock poisoned")
         .remove(&session_key);
     if let Some(token) = token {
         token.cancel();
@@ -1590,7 +1589,6 @@ pub async fn handle_api_session_abort(
     let token = state
         .cancel_tokens
         .lock()
-        .expect("cancel_tokens lock poisoned")
         .get(&session_key)
         .cloned();
 
@@ -1809,7 +1807,7 @@ mod tests {
             path_prefix: String::new(),
             web_dist_dir: None,
             canvas_store: zeroclaw_runtime::tools::CanvasStore::new(),
-            cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            cancel_tokens: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reload_tx: None,
             #[cfg(feature = "webauthn")]

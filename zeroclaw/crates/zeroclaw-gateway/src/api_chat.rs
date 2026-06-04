@@ -327,44 +327,58 @@ async fn handle_streaming_chat(state: &AppState, req: ChatRequest) -> axum::resp
     let temperature = request_temperature.or(state.temperature);
 
     // Thread-safe accumulator to reconstruct the final assistant reply for memory persistence
-    let reply_accumulator = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let reply_accumulator = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
     let reply_accumulator_clone = reply_accumulator.clone();
 
-    let stream = state
+    let upstream = state
         .model_provider
-        .stream_chat_with_history(&messages, &model, temperature, StreamOptions::new(true))
-        .map(move |result| match result {
-            Ok(chunk) => {
-                if chunk.is_final {
-                    let final_text = {
-                        let lock = reply_accumulator_clone.lock().unwrap();
-                        lock.clone()
-                    };
-                    if let Some(cn) = char_name.clone() {
-                        let uname = uname.clone();
-                        let memory_dir = memory_dir.clone();
-                        let final_text = final_text.clone();
-                        tokio::task::spawn_blocking(move || {
-                            let mem_store = ChatMemoryStore::new(&memory_dir.join("chat_memory"));
-                            let _ =
-                                mem_store.save_chat_memory(&cn, &uname, "assistant", &final_text);
-                        });
+        .stream_chat_with_history(&messages, &model, temperature, StreamOptions::new(true));
+
+    let stream = futures_util::stream::unfold(
+        (
+            upstream,
+            false,
+            reply_accumulator_clone,
+            char_name,
+            uname,
+            memory_dir,
+        ),
+        |(mut upstream, error_seen, reply_acc, char_name, uname, memory_dir)| async move {
+            if error_seen {
+                return None;
+            }
+            let result = upstream.next().await?;
+            match result {
+                Ok(chunk) => {
+                    if chunk.is_final {
+                        let final_text = reply_acc.lock().await.clone();
+                        if let Some(ref cn) = char_name {
+                            let ft = final_text.clone();
+                            let uname_c = uname.clone();
+                            let mem_dir = memory_dir.clone();
+                            let cn_c = cn.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let mem_store = ChatMemoryStore::new(&mem_dir.join("chat_memory"));
+                                let _ = mem_store.save_chat_memory(&cn_c, &uname_c, "assistant", &ft);
+                            });
+                        }
+                        let event = Event::default().data("[DONE]");
+                        Some((Ok::<_, Infallible>(event), (upstream, error_seen, reply_acc, char_name, uname, memory_dir)))
+                    } else {
+                        reply_acc.lock().await.push_str(&chunk.delta);
+                        let json = serde_json::json!({"token": chunk.delta});
+                        let event = Event::default().data(json.to_string());
+                        Some((Ok(event), (upstream, error_seen, reply_acc, char_name, uname, memory_dir)))
                     }
-                    Ok::<_, Infallible>(Event::default().data("[DONE]"))
-                } else {
-                    {
-                        let mut lock = reply_accumulator_clone.lock().unwrap();
-                        lock.push_str(&chunk.delta);
-                    }
-                    let json = serde_json::json!({"token": chunk.delta});
-                    Ok(Event::default().data(json.to_string()))
+                }
+                Err(e) => {
+                    let json = serde_json::json!({"error": e.to_string()});
+                    let event = Event::default().data(json.to_string());
+                    Some((Ok(event), (upstream, true, reply_acc, char_name, uname, memory_dir)))
                 }
             }
-            Err(e) => {
-                let json = serde_json::json!({"error": e.to_string()});
-                Ok(Event::default().data(json.to_string()))
-            }
-        });
+        },
+    );
 
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
@@ -390,19 +404,24 @@ async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Ve
 
         let user_name = req.user_name.as_deref().unwrap_or("User");
 
-        // ── Memory injection ──────────────────────────────────────────────
-        // Source of truth for the memory DB directory: the top-level data_dir
-        // from the config. Resolved on-demand, never cached in a struct field.
+        // ── Memory injection (offloaded to blocking thread) ───────────────
         let memory_dir = state.config.read().data_dir.clone();
-        let mem_store = ChatMemoryStore::new(&memory_dir.join("chat_memory"));
-
-        // Save the last user message as a memory (best-effort)
-        if let Some(last_user_msg) = messages.iter().rev().find(|m| m.role == "user") {
-            let _ = mem_store.save_chat_memory(name, user_name, "user", &last_user_msg.content);
-        }
-
-        // Inject relevant memories into prompt
-        let memory_context = mem_store.inject_memories_into_prompt(name, &conversation_text);
+        let memory_context = {
+            let name = name.to_string();
+            let user_name = user_name.to_string();
+            let last_content = messages.iter().rev().find(|m| m.role == "user").map(|m| m.content.clone());
+            let conv_text = conversation_text.clone();
+            let mem_dir = memory_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                let mem_store = ChatMemoryStore::new(&mem_dir.join("chat_memory"));
+                if let Some(content) = last_content {
+                    let _ = mem_store.save_chat_memory(&name, &user_name, "user", &content);
+                }
+                mem_store.inject_memories_into_prompt(&name, &conv_text)
+            })
+            .await
+            .unwrap_or_default()
+        };
 
         // Build ST-style prompt fragments
         let prompt_order = prompt_order_from_preset(req.prompt_order.as_deref());
@@ -425,10 +444,11 @@ async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Ve
             });
         }
 
-        // Prepend all prompt fragments as system messages in order
-        for frag in fragments.into_iter().rev() {
-            messages.insert(0, ChatMessage::system(frag.content));
-        }
+        // Prepend all prompt fragments as system messages in order (O(n) instead of O(n²))
+        let system_msgs: Vec<_> = fragments.into_iter().map(|f| ChatMessage::system(f.content)).collect();
+        let mut new_messages = system_msgs;
+        new_messages.append(&mut messages);
+        messages = new_messages;
 
         // ── Scene Mode injection ────────────────────────────────────────
         if req.scene_mode.unwrap_or(false) {
@@ -496,19 +516,19 @@ async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Ve
             .iter()
             .map(|m| zeroclaw_cards::TokenMessage::new(&m.role, &m.content))
             .collect();
+        let original_len = token_msgs.len();
         tokenizer::truncate_messages(
             &mut token_msgs,
             budget as usize,
             &model,
             2, // keep at least last 2 messages (user + space for assistant)
         );
-        // Rebuild ChatMessage vec from truncated token messages
-        // Preserve original ChatMessage for messages that survived truncation
-        messages.retain(|m| {
-            token_msgs
-                .iter()
-                .any(|tm| tm.role == m.role && tm.content == m.content)
-        });
+        // Align truncated messages with original by index.
+        // truncate_messages removes from the front, so the survivors are a suffix.
+        let removed = original_len - token_msgs.len();
+        if removed > 0 {
+            messages.drain(0..removed);
+        }
     }
 
     Ok(messages)

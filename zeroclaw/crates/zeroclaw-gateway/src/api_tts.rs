@@ -63,8 +63,11 @@ pub async fn handle_tts(
     let api_key = state
         .config
         .read()
-        .first_model_provider()
-        .and_then(|e| e.api_key.clone());
+        .providers
+        .models
+        .iter_entries()
+        .find(|(ty, _, _)| *ty == "xai")
+        .and_then(|(_, _, entry)| entry.api_key.clone());
 
     match generate_xai_tts(&req.text, &req.voice_id, &req.language, api_key.as_deref()).await {
         Ok(audio_bytes) => (

@@ -102,7 +102,7 @@ export const generateImage = async (
       return { success: true, image_data_url: result.url };
     }
     return { success: false, error: "No image URL returned" };
-  } catch (e: any) {
-    return { success: false, error: e?.message || "Image generation failed" };
+  } catch (e: unknown) {
+    return { success: false, error: e instanceof Error ? e.message : "Image generation failed" };
   }
 };

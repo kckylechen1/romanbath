@@ -1,35 +1,52 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", sans-serif;
+  --font-sans: "Source Serif 4", serif;
+  --font-display: "Cormorant Garamond", serif;
   --font-mono: "JetBrains Mono", monospace;
 
-  /* Re-mapped "bath" scale to Midnight Teal */
-  --color-bath-50: #f0fdfc;
-  --color-bath-100: #ccfbf9;
-  --color-bath-200: #99f6f3;
-  --color-bath-300: #5cebe9;
-  --color-bath-400: #2dd4d6;
-  --color-bath-500: #14b8ba;
-  --color-bath-600: #109498;
-  --color-bath-700: #12767a;
-  --color-bath-800: #145f63;
-  --color-bath-900: #154f53;
-  --color-bath-950: #072a2e;
+  /* Warm amber / gold scale — Roman bath torchlight */
+  --color-bath-50: #fdf8f3;
+  --color-bath-100: #f5e6d3;
+  --color-bath-200: #e8c9a0;
+  --color-bath-300: #d4a574;
+  --color-bath-400: #c49a6c;
+  --color-bath-500: #b08a5c;
+  --color-bath-600: #8c6d4a;
+  --color-bath-700: #6b5238;
+  --color-bath-800: #4a3828;
+  --color-bath-900: #2e2318;
+  --color-bath-950: #1a140e;
 
   --color-glass: rgba(14, 18, 23, 0.7);
-  --color-glass-border: rgba(102, 252, 241, 0.08);
-  --color-primary: #66FCF1;
-  --color-secondary: #45A29E;
-  --color-accent: #E5C07B;
+  --color-glass-border: rgba(212, 165, 116, 0.12);
+  --color-primary: #D4A574;
+  --color-secondary: #8C6D4A;
+  --color-accent: #5CEBE9;
 
   --blur-xs: 2px;
 }
 
 body {
-  /* Deep Slate/Navy gradient */
-  background: linear-gradient(160deg, #090B0E 0%, #0E1217 30%, #0B0E12 60%, #11151A 100%);
+  /* Gradient mesh: warm light entering from the left like a bathhouse window */
+  background:
+    radial-gradient(ellipse at 15% 50%, rgba(196, 154, 108, 0.10) 0%, transparent 55%),
+    radial-gradient(ellipse at 85% 20%, rgba(14, 18, 23, 0.5) 0%, transparent 50%),
+    linear-gradient(160deg, #0A0807 0%, #14110F 35%, #0D1117 65%, #11151A 100%);
   color: #E2E8F0;
+}
+
+/* Film grain overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 128px 128px;
+  z-index: 9999;
 }
 
 /* Custom Scrollbar */
@@ -43,21 +60,48 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(102, 252, 241, 0.2);
+  background: rgba(212, 165, 116, 0.25);
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(102, 252, 241, 0.4);
+  background: rgba(212, 165, 116, 0.45);
 }
 
 .glass-panel {
-  background: rgba(14, 18, 23, 0.65);
+  background:
+    linear-gradient(135deg, rgba(20, 17, 15, 0.72) 0%, rgba(14, 18, 23, 0.55) 100%);
   backdrop-filter: blur(32px) saturate(1.2);
   -webkit-backdrop-filter: blur(32px) saturate(1.2);
-  border: 1px solid rgba(102, 252, 241, 0.12);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(212, 165, 116, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 32px rgba(0, 0, 0, 0.4);
 }
+
+/* Page load staggered reveal */
+@keyframes bathReveal {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.985);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.bath-reveal {
+  animation: bathReveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.bath-reveal-delay-1 { animation-delay: 0.08s; }
+.bath-reveal-delay-2 { animation-delay: 0.18s; }
+.bath-reveal-delay-3 { animation-delay: 0.30s; }
+.bath-reveal-delay-4 { animation-delay: 0.44s; }
+.bath-reveal-delay-5 { animation-delay: 0.58s; }
 
 /* Message entrance animation */
 @keyframes messageIn {
@@ -75,22 +119,22 @@ body {
   animation: messageIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* Subtle glow for focused inputs */
+/* Subtle glow for focused inputs — warm amber tone */
 @keyframes subtleGlow {
-  0%, 100% { box-shadow: 0 0 12px rgba(102, 252, 241, 0.15), inset 0 0 4px rgba(102, 252, 241, 0.05); }
-  50% { box-shadow: 0 0 20px rgba(102, 252, 241, 0.3), inset 0 0 8px rgba(102, 252, 241, 0.1); }
+  0%, 100% { box-shadow: 0 0 12px rgba(212, 165, 116, 0.12), inset 0 0 4px rgba(212, 165, 116, 0.04); }
+  50% { box-shadow: 0 0 20px rgba(212, 165, 116, 0.22), inset 0 0 8px rgba(212, 165, 116, 0.08); }
 }
 
-/* Typing cursor blink */
+/* Typing cursor blink — kept as cool teal accent */
 @keyframes cursorBlink {
-  0%, 100% { opacity: 1; text-shadow: 0 0 8px rgba(102, 252, 241, 0.6); }
+  0%, 100% { opacity: 1; text-shadow: 0 0 8px rgba(92, 235, 233, 0.5); }
   50% { opacity: 0.3; text-shadow: none; }
 }
 
 .typing-cursor::after {
   content: '|';
   animation: cursorBlink 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  color: #66FCF1;
+  color: #5CEBE9;
   margin-left: 2px;
 }
 
@@ -101,7 +145,7 @@ body {
 }
 
 .shimmer-warm {
-  background: linear-gradient(90deg, transparent 0%, rgba(102, 252, 241, 0.15) 50%, transparent 100%);
+  background: linear-gradient(90deg, transparent 0%, rgba(212, 165, 116, 0.12) 50%, transparent 100%);
   background-size: 200% 100%;
   animation: neonShimmer 2.5s infinite linear;
 }

@@ -22,8 +22,6 @@ export const DEFAULT_TTS_CONFIG: TTSConfig = {
   autoPlay: false,
 };
 
-let currentUtterance: SpeechSynthesisUtterance | null = null;
-
 export const getAvailableVoices = (): SpeechSynthesisVoice[] => {
   return window.speechSynthesis?.getVoices() || [];
 };
@@ -62,7 +60,6 @@ const speakBrowser = (text: string, config: TTSConfig): void => {
   utterance.rate = config.rate;
   utterance.pitch = config.pitch;
   utterance.volume = config.volume;
-  currentUtterance = utterance;
   window.speechSynthesis.speak(utterance);
 };
 
@@ -83,7 +80,6 @@ const speakGrok = async (text: string, config: TTSConfig, _apiKey?: string, _api
 
 export const stop = (): void => {
   window.speechSynthesis?.cancel();
-  currentUtterance = null;
   if (currentAudio) {
     currentAudio.pause();
     currentAudio = null;

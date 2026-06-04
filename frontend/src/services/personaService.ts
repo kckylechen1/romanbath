@@ -133,7 +133,7 @@ export const getPersonaById = (id: string): Persona | null => {
 export const getActivePersonaId = (): string | null => {
     try {
         return getItemWithLegacyFallback(ACTIVE_PERSONA_KEY, LEGACY_ACTIVE_PERSONA_KEYS);
-    } catch (e) {
+    } catch {
         return null;
     }
 };

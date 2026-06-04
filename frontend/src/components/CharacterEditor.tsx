@@ -51,6 +51,34 @@ const emptyForm = (): CharacterFormData => ({
   removeAvatar: false,
 });
 
+const isEqualForm = (a: CharacterFormData, b: CharacterFormData): boolean => {
+  const keys: (keyof CharacterFormData)[] = [
+    'name', 'description', 'personality', 'scenario', 'firstMessage',
+    'exampleDialogue', 'systemPrompt', 'postHistoryInstructions',
+    'creatorNotes', 'tags', 'creator', 'characterVersion', 'nickname',
+    'groupOnlyGreetings', 'source', 'characterBook', 'extensions',
+    'avatarFile', 'removeAvatar',
+  ];
+  for (const key of keys) {
+    const av = a[key];
+    const bv = b[key];
+    if (Array.isArray(av) && Array.isArray(bv)) {
+      if (av.length !== bv.length || av.some((v, i) => v !== bv[i])) return false;
+      continue;
+    }
+    if (av instanceof File && bv instanceof File) {
+      if (av.name !== bv.name || av.size !== bv.size) return false;
+      continue;
+    }
+    if (av !== bv) return false;
+  }
+  // Compare alternateGreetings separately
+  const agA = a.alternateGreetings ?? [];
+  const agB = b.alternateGreetings ?? [];
+  if (agA.length !== agB.length || agA.some((v, i) => v !== agB[i])) return false;
+  return true;
+};
+
 const CharacterEditor: React.FC<CharacterEditorProps> = ({
   characterId,
   onSave,
@@ -65,6 +93,9 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState<CharacterFormData>(emptyForm);
+  const [originalData, setOriginalData] = useState<CharacterFormData>(emptyForm);
+
+  const isDirty = !isEqualForm(formData, originalData);
 
   // Load character data if editing
   useEffect(() => {
@@ -73,7 +104,9 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
       setAvatarPreview(null);
       getCharacterDetails(characterId).then(data => {
         if (data) {
-          setFormData({ ...emptyForm(), ...data, avatarFile: null, removeAvatar: false });
+          const initial = { ...emptyForm(), ...data, avatarFile: null, removeAvatar: false };
+          setFormData(initial);
+          setOriginalData(initial);
           hasCharacterAvatar(data.name).then((hasAvatar) => {
             if (hasAvatar) {
               setAvatarPreview(`/api/characters/${encodeURIComponent(data.name)}/avatar`);
@@ -85,7 +118,9 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
         setIsLoading(false);
       });
     } else if (isOpen && !characterId) {
-      setFormData(emptyForm());
+      const initial = emptyForm();
+      setFormData(initial);
+      setOriginalData(initial);
       setAvatarPreview(null);
     }
   }, [isOpen, characterId]);
@@ -111,6 +146,23 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
     setAvatarPreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
+
+  const handleClose = () => {
+    if (isDirty && !window.confirm('You have unsaved changes. Discard them?')) return;
+    onClose();
+  };
+
+  // Warn on browser refresh/close when dirty
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isDirty]);
 
   const handleSubmit = async () => {
     if (!formData.name.trim()) {
@@ -179,7 +231,8 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
+            aria-label="Close editor"
             className="p-2 hover:bg-white/5 rounded-lg text-stone-400 hover:text-white transition-colors"
           >
             <X size={20} />
@@ -488,7 +541,7 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
               </div>
               <div className="flex gap-3">
                 <button
-                  onClick={onClose}
+                  onClick={handleClose}
                   disabled={isSaving}
                   className="px-5 py-2.5 text-sm font-medium text-stone-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors disabled:opacity-50"
                 >

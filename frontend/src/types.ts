@@ -59,7 +59,7 @@ export interface GroupChat {
   id: string;
   name: string;
   characterIds: string[]; // IDs of characters in the group
-  activationMode: 'round-robin' | 'random' | 'natural'; // How to select next speaker
+  activationMode: "round-robin" | "random" | "natural"; // How to select next speaker
   createdAt: number;
   updatedAt: number;
   lastActiveCharacterId?: string; // Track who spoke last
@@ -119,29 +119,34 @@ export interface AppSettings {
   language: "en" | "zh-CN" | "zh-TW";
 }
 
-export interface ChatConfig {
-  // --- API Settings (New) ---
-  mainApi:
-    | "kobold"
-    | "koboldhorde"
-    | "openai"
-    | "textgenerationwebui"
-    | "openrouter"
-    | "google"
-    | "ollama"
-    | "grok"
-    | "custom";
+// ── ChatConfig sub-types ──
+
+export type MainApi =
+  | "kobold"
+  | "koboldhorde"
+  | "openai"
+  | "textgenerationwebui"
+  | "openrouter"
+  | "google"
+  | "ollama"
+  | "grok"
+  | "custom";
+
+export interface ApiConfig {
+  mainApi: MainApi;
   apiUrl: string;
   apiKey: string;
   modelName: string;
+}
 
-  // --- Horde Specific ---
+export interface HordeConfig {
   hordeModels: string[];
   hordeAdjustContext: boolean;
   hordeAdjustResponse: boolean;
   hordeTrustedOnly: boolean;
+}
 
-  // --- Generation ---
+export interface GenerationConfig {
   temperature: number;
   topK: number;
   topP: number;
@@ -157,114 +162,85 @@ export interface ChatConfig {
   tfs: number;
   repPenRange: number;
   seed: number;
+}
 
-  // --- New: Advanced Generation Control ---
-  // Logit Bias / Token Biasing
+export interface AdvancedGenerationConfig {
   logitBias: Array<{ sequence: string; bias: number }>;
-
-  // Banned Tokens Control
-  bannedTokens: string; // Comma-separated token IDs or text
-  globalBannedTokens: string; // Global bans across all generations
-  sendBannedTokens: boolean; // Whether to send bans to API
-
-  // Negative Prompt
-  negativePrompt: string; // What to avoid in generation
-
-  // Grammar / JSON Schema
-  grammarString: string; // GBNF grammar string
-  jsonSchema: object | null; // JSON schema for structured output
-  jsonSchemaAllowEmpty: boolean; // Allow empty schema
-
-  // --- New: Advanced Samplers ---
-  // No Repeat Ngram (alternative to DRY)
+  bannedTokens: string;
+  globalBannedTokens: string;
+  sendBannedTokens: boolean;
+  negativePrompt: string;
+  grammarString: string;
+  jsonSchema: object | null;
+  jsonSchemaAllowEmpty: boolean;
   noRepeatNgramSize: number;
-
-  // Repetition Penalty Advanced
   repPenSlope: number;
   repPenDecay: number;
-
-  // Smoothing
   smoothingFactor: number;
   smoothingCurve: number;
-
-  // Beam Search
   numBeams: number;
   lengthPenalty: number;
   earlyStopping: boolean;
-
-  // Encoder & Special Token Control
   encoderRepPenalty: number;
   banEosToken: boolean;
   skipSpecialTokens: boolean;
   addBosToken: boolean;
-
-  // Guidance Scale (CFG)
   guidanceScale: number;
-
-  // Penalty Alpha
   penaltyAlpha: number;
-
-  // Max Tokens per Second (for streaming)
   maxTokensSecond: number;
-
-  // N-Generation (Swiping)
   n: number;
+}
 
-  // --- Response Style Preset ---
-  responseStyle: "natural" | "sexy" | "flirty" | "horny" | "custom";
-
-  // --- Advanced Samplers (for Custom mode) ---
-  // DRY (Don't Repeat Yourself)
+export interface SamplerConfig {
   dryMultiplier: number;
   dryBase: number;
   dryAllowedLength: number;
   dryPenaltyLastN: number;
-
-  // XTC (Exclude Top Choices)
   xtcThreshold: number;
   xtcProbability: number;
-
-  // Mirostat
   mirostatMode: 0 | 1 | 2;
   mirostatTau: number;
   mirostatEta: number;
-
-  // Dynamic Temperature
   dynatemp: boolean;
   minTemp: number;
   maxTemp: number;
   dynatempExponent: number;
+}
 
-  // --- Prompt / Story ---
+export interface PromptConfig {
   scenario: string;
   exampleDialogue: string;
-  lorebook: LorebookEntry[]; // New: Dynamic World Info
-
-  // --- Persona ---
+  lorebook: LorebookEntry[];
   userName: string;
   userDescription: string;
-
-  // --- Advanced Prompting ---
   systemPromptOverride: string;
   authorsNote: string;
   authorsNoteDepth: number;
   promptOrder: "default" | "style_first" | "scenario_last";
+}
 
-  // --- Formatting (New) ---
-  userPrefix: string; // e.g. "User:" or "## User"
-  modelPrefix: string; // e.g. "Char:"
-  contextTemplate: string; // Advanced template string
+export interface FormattingConfig {
+  userPrefix: string;
+  modelPrefix: string;
+  contextTemplate: string;
+}
 
-  // --- Interface ---
+export interface InterfaceConfig {
   fontSize: number;
   backgroundBlur: number;
+}
 
-  // --- TTS (New) ---
+export interface ChatConfig
+  extends ApiConfig,
+    HordeConfig,
+    GenerationConfig,
+    AdvancedGenerationConfig,
+    SamplerConfig,
+    PromptConfig,
+    FormattingConfig,
+    InterfaceConfig {
+  responseStyle: "natural" | "sexy" | "flirty" | "horny" | "custom";
   tts: TTSConfig;
-
-  // --- Prompt Templates (New) ---
   promptTemplate?: string;
-
-  // --- Scene Mode ---
   sceneMode: boolean;
 }

@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Character } from '../types';
-import { Users, Upload, User, Loader2, Plus, Pencil, MoreVertical, Trash2, Copy, Download } from 'lucide-react';
+import { Users, Upload, Loader2, Plus, Pencil, Trash2, Copy, Download } from 'lucide-react';
 import { importCharacterCard, duplicateCharacter, exportCharacter, deleteCharacter } from '../services/zeroclawService';
 import { useLanguage } from '../i18n';
 import { CharacterAvatar } from './CharacterAvatar';
@@ -86,7 +86,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${charId}`;
+      a.download = `${charId}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -180,6 +180,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
                   onEditCharacter?.(char.id);
                 }}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-stone-800/80 text-stone-500 hover:text-white hover:bg-stone-700 opacity-0 group-hover:opacity-100 transition-all"
+                aria-label="Edit character"
                 title="Edit character"
               >
                 <Pencil size={14} />
@@ -261,6 +262,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
           onClick={handleImportClick}
           disabled={isImporting}
           className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'justify-center gap-2'} bg-white/[0.02] hover:bg-white/[0.05] text-stone-500 hover:text-stone-200 p-3 rounded-xl border border-white/5 hover:border-white/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed`}
+          aria-label={t('character.importCard')}
           title={t('character.importCard')}
         >
           {isImporting ? (

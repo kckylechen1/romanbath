@@ -29,7 +29,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
   return (
     <aside
-      className={`${leftSidebarOpen ? "w-80" : "w-20"} hidden md:flex flex-col glass-panel border-r border-white/5 transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] z-30`}
+      className={`${leftSidebarOpen ? "w-80" : "w-20"} hidden md:flex flex-col glass-panel border-r border-white/5 transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] z-30 bath-reveal bath-reveal-delay-1`}
     >
       <div className="flex items-center justify-between p-6 border-b border-white/5">
         <div
@@ -38,13 +38,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-bath-500/15 to-bath-600/10 flex items-center justify-center border border-bath-500/20 text-bath-400/80">
             <Flame size={16} />
           </div>
-          <span className="font-bold text-lg tracking-tight text-stone-100">
-            {t("app.title")} <span className="text-stone-500">V2</span>
+          <span className="font-display font-bold text-lg tracking-tight text-stone-100">
+            {t("app.title")} <span className="text-stone-500 font-sans text-sm">V2</span>
           </span>
         </div>
         <button
           onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
           className="text-stone-500 hover:text-stone-100 transition-colors"
+          aria-label={leftSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
           {leftSidebarOpen ? (
             <Minimize2 size={18} />

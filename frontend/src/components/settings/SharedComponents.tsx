@@ -2,20 +2,13 @@ import React, { useState, useEffect } from "react";
 import { Save } from "lucide-react";
 import { useLanguage } from "../../i18n";
 
-interface BufferedProps {
-  value: any;
-  onSave: (val: any) => void;
+interface BufferedInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> {
+  value: string | number;
+  onSave: (val: string | number) => void;
   label?: React.ReactNode;
-  placeholder?: string;
-  className?: string;
-  type?: string;
-  min?: string | number;
-  max?: string | number;
-  step?: string | number;
-  [key: string]: any;
 }
 
-export const BufferedInput: React.FC<BufferedProps> = ({
+export const BufferedInput: React.FC<BufferedInputProps> = ({
   value,
   onSave,
   label,
@@ -24,7 +17,7 @@ export const BufferedInput: React.FC<BufferedProps> = ({
   ...props
 }) => {
   const { t } = useLanguage();
-  const [localValue, setLocalValue] = useState(value ?? "");
+  const [localValue, setLocalValue] = useState<string | number>(value ?? "");
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -99,7 +92,13 @@ export const BufferedInput: React.FC<BufferedProps> = ({
   );
 };
 
-export const BufferedTextArea: React.FC<BufferedProps> = ({
+interface BufferedTextAreaProps extends Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> {
+  value: string | number;
+  onSave: (val: string | number) => void;
+  label?: React.ReactNode;
+}
+
+export const BufferedTextArea: React.FC<BufferedTextAreaProps> = ({
   value,
   onSave,
   label,
@@ -107,7 +106,7 @@ export const BufferedTextArea: React.FC<BufferedProps> = ({
   ...props
 }) => {
   const { t } = useLanguage();
-  const [localValue, setLocalValue] = useState(value);
+  const [localValue, setLocalValue] = useState<string | number>(value);
   const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {

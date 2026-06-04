@@ -98,7 +98,20 @@ async fn serve_fs_file(dist_dir: Option<&PathBuf>, path: &str) -> Response {
 
     let file_path = dir.join(path);
 
-    match tokio::fs::read(&file_path).await {
+    // Security: ensure resolved path stays within dist_dir
+    let canonical_dir = match tokio::fs::canonicalize(dir).await {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid dist directory").into_response(),
+    };
+    let canonical_file = match tokio::fs::canonicalize(&file_path).await {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+    };
+    if !canonical_file.starts_with(&canonical_dir) {
+        return (StatusCode::FORBIDDEN, "Path traversal denied").into_response();
+    }
+
+    match tokio::fs::read(&canonical_file).await {
         Ok(content) => {
             let mime = mime_guess::from_path(path)
                 .first_or_octet_stream()

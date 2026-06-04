@@ -76,8 +76,11 @@ pub async fn handle_image_gen(
     let api_key = state
         .config
         .read()
-        .first_model_provider()
-        .and_then(|e| e.api_key.clone());
+        .providers
+        .models
+        .iter_entries()
+        .find(|(ty, _, _)| *ty == "xai")
+        .and_then(|(_, _, entry)| entry.api_key.clone());
 
     match generate_xai_image(&req.prompt, resolution, api_key.as_deref()).await {
         Ok(data_url) => (

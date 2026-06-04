@@ -26,7 +26,7 @@ import {
 interface PersonaTabProps {
   config: ChatConfig;
   onConfigChange: (config: ChatConfig) => void;
-  handleChange: (key: keyof ChatConfig, value: any) => void;
+  handleChange: (key: keyof ChatConfig, value: unknown) => void;
 }
 
 export const PersonaTab: React.FC<PersonaTabProps> = ({

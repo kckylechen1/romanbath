@@ -67,8 +67,8 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
       } else {
         setError(result.error || "Image generation failed. Please try again.");
       }
-    } catch (err: any) {
-      setError(err?.message || "An unexpected error occurred.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
     } finally {
       setLoading(false);
     }

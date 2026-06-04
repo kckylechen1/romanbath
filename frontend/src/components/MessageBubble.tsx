@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Message, Role, Character, TTSConfig, GroupMessage } from "../types";
 import {
-  Bot,
-  User,
   ChevronLeft,
   ChevronRight,
   Pencil,
@@ -45,7 +43,7 @@ interface MessageBubbleProps {
 // Format message content to style actions, dialogues, and add visual separation
 const formatMessageContent = (content: string): React.ReactNode => {
   // Step 1: Remove citation markers like [1], [2][3], etc.
-  let cleanContent = content.replace(/\[\d+\]/g, "");
+  const cleanContent = content.replace(/\[\d+\]/g, "");
 
   // Step 2: Split content into segments (action, dialogue, or narrative)
   // This regex matches complete action (*...*) or dialogue patterns
@@ -207,6 +205,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   return (
     <div
       className={`flex w-full mb-6 ${isUser ? "justify-end" : "justify-start"} animate-message-in`}
+      style={{ contain: "layout" }}
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
     >
@@ -313,6 +312,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                     onClick={() => onSwipeChange?.(message.id, "left")}
                     className="p-1 hover:bg-white/10 rounded transition-colors"
                     disabled={isGenerating}
+                    aria-label="Previous swipe"
                   >
                     <ChevronLeft size={14} />
                   </button>
@@ -323,6 +323,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                     onClick={() => onSwipeChange?.(message.id, "right")}
                     className="p-1 hover:bg-white/10 rounded transition-colors"
                     disabled={isGenerating}
+                    aria-label="Next swipe"
                   >
                     <ChevronRight size={14} />
                   </button>
@@ -338,6 +339,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <button
                     onClick={handleStartEdit}
                     className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-white transition-colors"
+                    aria-label="Edit"
                     title="Edit"
                   >
                     <Pencil size={14} />
@@ -347,6 +349,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <button
                     onClick={handleCopy}
                     className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-white transition-colors"
+                    aria-label="Copy"
                     title="Copy"
                   >
                     <Copy size={14} />
@@ -362,6 +365,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                           onGenerateImage?.(extracted || "");
                         }}
                         className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-purple-400 transition-colors"
+                        aria-label="Generate image"
                         title="Generate image"
                         disabled={isGenerating}
                       >
@@ -379,6 +383,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                             }
                           }}
                           className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
+                          aria-label="Read aloud"
                           title="Read aloud"
                           disabled={isGenerating}
                         >
@@ -394,6 +399,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                       <button
                         onClick={() => onRegenerate?.(message.id)}
                         className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
+                        aria-label="Regenerate"
                         title="Regenerate"
                         disabled={isGenerating}
                       >
@@ -404,6 +410,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                       <button
                         onClick={() => onGenerateSwipe?.(message.id)}
                         className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
+                        aria-label="Generate alternative"
                         title="Generate alternative"
                         disabled={isGenerating}
                       >
@@ -415,6 +422,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                         <button
                           onClick={() => onContinue?.(message.id)}
                           className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
+                          aria-label="Continue"
                           title="Continue"
                           disabled={isGenerating}
                         >
@@ -428,6 +436,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <button
                     onClick={() => onDelete?.(message.id)}
                     className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-red-400 transition-colors"
+                    aria-label="Delete"
                     title="Delete"
                   >
                     <Trash2 size={14} />

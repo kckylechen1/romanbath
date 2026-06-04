@@ -123,8 +123,7 @@ pub async fn handle_import_character(
         return resp.into_response();
     }
 
-    let path = std::path::Path::new(&body.path);
-    match import_character(path) {
+    match import_character(&body.path) {
         Ok(name) => (
             StatusCode::OK,
             Json(ImportResponse {
@@ -141,7 +140,17 @@ pub async fn handle_import_character(
     }
 }
 
-fn import_character(path: &std::path::Path) -> anyhow::Result<String> {
+fn import_character(body_path: &str) -> anyhow::Result<String> {
+    let path = std::path::Path::new(body_path);
+
+    // Security: reject path traversal and absolute paths
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        anyhow::bail!("Path traversal not allowed");
+    }
+    if path.is_absolute() {
+        anyhow::bail!("Absolute paths not allowed");
+    }
+
     let mgr = CardManager::default()?;
     let name = mgr.import(path)?;
     Ok(name)
@@ -492,6 +501,8 @@ pub async fn handle_upload_character_avatar(
         return resp.into_response();
     }
 
+    const MAX_AVATAR_SIZE: usize = 10 * 1024 * 1024; // 10MB
+
     let bytes = match base64::engine::general_purpose::STANDARD.decode(&body.data_base64) {
         Ok(b) => b,
         Err(e) => {
@@ -502,6 +513,14 @@ pub async fn handle_upload_character_avatar(
                 .into_response();
         }
     };
+
+    if bytes.len() > MAX_AVATAR_SIZE {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Avatar too large: {} bytes. Max: 10MB", bytes.len())})),
+        )
+            .into_response();
+    }
 
     let mgr = match CardManager::default() {
         Ok(m) => m,

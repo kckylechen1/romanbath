@@ -68,7 +68,7 @@ export const saveBookmark = (bookmark: ChatBookmark): void => {
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(filtered));
   } catch (error) {
     console.error('Error saving bookmark:', error);
-    throw new Error('Failed to save bookmark');
+    throw new Error('Failed to save bookmark', { cause: error });
   }
 };
 
@@ -86,7 +86,7 @@ export const deleteBookmark = (bookmarkId: string): void => {
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(filtered));
   } catch (error) {
     console.error('Error deleting bookmark:', error);
-    throw new Error('Failed to delete bookmark');
+    throw new Error('Failed to delete bookmark', { cause: error });
   }
 };
 
@@ -106,7 +106,7 @@ export const renameBookmark = (bookmarkId: string, newName: string): void => {
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(updated));
   } catch (error) {
     console.error('Error renaming bookmark:', error);
-    throw new Error('Failed to rename bookmark');
+    throw new Error('Failed to rename bookmark', { cause: error });
   }
 };
 
@@ -192,7 +192,6 @@ export const importBookmarks = (jsonString: string, merge: boolean = true): numb
       const existing: ChatBookmark[] = stored ? JSON.parse(stored) : [];
 
       // Merge, preferring imported versions for duplicates
-      const existingIds = new Set(existing.map(b => b.id));
       const merged = [
         ...imported,
         ...existing.filter(b => !imported.some(i => i.id === b.id))
@@ -206,6 +205,6 @@ export const importBookmarks = (jsonString: string, merge: boolean = true): numb
     }
   } catch (error) {
     console.error('Error importing bookmarks:', error);
-    throw new Error('Failed to import bookmarks');
+    throw new Error('Failed to import bookmarks', { cause: error });
   }
 };

@@ -280,7 +280,7 @@ const mapSummaryToCharacter = (char: CharacterSummary): Character => {
   return {
     id: char.name,
     name: char.name,
-    avatar: char.has_avatar ? characterAvatarUrl(char.name) : '',
+    avatar: char.has_avatar ? `${characterAvatarUrl(char.name)}?v=1` : '',
     description: char.description || '',
     systemInstruction: systemInstruction.trim(),
     firstMessage: char.first_mes || '',
@@ -428,6 +428,8 @@ export const getCharacterDetails = async (
   }
 };
 
+const MAX_IMPORT_SIZE = 10 * 1024 * 1024; // 10MB
+
 export const importCharacterCard = async (
   file: File,
 ): Promise<{ success: boolean; fileName?: string; error?: string }> => {
@@ -437,6 +439,12 @@ export const importCharacterCard = async (
     return {
       success: false,
       error: `Unsupported file format: ${extension}. Supported: ${supportedFormats.join(', ')}`,
+    };
+  }
+  if (file.size > MAX_IMPORT_SIZE) {
+    return {
+      success: false,
+      error: `File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max: 10MB.`,
     };
   }
 
@@ -656,15 +664,19 @@ const parseSseStream = async (
         const data = line.slice(5).trim();
         if (data === '[DONE]') return fullText;
 
+        let parsed: unknown;
         try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) throw new Error(parsed.error);
-          if (parsed.token) {
-            fullText += parsed.token;
-            onToken(fullText);
-          }
-        } catch (e) {
-          if (e instanceof Error && !e.message.startsWith('Unexpected token')) throw e;
+          parsed = JSON.parse(data);
+        } catch {
+          // Ignore malformed chunks (keep-alives, comments, partial data)
+          continue;
+        }
+        if (typeof parsed !== 'object' || parsed === null) continue;
+        const p = parsed as Record<string, unknown>;
+        if (p.error) throw new Error(String(p.error));
+        if (typeof p.token === 'string') {
+          fullText += p.token;
+          onToken(fullText);
         }
       }
     }
@@ -685,6 +697,7 @@ export const generateTextStream = async (
   onChunk: (chunk: string, fullText: string) => void,
   onComplete: (fullText: string) => void,
   onError: (error: Error) => void,
+  signal?: AbortSignal,
 ): Promise<void> => {
   try {
     await ensurePairing();
@@ -692,6 +705,7 @@ export const generateTextStream = async (
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: jsonHeaders(),
+      signal,
       body: JSON.stringify({
         messages: request.messages,
         character_name: request.character_name ?? null,
@@ -723,12 +737,14 @@ export const generateTextStream = async (
 export const generateText = async (
   request: ChatRequestPayload,
   options: ChatOptions,
+  signal?: AbortSignal,
 ): Promise<string> => {
   await ensurePairing();
 
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: jsonHeaders(),
+    signal,
     body: JSON.stringify({
       messages: request.messages,
       character_name: request.character_name ?? null,
@@ -977,10 +993,11 @@ export class WsChatConnection {
   }
 
   send(content: string): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "message", content }));
-      this.fullText = "";
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket not connected");
     }
+    this.ws.send(JSON.stringify({ type: "message", content }));
+    this.fullText = "";
   }
 
   close(): void {

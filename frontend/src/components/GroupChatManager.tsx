@@ -10,19 +10,14 @@ import {
   Trash2,
   X,
   Check,
-  Edit2,
   Shuffle,
   RotateCcw,
   Sparkles,
-  ChevronDown,
-  UserPlus,
-  UserMinus,
 } from 'lucide-react';
 import { GroupChat, Character } from '../types';
 import {
   getGroupChats,
   createGroupChat,
-  updateGroupChat,
   deleteGroupChat,
 } from '../services/groupChatService';
 import { useLanguage } from '../i18n';
@@ -43,11 +38,9 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { t } = useLanguage();
+  useLanguage();
   const [groups, setGroups] = useState<GroupChat[]>([]);
   const [isCreating, setIsCreating] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-
   // New group form state
   const [newGroupName, setNewGroupName] = useState('');
   const [selectedCharacterIds, setSelectedCharacterIds] = useState<string[]>([]);
@@ -77,12 +70,6 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
       deleteGroupChat(id);
       setGroups(getGroupChats());
     }
-  };
-
-  const handleUpdateGroup = (id: string, updates: Partial<GroupChat>) => {
-    updateGroupChat(id, updates);
-    setGroups(getGroupChats());
-    setEditingId(null);
   };
 
   const toggleCharacterSelection = (charId: string) => {

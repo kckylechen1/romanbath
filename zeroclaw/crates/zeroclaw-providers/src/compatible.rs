@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 /// Used by: Venice, Vercel AI Gateway, Cloudflare AI Gateway, Moonshot,
 /// Synthetic, `OpenCode` Zen, `OpenCode` Go, `Z.AI`, `GLM`, `MiniMax`, Bedrock, Qianfan, Groq, Mistral, `xAI`, etc.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Clone)]
 pub struct OpenAiCompatibleModelProvider {
     /// `[providers.models.<alias>]` key this provider was constructed
     /// under. Used by the `Attributable` impl so log emissions carry the
@@ -71,6 +70,31 @@ pub struct OpenAiCompatibleModelProvider {
     /// without authentication. Keep the default credential-gated for hosted
     /// providers so missing credentials still fall through to catalog sources.
     unauthenticated_model_listing: bool,
+}
+
+impl Clone for OpenAiCompatibleModelProvider {
+    fn clone(&self) -> Self {
+        Self {
+            alias: self.alias.clone(),
+            name: self.name.clone(),
+            base_url: self.base_url.clone(),
+            credential: self.credential.clone(),
+            auth_header: self.auth_header.clone(),
+            supports_vision: self.supports_vision,
+            user_agent: self.user_agent.clone(),
+            merge_system_into_user: self.merge_system_into_user,
+            native_tool_calling: self.native_tool_calling,
+            timeout_secs: self.timeout_secs,
+            extra_headers: self.extra_headers.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+            api_path: self.api_path.clone(),
+            max_tokens: std::sync::Arc::new(parking_lot::Mutex::new(*self.max_tokens.lock())),
+            models_dev_key: self.models_dev_key.clone(),
+            openrouter_vendor_prefix: self.openrouter_vendor_prefix.clone(),
+            local_model_tool_sanitize: self.local_model_tool_sanitize,
+            unauthenticated_model_listing: self.unauthenticated_model_listing,
+        }
+    }
 }
 
 /// How the model_provider expects the API key to be sent.
@@ -2191,8 +2215,9 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         model: &str,
         temperature: Option<f64>,
     ) -> anyhow::Result<String> {
-        let temperature = temperature.unwrap_or(self.default_temperature());
-        let credential = self.credential.as_deref();
+        let this = self.clone();
+        let temperature = temperature.unwrap_or(this.default_temperature());
+        let credential = this.credential.as_deref();
 
         // Normalize image markers (e.g. local file paths from channel
         // attachments) into base64 data URIs before this message reaches the
@@ -2208,7 +2233,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 .unwrap_or(user_msg);
         let normalized_message = normalized_user.content;
 
-        let merge = self.effective_merge_system(model);
+        let merge = this.effective_merge_system(model);
         let mut messages = Vec::new();
 
         if merge {
@@ -2239,17 +2264,17 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             temperature,
             stream: Some(false),
             stream_options: None,
-            reasoning_effort: self.reasoning_effort_for_model(model),
+            reasoning_effort: this.reasoning_effort_for_model(model),
             tool_stream: None,
             tools: None,
             tool_choice: None,
-            max_tokens: self.effective_max_tokens(),
+            max_tokens: this.effective_max_tokens(),
         };
 
-        let url = self.chat_completions_url();
+        let url = this.chat_completions_url();
 
-        let response = match self
-            .apply_auth_header(self.http_client().post(&url).json(&request), credential)
+        let response = match this
+            .apply_auth_header(this.http_client().post(&url).json(&request), credential)
             .send()
             .await
         {
@@ -2263,11 +2288,11 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             let status = response.status();
             let error = response.text().await?;
             let sanitized = super::sanitize_api_error(&error);
-            anyhow::bail!("{} API error ({status}): {sanitized}", self.name);
+            anyhow::bail!("{} API error ({status}): {sanitized}", this.name);
         }
 
         let body = response.text().await?;
-        let chat_response = parse_chat_response_body(&self.name, &body)?;
+        let chat_response = parse_chat_response_body(&this.name, &body)?;
 
         chat_response
             .choices
@@ -2496,22 +2521,23 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         model: &str,
         temperature: Option<f64>,
     ) -> anyhow::Result<ProviderChatResponse> {
-        let temperature = temperature.unwrap_or(self.default_temperature());
-        let credential = self.credential.as_deref();
+        let this = self.clone();
+        let temperature = temperature.unwrap_or(this.default_temperature());
+        let credential = this.credential.as_deref();
 
         let normalized = Self::normalize_messages_for_upstream(request.messages).await?;
-        let merge = self.effective_merge_system(model);
+        let merge = this.effective_merge_system(model);
         let effective_messages = Self::flatten_system_messages(&normalized, merge);
-        let effective_messages = if self.native_tool_calling {
+        let effective_messages = if this.native_tool_calling {
             effective_messages
         } else {
-            self.strip_native_tool_messages(&effective_messages)
+            this.strip_native_tool_messages(&effective_messages)
         };
 
         // When wire_api = "responses", route all turns through the responses API.
 
-        let tools = self.convert_tool_specs_for_model(request.tools, model);
-        let native_request = self.build_native_tool_chat_request(
+        let tools = this.convert_tool_specs_for_model(request.tools, model);
+        let native_request = this.build_native_tool_chat_request(
             &effective_messages,
             tools,
             model,
@@ -2519,10 +2545,10 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             !merge,
         );
 
-        let url = self.chat_completions_url();
-        let response = match self
+        let url = this.chat_completions_url();
+        let response = match this
             .apply_auth_header(
-                self.http_client().post(&url).json(&native_request),
+                this.http_client().post(&url).json(&native_request),
                 credential,
             )
             .send()
@@ -2540,7 +2566,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             if Self::is_native_tool_schema_unsupported(status, &sanitized) {
                 let fallback_messages =
                     Self::with_prompt_guided_tool_instructions(request.messages, request.tools);
-                let text = self
+                let text = this
                     .chat_with_history(&fallback_messages, model, Some(temperature))
                     .await?;
                 return Ok(ProviderChatResponse {
@@ -2551,7 +2577,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 });
             }
 
-            anyhow::bail!("{} API error ({status}): {sanitized}", self.name);
+            anyhow::bail!("{} API error ({status}): {sanitized}", this.name);
         }
 
         let native_response: ApiChatResponse = response.json().await?;
@@ -2570,13 +2596,13 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                     ERROR,
                     ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
                         .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({"model_provider": &self.name})),
+                        .with_attrs(::serde_json::json!({"model_provider": &this.name})),
                     "compatible: empty choices in response"
                 );
-                anyhow::Error::msg(format!("No response from {}", self.name))
+                anyhow::Error::msg(format!("No response from {}", this.name))
             })?;
 
-        let mut result = self.parse_native_response(message);
+        let mut result = this.parse_native_response(message);
         result.usage = usage;
         Ok(result)
     }

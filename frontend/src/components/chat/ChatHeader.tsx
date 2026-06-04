@@ -44,7 +44,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   selectedCharacter,
   language,
   setLanguage,
-  config,
   setMobileMenuOpen,
   showMoreMenu,
   setShowMoreMenu,
@@ -74,11 +73,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const { t } = useLanguage();
 
   return (
-    <header className="h-16 border-b border-white/5 flex items-center justify-between px-6 md:px-8 backdrop-blur-md z-20">
+    <header className="h-16 border-b border-white/5 flex items-center justify-between px-6 md:px-8 backdrop-blur-md z-20 bath-reveal bath-reveal-delay-2">
       <div className="flex items-center gap-3 md:hidden">
         <button
           onClick={() => setMobileMenuOpen(true)}
           className="text-stone-400 p-2 hover:bg-white/5 rounded-lg"
+          aria-label="Open menu"
         >
           <Menu size={24} />
         </button>
@@ -147,6 +147,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           <button
             onClick={() => setShowMoreMenu(!showMoreMenu)}
             className="p-2 text-stone-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+            aria-label="More options"
           >
             <EllipsisVertical size={18} />
           </button>
@@ -248,6 +249,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                             handleDeleteBookmark(bookmark.id, e)
                           }
                           className="p-1 text-stone-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                          aria-label="Delete bookmark"
                         >
                           <Trash2 size={12} />
                         </button>
@@ -360,6 +362,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           className={`p-2.5 rounded-lg border transition-all duration-300 hidden md:flex items-center justify-center
                       ${rightSidebarOpen ? "bg-bath-900/50 text-bath-200 border-bath-700/50 shadow-lg" : "text-stone-500 border-white/5 hover:bg-white/5 hover:text-stone-100"}
                   `}
+          aria-label="Settings"
         >
           <SettingsIcon size={20} />
         </button>
@@ -367,6 +370,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         <button
           onClick={() => setMobileSettingsOpen(true)}
           className="md:hidden p-2 text-stone-400 hover:text-stone-100"
+          aria-label="Settings"
         >
           <SettingsIcon size={20} />
         </button>

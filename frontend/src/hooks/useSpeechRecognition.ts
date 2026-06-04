@@ -1,13 +1,13 @@
+/// <reference types="dom-speech-recognition" />
 import { useState, useEffect, useRef } from "react";
 
 export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
   const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   useEffect(() => {
     const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
+      window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (SpeechRecognition) {
       recognitionRef.current = new SpeechRecognition();
@@ -15,7 +15,7 @@ export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
       recognitionRef.current.interimResults = false;
       recognitionRef.current.lang = "en-US";
 
-      recognitionRef.current.onresult = (event: any) => {
+      recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
         let newTranscript = "";
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
@@ -27,7 +27,7 @@ export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
         }
       };
 
-      recognitionRef.current.onerror = (event: any) => {
+      recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error", event.error);
         setIsListening(false);
       };
@@ -60,6 +60,6 @@ export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
   return {
     isListening,
     toggleVoiceInput,
-    isSupported: !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+    isSupported: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
   };
 };
