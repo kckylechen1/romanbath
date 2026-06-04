@@ -78,7 +78,9 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
     if (!image) return;
     const link = document.createElement("a");
     link.href = image;
-    link.download = `grok-image-${Date.now()}.png`;
+    const mime = image.match(/^data:([^;]+);base64,/)?.[1];
+    const ext = mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
+    link.download = `grok-image-${Date.now()}.${ext}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

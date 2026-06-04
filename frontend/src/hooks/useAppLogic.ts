@@ -15,8 +15,14 @@ import {
   updateCharacter,
   createCharacter,
   deleteCharacter,
+  getCharacterDetails,
   ensurePairing,
 } from "../services/zeroclawService";
+import {
+  buildCharacterPhotoPrompt,
+  generateImage,
+  isPhotoRequest,
+} from "../services/imageGenService";
 import { countMessagesTokens } from "../services/tokenizerService";
 import {
   loadChatState,
@@ -582,6 +588,55 @@ export const useAppLogic = () => {
     ]);
 
     try {
+      if (isPhotoRequest(inputText)) {
+        const toolName = "xai_image_gen";
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === botMsgId
+              ? {
+                  ...msg,
+                  isThinking: false,
+                  toolCalls: [{ toolName, status: "running" }],
+                }
+              : msg,
+          ),
+        );
+
+        const details = await getCharacterDetails(respondingCharacter.name);
+        const prompt = buildCharacterPhotoPrompt(
+          inputText,
+          respondingCharacter,
+          details,
+        );
+        const result = await generateImage({ prompt, resolution: "1k" });
+
+        if (!result.success || !result.image_data_url) {
+          throw new Error(result.error || "Image generation failed");
+        }
+
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === botMsgId
+              ? {
+                  ...msg,
+                  content: "",
+                  isThinking: false,
+                  toolCalls: [
+                    {
+                      toolName,
+                      status: "done",
+                      output: JSON.stringify({ prompt }),
+                      mediaUrl: result.image_data_url,
+                      mediaType: "image",
+                    },
+                  ],
+                }
+              : msg,
+          ),
+        );
+        return;
+      }
+
       // ── Try WebSocket chat (tool-enabled: image gen, TTS) for supported agents ──
       // WS is best-effort. Many character cards only support the lightweight REST path.
       const useWs = !activeGroup && respondingCharacter.name !== "Assistant";
