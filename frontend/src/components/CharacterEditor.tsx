@@ -2,7 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { X, Save, Trash2, Upload, Sparkles } from 'lucide-react';
 import {
   CharacterFormData,
+  deleteCharacterAvatar,
   getCharacterDetails,
+  hasCharacterAvatar,
   uploadCharacterAvatar,
 } from '../services/zeroclawService';
 import LorebookEditor from './LorebookEditor';
@@ -46,6 +48,7 @@ const emptyForm = (): CharacterFormData => ({
   characterBook: null,
   extensions: {},
   avatarFile: null,
+  removeAvatar: false,
 });
 
 const CharacterEditor: React.FC<CharacterEditorProps> = ({
@@ -67,12 +70,17 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
   useEffect(() => {
     if (isOpen && characterId) {
       setIsLoading(true);
+      setAvatarPreview(null);
       getCharacterDetails(characterId).then(data => {
         if (data) {
-          setFormData({ ...emptyForm(), ...data, avatarFile: null });
-          if (data.creator) {
-            setAvatarPreview(`/api/characters/${encodeURIComponent(data.name)}/avatar`);
-          }
+          setFormData({ ...emptyForm(), ...data, avatarFile: null, removeAvatar: false });
+          hasCharacterAvatar(data.name).then((hasAvatar) => {
+            if (hasAvatar) {
+              setAvatarPreview(`/api/characters/${encodeURIComponent(data.name)}/avatar`);
+            } else {
+              setAvatarPreview(null);
+            }
+          });
         }
         setIsLoading(false);
       });
@@ -82,14 +90,14 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
     }
   }, [isOpen, characterId]);
 
-  const handleChange = (field: keyof CharacterFormData, value: string | string[] | null) => {
+  const handleChange = (field: keyof CharacterFormData, value: CharacterFormData[keyof CharacterFormData]) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setFormData(prev => ({ ...prev, avatarFile: file }));
+      setFormData(prev => ({ ...prev, avatarFile: file, removeAvatar: false }));
       const reader = new FileReader();
       reader.onload = () => {
         setAvatarPreview(reader.result as string);
@@ -99,7 +107,7 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
   };
 
   const clearAvatar = () => {
-    setFormData(prev => ({ ...prev, avatarFile: null }));
+    setFormData(prev => ({ ...prev, avatarFile: null, removeAvatar: true }));
     setAvatarPreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -120,6 +128,11 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
         const avatarResult = await uploadCharacterAvatar(formData.name, formData.avatarFile);
         if (!avatarResult.success) {
           alert(`Character saved, but avatar upload failed: ${avatarResult.error ?? 'unknown'}`);
+        }
+      } else if (formData.removeAvatar) {
+        const avatarResult = await deleteCharacterAvatar(formData.name);
+        if (!avatarResult.success) {
+          alert(`Character saved, but avatar removal failed: ${avatarResult.error ?? 'unknown'}`);
         }
       }
       onClose();

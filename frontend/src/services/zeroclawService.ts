@@ -93,6 +93,18 @@ export interface ChatOptions {
   userName: string | null;
   userDescription: string | null;
   sceneMode: boolean | null;
+  scenario?: string | null;
+  exampleDialogue?: string | null;
+  lorebook?: Array<{ id?: string; keys: string[]; content: string; enabled: boolean }> | null;
+  systemPromptOverride?: string | null;
+  authorsNote?: string | null;
+  authorsNoteDepth?: number | null;
+  promptOrder?: 'default' | 'style_first' | 'scenario_last' | null;
+  userPrefix?: string | null;
+  modelPrefix?: string | null;
+  contextTemplate?: string | null;
+  promptTemplate?: string | null;
+  negativePrompt?: string | null;
 }
 
 export interface CharacterBookEntry {
@@ -141,6 +153,7 @@ export interface CharacterFormData {
   // after the character data is saved (so avatar errors don't block the
   // card update and rename semantics stay clean).
   avatarFile?: File | null;
+  removeAvatar?: boolean;
 }
 
 interface CharacterSummary {
@@ -186,6 +199,79 @@ interface CharacterDataResponse {
 const characterAvatarUrl = (name: string): string =>
   `/api/characters/${encodeURIComponent(name)}/avatar`;
 
+interface CharacterBookEntryWire extends Omit<CharacterBookEntry, 'secondaryKeys' | 'tokenBudget'> {
+  secondary_keys?: string[];
+  token_budget?: number;
+  secondaryKeys?: string[];
+  tokenBudget?: number;
+}
+
+interface CharacterBookWire extends Omit<CharacterBook, 'entries'> {
+  entries: CharacterBookEntryWire[];
+}
+
+const isNonEmptyString = (value: string | null | undefined): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const mapBookEntryToForm = (entry: CharacterBookEntryWire): CharacterBookEntry => {
+  const formEntry = entry as CharacterBookEntryWire & Record<string, unknown>;
+  return {
+    ...formEntry,
+    keys: entry.keys ?? [],
+    secondaryKeys: entry.secondaryKeys ?? entry.secondary_keys ?? [],
+    content: entry.content ?? '',
+    enabled: entry.enabled ?? true,
+    selective: entry.selective ?? false,
+    constant: entry.constant ?? false,
+    position: entry.position ?? 'before_char',
+    tokenBudget: entry.tokenBudget ?? entry.token_budget,
+    priority: entry.priority,
+    recursive: entry.recursive ?? false,
+  };
+};
+
+const mapBookToForm = (book: CharacterBook | null): CharacterBook | null => {
+  if (!book) return null;
+  const wireBook = book as CharacterBookWire;
+  return {
+    ...wireBook,
+    name: wireBook.name ?? '',
+    description: wireBook.description ?? '',
+    entries: (wireBook.entries ?? []).map(mapBookEntryToForm),
+  };
+};
+
+const mapBookEntryToWire = (entry: CharacterBookEntry): CharacterBookEntryWire => {
+  const wireEntry = { ...(entry as CharacterBookEntryWire) };
+  const secondaryKeys = entry.secondaryKeys ?? wireEntry.secondary_keys ?? [];
+  const tokenBudget = entry.tokenBudget ?? wireEntry.token_budget;
+  delete wireEntry.secondaryKeys;
+  delete wireEntry.tokenBudget;
+  return {
+    ...wireEntry,
+    keys: entry.keys ?? [],
+    secondary_keys: secondaryKeys,
+    content: entry.content ?? '',
+    enabled: entry.enabled ?? true,
+    selective: entry.selective ?? false,
+    constant: entry.constant ?? false,
+    position: entry.position ?? 'before_char',
+    ...(tokenBudget == null ? {} : { token_budget: tokenBudget }),
+    priority: entry.priority,
+    recursive: entry.recursive ?? false,
+  };
+};
+
+const mapBookToWire = (book: CharacterBook | null | undefined): CharacterBookWire | null => {
+  if (!book) return null;
+  return {
+    ...book,
+    name: book.name ?? '',
+    description: book.description ?? '',
+    entries: (book.entries ?? []).map(mapBookEntryToWire),
+  };
+};
+
 const mapSummaryToCharacter = (char: CharacterSummary): Character => {
   let systemInstruction = '';
   if (char.personality) systemInstruction += char.personality + '\n\n';
@@ -202,7 +288,7 @@ const mapSummaryToCharacter = (char: CharacterSummary): Character => {
   };
 };
 
-const formToCharacterData = (data: CharacterFormData): Record<string, unknown> => ({
+export const formToCharacterData = (data: CharacterFormData): Record<string, unknown> => ({
   name: data.name,
   description: data.description || '',
   personality: data.personality || '',
@@ -223,11 +309,11 @@ const formToCharacterData = (data: CharacterFormData): Record<string, unknown> =
   nickname: data.nickname ?? '',
   group_only_greetings: data.groupOnlyGreetings ?? [],
   source: data.source ?? [],
-  character_book: data.characterBook ?? null,
+  character_book: mapBookToWire(data.characterBook),
   extensions: data.extensions ?? {},
 });
 
-const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData => ({
+export const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData => ({
   name: char.name || '',
   description: char.description || '',
   personality: char.personality || '',
@@ -244,7 +330,7 @@ const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData => ({
   nickname: char.nickname || '',
   groupOnlyGreetings: char.group_only_greetings || [],
   source: char.source || [],
-  characterBook: char.character_book ?? null,
+  characterBook: mapBookToForm(char.character_book),
   extensions: char.extensions || {},
 });
 
@@ -259,7 +345,7 @@ const fileToBase64 = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
-const buildOptionsBody = (options: ChatOptions): Record<string, unknown> => {
+export const buildOptionsBody = (options: ChatOptions): Record<string, unknown> => {
   const body: Record<string, unknown> = {};
   if (options.temperature !== null) body.temperature = options.temperature;
   if (options.maxTokens !== null) body.max_tokens = options.maxTokens;
@@ -272,6 +358,28 @@ const buildOptionsBody = (options: ChatOptions): Record<string, unknown> => {
   if (options.userName !== null) body.user_name = options.userName;
   if (options.userDescription !== null) body.user_description = options.userDescription;
   if (options.sceneMode) body.scene_mode = options.sceneMode;
+  if (isNonEmptyString(options.scenario)) body.scenario = options.scenario;
+  if (isNonEmptyString(options.exampleDialogue)) body.example_dialogue = options.exampleDialogue;
+  if (options.lorebook?.length) body.lorebook = options.lorebook;
+  if (isNonEmptyString(options.systemPromptOverride)) {
+    body.system_prompt_override = options.systemPromptOverride;
+  }
+  if (isNonEmptyString(options.authorsNote)) {
+    body.authors_note = options.authorsNote;
+  }
+  if (
+    isNonEmptyString(options.authorsNote)
+    && options.authorsNoteDepth !== null
+    && options.authorsNoteDepth !== undefined
+  ) {
+    body.authors_note_depth = options.authorsNoteDepth;
+  }
+  if (options.promptOrder && options.promptOrder !== 'default') body.prompt_order = options.promptOrder;
+  if (isNonEmptyString(options.userPrefix)) body.user_prefix = options.userPrefix;
+  if (isNonEmptyString(options.modelPrefix)) body.model_prefix = options.modelPrefix;
+  if (isNonEmptyString(options.contextTemplate)) body.context_template = options.contextTemplate;
+  if (isNonEmptyString(options.promptTemplate)) body.prompt_template = options.promptTemplate;
+  if (isNonEmptyString(options.negativePrompt)) body.negative_prompt = options.negativePrompt;
   return body;
 };
 
@@ -419,6 +527,38 @@ export const uploadCharacterAvatar = async (
   }
 };
 
+export const hasCharacterAvatar = async (characterName: string): Promise<boolean> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(characterAvatarUrl(characterName), { headers: jsonHeaders() });
+    return res.ok;
+  } catch {
+    return false;
+  }
+};
+
+export const deleteCharacterAvatar = async (
+  characterName: string,
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(characterAvatarUrl(characterName), {
+      method: 'DELETE',
+      headers: jsonHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      return { success: false, error: err.error || 'Avatar delete failed' };
+    }
+    return { success: true };
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : 'Avatar delete failed',
+    };
+  }
+};
+
 export const createCharacter = async (
   data: CharacterFormData,
 ): Promise<{ success: boolean; error: string; fileName?: string }> => {
@@ -533,8 +673,14 @@ const parseSseStream = async (
   return fullText;
 };
 
+export interface ChatRequestPayload {
+  messages: ChatMessage[];
+  character_name?: string;
+  system_prompts?: string[];
+}
+
 export const generateTextStream = async (
-  request: { messages: ChatMessage[]; character_name?: string },
+  request: ChatRequestPayload,
   options: ChatOptions,
   onChunk: (chunk: string, fullText: string) => void,
   onComplete: (fullText: string) => void,
@@ -549,6 +695,7 @@ export const generateTextStream = async (
       body: JSON.stringify({
         messages: request.messages,
         character_name: request.character_name ?? null,
+        system_prompts: request.system_prompts ?? [],
         mode: 'play',
         stream: true,
         ...buildOptionsBody(options),
@@ -574,7 +721,7 @@ export const generateTextStream = async (
 };
 
 export const generateText = async (
-  request: { messages: ChatMessage[]; character_name?: string },
+  request: ChatRequestPayload,
   options: ChatOptions,
 ): Promise<string> => {
   await ensurePairing();
@@ -585,6 +732,7 @@ export const generateText = async (
     body: JSON.stringify({
       messages: request.messages,
       character_name: request.character_name ?? null,
+      system_prompts: request.system_prompts ?? [],
       mode: 'play',
       stream: false,
       ...buildOptionsBody(options),

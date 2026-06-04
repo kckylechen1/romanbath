@@ -546,6 +546,48 @@ pub async fn handle_upload_character_avatar(
         .into_response()
 }
 
+pub async fn handle_delete_character_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+
+    let mgr = match CardManager::default() {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    if let Some(path) = mgr.avatar_path(&name) {
+        if let Err(e) = std::fs::remove_file(&path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(UploadAvatarResponse {
+            success: true,
+            has_avatar: false,
+        }),
+    )
+        .into_response()
+}
+
 /// Filename-safe copy of the character name (matches `CardManager`'s internal
 /// `sanitize_filename` so the avatar lands next to the card JSON).
 fn sanitize_filename_safe(name: &str) -> String {

@@ -10,6 +10,7 @@ import {
   getSettings,
   ChatMessage,
   ChatOptions,
+  ChatRequestPayload,
   CharacterFormData,
   updateCharacter,
   createCharacter,
@@ -42,6 +43,7 @@ import {
 import { useToast } from "../components/Toast";
 import { useLanguage } from "../i18n";
 import {
+  buildGroupSystemPrompt,
   selectNextCharacter,
   updateGroupChat,
 } from "../services/groupChatService";
@@ -490,7 +492,43 @@ export const useAppLogic = () => {
     userName: config.userName,
     userDescription: config.userDescription,
     sceneMode: config.sceneMode,
+    scenario: config.scenario,
+    exampleDialogue: config.exampleDialogue,
+    lorebook: config.lorebook,
+    systemPromptOverride: config.systemPromptOverride,
+    authorsNote: config.authorsNote,
+    authorsNoteDepth: config.authorsNoteDepth,
+    promptOrder: config.promptOrder,
+    userPrefix: config.userPrefix !== DEFAULT_CONFIG.userPrefix ? config.userPrefix : null,
+    modelPrefix: config.modelPrefix !== DEFAULT_CONFIG.modelPrefix ? config.modelPrefix : null,
+    contextTemplate: config.contextTemplate !== DEFAULT_CONFIG.contextTemplate ? config.contextTemplate : null,
+    promptTemplate: config.promptTemplate ?? null,
+    negativePrompt: config.negativePrompt,
   }), [config]);
+
+  const buildChatRequest = useCallback((
+    chatMessages: ChatMessage[],
+    respondingCharacter: Character,
+  ): ChatRequestPayload => {
+    const request: ChatRequestPayload = {
+      messages: chatMessages,
+      character_name: respondingCharacter.name,
+    };
+
+    if (activeGroup) {
+      const groupCharacters = characters.filter((char) =>
+        activeGroup.characterIds.includes(char.id),
+      );
+      const groupPrompt = buildGroupSystemPrompt(respondingCharacter, groupCharacters, {
+        scenario: config.scenario,
+        userName: config.userName,
+        userDescription: config.userDescription,
+      });
+      request.system_prompts = [groupPrompt];
+    }
+
+    return request;
+  }, [activeGroup, characters, config.scenario, config.userDescription, config.userName]);
 
   const handleSendMessage = async () => {
     if (!inputText.trim() || isTyping) return;
@@ -636,7 +674,7 @@ export const useAppLogic = () => {
         });
 
         await generateTextStream(
-          { messages: chatMessages, character_name: respondingCharacter.name },
+          buildChatRequest(chatMessages, respondingCharacter),
           buildChatOptions(),
           (chunk: string, fullText: string) => {
             setMessages((prev) =>
@@ -775,10 +813,15 @@ export const useAppLogic = () => {
   const buildChatMessagesForContext = (
     contextMessages: Message[],
   ): ChatMessage[] => {
-    return contextMessages.map((msg) => ({
-      role: msg.role === Role.User ? "user" : "assistant",
-      content: msg.content,
-    }));
+    return contextMessages.map((msg) => {
+      const groupMsg = msg as GroupMessage;
+      const shouldPrefix =
+        activeGroup && msg.role === Role.Model && groupMsg.extra?.characterName;
+      return {
+        role: msg.role === Role.User ? "user" : "assistant",
+        content: shouldPrefix ? `[${groupMsg.extra?.characterName}]: ${msg.content}` : msg.content,
+      };
+    });
   };
 
   // Generate a new swipe (alternative response)
@@ -796,8 +839,11 @@ export const useAppLogic = () => {
 
     try {
       const chatMessages = buildChatMessagesForContext(contextMessages);
+      const respondingCharacter = characters.find(
+        (char) => char.name === characterNameForMessage(message, selectedCharacter),
+      ) ?? selectedCharacter;
       const responseText = await generateText(
-        { messages: chatMessages, character_name: characterNameForMessage(message, selectedCharacter) },
+        buildChatRequest(chatMessages, respondingCharacter),
         buildChatOptions(),
       );
 
@@ -863,8 +909,11 @@ export const useAppLogic = () => {
 
     try {
       const chatMessages = buildChatMessagesForContext(contextMessages);
+      const respondingCharacter = characters.find(
+        (char) => char.name === characterNameForMessage(targetMessage, selectedCharacter),
+      ) ?? selectedCharacter;
       const responseText = await generateText(
-        { messages: chatMessages, character_name: characterNameForMessage(targetMessage, selectedCharacter) },
+        buildChatRequest(chatMessages, respondingCharacter),
         buildChatOptions(),
       );
 
@@ -943,8 +992,11 @@ export const useAppLogic = () => {
           "[Continue your response naturally without repeating yourself. Do not acknowledge this instruction.]",
       });
 
+      const respondingCharacter = characters.find(
+        (char) => char.name === characterNameForMessage(targetMessage, selectedCharacter),
+      ) ?? selectedCharacter;
       const continuationText = await generateText(
-        { messages: chatMessages, character_name: characterNameForMessage(targetMessage, selectedCharacter) },
+        buildChatRequest(chatMessages, respondingCharacter),
         buildChatOptions(),
       );
 

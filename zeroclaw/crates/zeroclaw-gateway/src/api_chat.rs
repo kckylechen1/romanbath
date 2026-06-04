@@ -22,8 +22,8 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use zeroclaw_api::model_provider::{ModelProvider, StreamOptions};
-use zeroclaw_cards::CardManager;
 use zeroclaw_cards::tokenizer;
+use zeroclaw_cards::{CardManager, PromptOrder};
 use zeroclaw_memory_sigil::ChatMemoryStore;
 use zeroclaw_providers::ChatMessage;
 
@@ -81,6 +81,58 @@ pub struct ChatRequest {
     /// card's system prompt.
     #[serde(default)]
     pub scene_mode: Option<bool>,
+    /// Frontend-authored system prompt fragments, for example group-chat
+    /// speaker rules. These are inserted after card/memory context and before
+    /// conversation history.
+    #[serde(default)]
+    pub system_prompts: Vec<String>,
+    /// Per-chat scenario override from RomanBath's settings panel.
+    #[serde(default)]
+    pub scenario: Option<String>,
+    /// Per-chat example dialogue from RomanBath's settings panel.
+    #[serde(default)]
+    pub example_dialogue: Option<String>,
+    /// Lightweight global lorebook entries from RomanBath's settings panel.
+    #[serde(default)]
+    pub lorebook: Vec<RequestLorebookEntry>,
+    /// High-priority prompt override/addendum from the settings panel.
+    #[serde(default)]
+    pub system_prompt_override: Option<String>,
+    /// Author's note / depth prompt.
+    #[serde(default)]
+    pub authors_note: Option<String>,
+    /// Number of non-system messages from the end before which to insert the
+    /// author's note. `0` means immediately before the latest message.
+    #[serde(default)]
+    pub authors_note_depth: Option<usize>,
+    /// RomanBath prompt-order preset: default, style_first, scenario_last.
+    #[serde(default)]
+    pub prompt_order: Option<String>,
+    /// Optional formatting hints.
+    #[serde(default)]
+    pub user_prefix: Option<String>,
+    #[serde(default)]
+    pub model_prefix: Option<String>,
+    #[serde(default)]
+    pub context_template: Option<String>,
+    #[serde(default)]
+    pub prompt_template: Option<String>,
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RequestLorebookEntry {
+    #[serde(default)]
+    pub keys: Vec<String>,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_mode() -> String {
@@ -90,6 +142,125 @@ fn default_mode() -> String {
 #[derive(Debug, Serialize)]
 pub struct ChatResponse {
     pub text: String,
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn prompt_order_from_preset(preset: Option<&str>) -> Option<PromptOrder> {
+    match preset {
+        Some("style_first") => Some(PromptOrder {
+            sections: vec![
+                "main".into(),
+                "persona".into(),
+                "system_prompt".into(),
+                "mode_note".into(),
+                "description".into(),
+                "personality".into(),
+                "world_info_before".into(),
+                "scenario".into(),
+                "world_info_after".into(),
+                "dialogue_examples".into(),
+                "post_history".into(),
+            ],
+        }),
+        Some("scenario_last") => Some(PromptOrder {
+            sections: vec![
+                "main".into(),
+                "persona".into(),
+                "world_info_before".into(),
+                "description".into(),
+                "personality".into(),
+                "system_prompt".into(),
+                "world_info_after".into(),
+                "dialogue_examples".into(),
+                "post_history".into(),
+                "scenario".into(),
+                "mode_note".into(),
+            ],
+        }),
+        _ => None,
+    }
+}
+
+fn matching_lorebook_content(
+    entries: &[RequestLorebookEntry],
+    conversation_text: &str,
+) -> Vec<String> {
+    let lower_text = conversation_text.to_lowercase();
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.enabled
+                && !entry.content.trim().is_empty()
+                && entry
+                    .keys
+                    .iter()
+                    .any(|key| !key.trim().is_empty() && lower_text.contains(&key.to_lowercase()))
+        })
+        .map(|entry| entry.content.trim().to_owned())
+        .collect()
+}
+
+fn formatting_note(req: &ChatRequest) -> Option<String> {
+    let mut lines = Vec::new();
+    if let Some(value) = non_empty(req.prompt_template.as_deref()) {
+        lines.push(format!("Prompt template preset: {value}"));
+    }
+    if let Some(value) = non_empty(req.context_template.as_deref()) {
+        lines.push(format!("Context template: {value}"));
+    }
+    if let Some(value) = non_empty(req.user_prefix.as_deref()) {
+        lines.push(format!("User speaker prefix: {value}"));
+    }
+    if let Some(value) = non_empty(req.model_prefix.as_deref()) {
+        lines.push(format!("Assistant/character speaker prefix: {value}"));
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(format!("[Formatting instructions]\n{}", lines.join("\n")))
+    }
+}
+
+fn insert_author_note(messages: &mut Vec<ChatMessage>, note: String, depth: usize) {
+    let non_system_positions: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, msg)| (msg.role != "system").then_some(idx))
+        .collect();
+
+    let insert_at = if non_system_positions.is_empty() {
+        messages.len()
+    } else {
+        let from_end = depth.min(non_system_positions.len().saturating_sub(1));
+        non_system_positions[non_system_positions.len() - 1 - from_end]
+    };
+
+    messages.insert(
+        insert_at,
+        ChatMessage::system(format!("[Author's note]\n{note}")),
+    );
+}
+
+fn insert_system_before_history(messages: &mut Vec<ChatMessage>, content: String) {
+    let insert_at = messages
+        .iter()
+        .position(|msg| msg.role != "system")
+        .unwrap_or(messages.len());
+    messages.insert(insert_at, ChatMessage::system(content));
+}
+
+fn read_first_existing_text(paths: impl IntoIterator<Item = std::path::PathBuf>) -> Option<String> {
+    paths
+        .into_iter()
+        .find_map(|path| std::fs::read_to_string(path).ok())
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
 }
 
 pub async fn handle_chat(
@@ -204,7 +375,12 @@ async fn handle_streaming_chat(state: &AppState, req: ChatRequest) -> axum::resp
 async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Vec<ChatMessage>> {
     let max_context_tokens = req.max_context_tokens;
     let model = state.model.clone();
-    let mut messages = req.messages;
+    let mut messages = req.messages.clone();
+    let conversation_text: String = messages
+        .iter()
+        .map(|m| format!("{}: {}", m.role, m.content))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     if let Some(ref name) = req.character_name {
         let mgr = CardManager::default()?;
@@ -213,13 +389,6 @@ async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Ve
             .map_err(|e| anyhow::Error::msg(format!("Character '{name}' not found: {e}")))?;
 
         let user_name = req.user_name.as_deref().unwrap_or("User");
-
-        // Build conversation text for lorebook keyword matching
-        let conversation_text: String = messages
-            .iter()
-            .map(|m| format!("{}: {}", m.role, m.content))
-            .collect::<Vec<_>>()
-            .join("\n");
 
         // ── Memory injection ──────────────────────────────────────────────
         // Source of truth for the memory DB directory: the top-level data_dir
@@ -236,11 +405,13 @@ async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Ve
         let memory_context = mem_store.inject_memories_into_prompt(name, &conversation_text);
 
         // Build ST-style prompt fragments
-        let mut fragments = card.build_prompt(
+        let prompt_order = prompt_order_from_preset(req.prompt_order.as_deref());
+        let mut fragments = card.build_prompt_with_order(
             &req.mode,
             user_name,
             &conversation_text,
             req.user_description.as_deref(),
+            prompt_order.as_ref(),
         );
 
         // Remove any existing system messages from the caller
@@ -261,22 +432,59 @@ async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Ve
 
         // ── Scene Mode injection ────────────────────────────────────────
         if req.scene_mode.unwrap_or(false) {
-            let scene_template_path = std::path::Path::new("characters/scene_template.txt");
-            if scene_template_path.exists() {
-                if let Ok(template) = std::fs::read_to_string(scene_template_path) {
-                    if !template.is_empty() {
-                        // Insert after the card's system prompt fragments
-                        // (which were just prepended at index 0+). Find the
-                        // first non-system message and insert before it.
-                        let insert_at = messages
-                            .iter()
-                            .position(|m| m.role != "system")
-                            .unwrap_or(messages.len());
-                        messages.insert(insert_at, ChatMessage::system(template));
-                    }
-                }
+            let data_dir = state.config.read().data_dir.clone();
+            if let Some(template) = read_first_existing_text([
+                mgr.cards_dir().join("scene_template.txt"),
+                data_dir.join("characters").join("scene_template.txt"),
+            ]) {
+                insert_system_before_history(&mut messages, template);
             }
         }
+    }
+
+    if let Some(prompt) = non_empty(req.system_prompt_override.as_deref()) {
+        insert_system_before_history(
+            &mut messages,
+            format!("[RomanBath prompt override]\n{prompt}"),
+        );
+    }
+
+    if let Some(scenario) = non_empty(req.scenario.as_deref()) {
+        insert_system_before_history(&mut messages, format!("[RomanBath scenario]\n{scenario}"));
+    }
+
+    if let Some(example) = non_empty(req.example_dialogue.as_deref()) {
+        insert_system_before_history(
+            &mut messages,
+            format!("[Additional example dialogue]\n{example}"),
+        );
+    }
+
+    for content in matching_lorebook_content(&req.lorebook, &conversation_text) {
+        insert_system_before_history(&mut messages, format!("[World info]\n{content}"));
+    }
+
+    if let Some(note) = formatting_note(&req) {
+        insert_system_before_history(&mut messages, note);
+    }
+
+    if let Some(negative) = non_empty(req.negative_prompt.as_deref()) {
+        insert_system_before_history(
+            &mut messages,
+            format!("[Negative prompt]\nAvoid the following in the next reply: {negative}"),
+        );
+    }
+
+    for prompt in req
+        .system_prompts
+        .iter()
+        .filter_map(|prompt| non_empty(Some(prompt)))
+    {
+        insert_system_before_history(&mut messages, prompt);
+    }
+
+    if let Some(note) = non_empty(req.authors_note.as_deref()) {
+        insert_author_note(&mut messages, note, req.authors_note_depth.unwrap_or(4));
     }
 
     // ── Context truncation ────────────────────────────────────────────

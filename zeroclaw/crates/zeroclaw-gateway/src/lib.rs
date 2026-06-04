@@ -1355,7 +1355,8 @@ pub async fn run_gateway(
         .route(
             "/api/characters/{name}/avatar",
             get(api_characters::handle_character_avatar)
-                .post(api_characters::handle_upload_character_avatar),
+                .post(api_characters::handle_upload_character_avatar)
+                .delete(api_characters::handle_delete_character_avatar),
         )
         .route("/api/chat", post(api_chat::handle_chat))
         .route("/api/image-gen", post(api_image_gen::handle_image_gen))
