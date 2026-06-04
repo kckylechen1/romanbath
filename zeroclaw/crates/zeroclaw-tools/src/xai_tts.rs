@@ -153,7 +153,7 @@ impl Tool for XaiTtsTool {
 
         // Resolve credentials
         let (auth_token, base_url) =
-            match xai_common::resolve_credentials(self.fallback_api_key.as_deref()) {
+            match xai_common::resolve_credentials(self.fallback_api_key.as_deref()).await {
                 Ok(creds) => creds,
                 Err(e) => {
                     return Ok(ToolResult {

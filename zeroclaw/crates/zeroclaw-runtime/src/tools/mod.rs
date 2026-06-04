@@ -776,7 +776,7 @@ pub fn all_tools_with_runtime(
         .first_model_provider()
         .and_then(|p| p.api_key.as_deref());
     let xai_has_credentials =
-        zeroclaw_tools::xai_common::resolve_credentials(xai_fallback_key).is_ok();
+        zeroclaw_tools::xai_common::has_configured_credentials(xai_fallback_key);
 
     if xai_has_credentials {
         let xai_key = xai_fallback_key.map(std::string::ToString::to_string);
@@ -1029,17 +1029,26 @@ mod tests {
     struct EnvGuard {
         oauth_token: Option<OsString>,
         api_key: Option<OsString>,
+        grok_auth_path: Option<OsString>,
     }
 
     impl EnvGuard {
         fn set_for_test(oauth: Option<&str>, api_key: Option<&str>) -> Self {
             let oauth_token = std::env::var_os("XAI_OAUTH_TOKEN");
             let api_key_value = std::env::var_os("XAI_API_KEY");
+            let grok_auth_path = std::env::var_os("ZEROCLAW_GROK_AUTH_PATH");
             with_env_var_kv("XAI_OAUTH_TOKEN", oauth);
             with_env_var_kv("XAI_API_KEY", api_key);
+            unsafe {
+                std::env::set_var(
+                    "ZEROCLAW_GROK_AUTH_PATH",
+                    std::env::temp_dir().join("zeroclaw-test-missing-grok-auth.json"),
+                );
+            }
             Self {
                 oauth_token,
                 api_key: api_key_value,
+                grok_auth_path,
             }
         }
     }
@@ -1053,6 +1062,10 @@ mod tests {
             match self.api_key.clone() {
                 Some(v) => unsafe { std::env::set_var("XAI_API_KEY", v) },
                 None => unsafe { std::env::remove_var("XAI_API_KEY") },
+            }
+            match self.grok_auth_path.clone() {
+                Some(v) => unsafe { std::env::set_var("ZEROCLAW_GROK_AUTH_PATH", v) },
+                None => unsafe { std::env::remove_var("ZEROCLAW_GROK_AUTH_PATH") },
             }
         }
     }

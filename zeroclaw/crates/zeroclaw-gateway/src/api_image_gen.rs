@@ -106,13 +106,10 @@ async fn generate_xai_image(
     resolution: &str,
     api_key: Option<&str>,
 ) -> Result<String, String> {
-    let (auth_token, base_url) = resolve_xai_credentials(api_key)?;
+    let (auth_token, base_url) = resolve_xai_credentials(api_key).await?;
 
     let url = format!("{}/images/generations", base_url);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let client = zeroclaw_tools::xai_common::http_client(120);
 
     let response = client
         .post(&url)
@@ -149,7 +146,11 @@ async fn generate_xai_image(
     let first = &data[0];
 
     if let Some(b64) = first["b64_json"].as_str() {
-        Ok(format!("data:image/png;base64,{b64}"))
+        let image_bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| format!("Failed to decode image data: {e}"))?;
+        let mime = zeroclaw_tools::xai_common::image_mime_type(&image_bytes);
+        Ok(format!("data:{mime};base64,{b64}"))
     } else if let Some(img_url) = first["url"].as_str() {
         let image_bytes = reqwest::get(img_url)
             .await
@@ -158,25 +159,14 @@ async fn generate_xai_image(
             .await
             .map_err(|e| format!("Failed to read image data: {e}"))?;
 
+        let mime = zeroclaw_tools::xai_common::image_mime_type(&image_bytes);
         let b64 = base64::engine::general_purpose::STANDARD.encode(&image_bytes);
-        Ok(format!("data:image/png;base64,{b64}"))
+        Ok(format!("data:{mime};base64,{b64}"))
     } else {
         Err("Response missing both b64_json and url".to_string())
     }
 }
 
-fn resolve_xai_credentials(api_key: Option<&str>) -> Result<(String, String), String> {
-    if let Some(key) = api_key {
-        let key = key.trim();
-        if !key.is_empty() {
-            return Ok((key.to_string(), "https://api.x.ai/v1".to_string()));
-        }
-    }
-    if let Ok(token) = std::env::var("XAI_OAUTH_TOKEN") {
-        return Ok((token, "https://api.x.ai/v1".to_string()));
-    }
-    if let Ok(key) = std::env::var("XAI_API_KEY") {
-        return Ok((key, "https://api.x.ai/v1".to_string()));
-    }
-    Err("XAI_OAUTH_TOKEN or XAI_API_KEY not set".to_string())
+async fn resolve_xai_credentials(api_key: Option<&str>) -> Result<(String, String), String> {
+    zeroclaw_tools::xai_common::resolve_credentials(api_key).await
 }

@@ -81,7 +81,13 @@ impl XaiImageGenTool {
             .await
             .context("Failed to create images directory")?;
 
-        let filename = format!("{}_{}.png", prefix, chrono::Utc::now().timestamp_millis());
+        let extension = xai_common::image_extension(&image_data);
+        let filename = format!(
+            "{}_{}.{}",
+            prefix,
+            chrono::Utc::now().timestamp_millis(),
+            extension
+        );
         let output_path = images_dir.join(filename);
 
         tokio::fs::write(&output_path, image_data)
@@ -104,7 +110,13 @@ impl XaiImageGenTool {
             .await
             .context("Failed to create images directory")?;
 
-        let filename = format!("{}_{}.png", prefix, chrono::Utc::now().timestamp_millis());
+        let extension = xai_common::image_extension(&image_data);
+        let filename = format!(
+            "{}_{}.{}",
+            prefix,
+            chrono::Utc::now().timestamp_millis(),
+            extension
+        );
         let output_path = images_dir.join(filename);
 
         tokio::fs::write(&output_path, image_data)
@@ -204,7 +216,7 @@ impl Tool for XaiImageGenTool {
 
         // Resolve credentials
         let (auth_token, base_url) =
-            match xai_common::resolve_credentials(self.fallback_api_key.as_deref()) {
+            match xai_common::resolve_credentials(self.fallback_api_key.as_deref()).await {
                 Ok(creds) => creds,
                 Err(e) => {
                     return Ok(ToolResult {

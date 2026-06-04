@@ -88,13 +88,10 @@ async fn generate_xai_tts(
     language: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    let (auth_token, base_url) = resolve_xai_credentials(api_key)?;
+    let (auth_token, base_url) = resolve_xai_credentials(api_key).await?;
 
     let url = format!("{}/tts", base_url);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let client = zeroclaw_tools::xai_common::http_client(60);
 
     let response = client
         .post(&url)
@@ -122,18 +119,6 @@ async fn generate_xai_tts(
         .map_err(|e| format!("Failed to read response: {e}"))
 }
 
-fn resolve_xai_credentials(api_key: Option<&str>) -> Result<(String, String), String> {
-    if let Some(key) = api_key {
-        let key = key.trim();
-        if !key.is_empty() {
-            return Ok((key.to_string(), "https://api.x.ai/v1".to_string()));
-        }
-    }
-    if let Ok(token) = std::env::var("XAI_OAUTH_TOKEN") {
-        return Ok((token, "https://api.x.ai/v1".to_string()));
-    }
-    if let Ok(key) = std::env::var("XAI_API_KEY") {
-        return Ok((key, "https://api.x.ai/v1".to_string()));
-    }
-    Err("XAI_OAUTH_TOKEN or XAI_API_KEY not set".to_string())
+async fn resolve_xai_credentials(api_key: Option<&str>) -> Result<(String, String), String> {
+    zeroclaw_tools::xai_common::resolve_credentials(api_key).await
 }

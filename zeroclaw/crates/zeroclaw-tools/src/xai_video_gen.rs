@@ -158,7 +158,7 @@ impl Tool for XaiVideoGenTool {
         }
 
         // Resolve credentials
-        let (auth_token, base_url) = match xai_common::resolve_credentials(None) {
+        let (auth_token, base_url) = match xai_common::resolve_credentials(None).await {
             Ok(creds) => creds,
             Err(e) => {
                 return Ok(ToolResult {
