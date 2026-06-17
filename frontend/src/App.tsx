@@ -223,6 +223,10 @@ const AppContent: React.FC = () => {
             rightSidebarOpen={logic.rightSidebarOpen}
             setRightSidebarOpen={logic.setRightSidebarOpen}
             setMobileSettingsOpen={logic.setMobileSettingsOpen}
+            messages={logic.messages}
+            messageTree={logic.messageTree}
+            activeLeafId={logic.activeLeafId}
+            setActiveLeafId={logic.setActiveLeafId}
           />
 
           {/* Messages */}
