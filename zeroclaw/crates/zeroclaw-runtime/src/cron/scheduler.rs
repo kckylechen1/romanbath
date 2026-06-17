@@ -740,6 +740,37 @@ fn warn_if_high_frequency_agent_job(job: &CronJob) {
 
 async fn deliver_if_configured(config: &Config, job: &CronJob, output: &str) -> Result<()> {
     let delivery: &DeliveryConfig = &job.delivery;
+
+    // chat_push mode: hand the cron output to the gateway-registered
+    // transport (SSE in RomanBath's case). The runtime stays free of
+    // any HTTP/SSE dependency — it just calls the registered function.
+    if delivery.mode.eq_ignore_ascii_case("chat_push") {
+        if let Some(f) = CHAT_PUSH_FN.get() {
+            let event = ChatPushEvent {
+                agent_alias: job.agent_alias.clone(),
+                character_name: String::new(), // CronJob doesn't carry character yet
+                push_kind: "cron".to_string(),
+                content: output.to_string(),
+                metadata: Some(serde_json::json!({
+                    "job_id": job.id,
+                    "job_name": job.name.clone(),
+                })),
+            };
+            let _delivered = f(event);
+        } else {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_attrs(::serde_json::json!({
+                        "job_id": job.id,
+                        "agent_alias": job.agent_alias,
+                    })),
+                "cron delivery mode is chat_push but no transport registered (gateway not running?)"
+            );
+        }
+        return Ok(());
+    }
+
     if !delivery.mode.eq_ignore_ascii_case("announce") {
         return Ok(());
     }
@@ -796,6 +827,45 @@ static DELIVERY_FN: std::sync::OnceLock<DeliveryFn> = std::sync::OnceLock::new()
 /// Register the channel delivery function. Called once at startup by the binary.
 pub fn register_delivery_fn(f: DeliveryFn) {
     let _ = DELIVERY_FN.set(f);
+}
+
+/// Event payload handed to a registered [`ChatPushFn`]. The runtime
+/// defines the shape; the gateway (or any other host binary) supplies
+/// the transport by registering a closure that knows where to send it
+/// (SSE channel, push notification, websocket fan-out, etc.).
+#[derive(Debug, Clone)]
+pub struct ChatPushEvent {
+    /// Agent the cron job ran under (`agents.<alias>`).
+    pub agent_alias: String,
+    /// Optional character name. Empty when the cron job didn't carry one
+    /// — subscribers filtering by character will not receive these.
+    pub character_name: String,
+    /// Coarse classification of the push source. `"cron"` for jobs fired
+    /// by the scheduler; future senders (always-on init, dreaming
+    /// milestones) will reuse this field with their own tags.
+    pub push_kind: String,
+    /// The assistant text the cron job produced.
+    pub content: String,
+    /// Free-form JSON the caller may attach (job id, run id, etc.).
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Function injected by the host binary to deliver chat pushes to
+/// subscribers (browser SSE, push notification, etc.). Returns the
+/// number of active subscribers that received the push — `0` means
+/// nobody was listening, and the host can choose to enqueue for later.
+pub type ChatPushFn = std::sync::Arc<dyn Fn(ChatPushEvent) -> usize + Send + Sync>;
+
+/// Global chat-push function, injected by the gateway at startup.
+/// When `None`, cron jobs with `delivery.mode = "chat_push"` log a
+/// one-time warning and silently drop the push (no transport registered).
+static CHAT_PUSH_FN: std::sync::OnceLock<ChatPushFn> = std::sync::OnceLock::new();
+
+/// Register the chat-push transport. Called once at gateway startup.
+/// Idempotent — second calls are silently ignored (matches
+/// `register_delivery_fn` semantics).
+pub fn register_chat_push_fn(f: ChatPushFn) {
+    let _ = CHAT_PUSH_FN.set(f);
 }
 
 pub async fn deliver_announcement(

@@ -747,6 +747,33 @@ pub async fn run_gateway(
         tx
     });
     let event_buffer = Arc::new(sse::EventBuffer::new(500));
+
+    // Wire cron-scheduler chat_push delivery into our SSE event bus.
+    // Cron jobs that opt into `delivery.mode = "chat_push"` will have
+    // their output broadcast here; the `/api/chat/subscribe` endpoint
+    // filters and surfaces them to RomanBath / future flagship clients.
+    // Idempotent across run_gateway invocations (OnceLock-backed).
+    {
+        let tx = event_tx.clone();
+        zeroclaw_runtime::cron::scheduler::register_chat_push_fn(std::sync::Arc::new(
+            move |event: zeroclaw_runtime::cron::scheduler::ChatPushEvent| {
+                let mut json = serde_json::json!({
+                    "type": "chat_push",
+                    "agent_alias": event.agent_alias,
+                    "character_name": event.character_name,
+                    "push_kind": event.push_kind,
+                    "content": event.content,
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                });
+                if let Some(meta) = event.metadata {
+                    json.as_object_mut()
+                        .expect("chat_push event is always an object")
+                        .insert("metadata".to_string(), meta);
+                }
+                tx.send(json).unwrap_or(0)
+            },
+        ));
+    }
     // Extract webhook secret for authentication
     let webhook_secret_hash: Option<Arc<str>> =
         config.channels.webhook.values().next().and_then(|webhook| {
