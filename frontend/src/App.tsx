@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { MessageCircle, Sparkles, Clock, X } from "lucide-react";
+import { MessageCircle, Sparkles, Clock, X, Upload } from "lucide-react";
 import { LanguageProvider } from "./i18n";
 import { getTimeSinceLastChat } from "./services/chatPersistenceService";
 
 // Hooks
 import { useAppLogic } from "./hooks/useAppLogic";
 import { useEscapeKey } from "./hooks/useEscapeKey";
+import { useCharacterImportDrop } from "./hooks/useCharacterImportDrop";
 
 // Components
 import { LeftSidebar } from "./components/layout/LeftSidebar";
@@ -64,10 +65,23 @@ const AppContent: React.FC = () => {
   useEscapeKey(() => logic.setShowCharacterEditor(false), logic.showCharacterEditor);
   useEscapeKey(logic.handleStartFresh, logic.showRestorePrompt);
 
+  const { isDragging, rootHandlers: dropHandlers } = useCharacterImportDrop({
+    onImported: (name) => {
+      logic.refreshCharacters();
+      toast.success("Character imported", name);
+    },
+    onError: (message) => {
+      toast.error("Import failed", message);
+    },
+  });
+
   return (
     <div
       className="relative w-full h-screen overflow-hidden font-sans text-stone-200 bg-black selection:bg-bath-500/20 selection:text-white"
       style={{ fontSize: `${logic.config.fontSize}px` }}
+      onDragOver={dropHandlers.onDragOver}
+      onDragLeave={dropHandlers.onDragLeave}
+      onDrop={dropHandlers.onDrop}
     >
       {/* Background Layer */}
       <div
@@ -341,6 +355,25 @@ const AppContent: React.FC = () => {
           commands={commands}
           onClose={() => setPaletteOpen(false)}
         />
+      )}
+
+      {/* Drag-and-drop character import overlay */}
+      {isDragging && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm pointer-events-none">
+          <div className="flex flex-col items-center gap-4 p-10 rounded-3xl border-2 border-dashed border-bath-500/60 bg-stone-900/60">
+            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-bath-500/20 to-bath-600/20 flex items-center justify-center border border-bath-500/40">
+              <Upload className="text-bath-300" size={36} />
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-semibold text-white">
+                Drop character card to import
+              </p>
+              <p className="text-sm text-stone-400 mt-1">
+                Supports PNG, JSON, WebP
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
