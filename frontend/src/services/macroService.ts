@@ -143,7 +143,8 @@ const expandMatch = (
       case 'persona':
         return ctx.personaDescription ?? '';
       case 'time':
-        return formatLocalTime(new Date(), 'HH:MM');
+        // `mm` (lowercase) is minute in the ST tokenizer; `MM` would be month.
+        return formatLocalTime(new Date(), 'HH:mm');
       case 'date':
         return formatLocalTime(new Date(), 'YYYY-MM-DD');
       case 'idle_duration':

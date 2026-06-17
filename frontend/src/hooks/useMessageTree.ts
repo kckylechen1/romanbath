@@ -69,9 +69,9 @@ export const pathToRoot = (tree: MessageTree, leafId: string | null | undefined)
 // through childrenIds[0]. Used when the user switches a sibling mid-
 // conversation: the new active leaf is whatever branch currently ends
 // at, walking down from the switched node.
-export const deepestLeaf = (tree: MessageTree, fromId: string): Message => {
+export const deepestLeaf = (tree: MessageTree, fromId: string): Message | null => {
   const start = tree.byId.get(fromId);
-  if (!start) return start as never;
+  if (!start) return null;
 
   const seen = new Set<string>();
   let cur: Message = start;
@@ -95,7 +95,9 @@ export const resolveLeaf = (tree: MessageTree, startId: string | null | undefine
   if (!start) return null;
   const children = tree.childrenOf.get(start.id) ?? [];
   if (children.length === 0) return start.id;
-  return deepestLeaf(tree, start.id).id;
+  // start.id is guaranteed in byId, so deepestLeaf cannot miss; the null
+  // check is for the type system rather than a realizable runtime state.
+  return deepestLeaf(tree, start.id)?.id ?? start.id;
 };
 
 // Get siblings sharing the same parent (and same role) as the given

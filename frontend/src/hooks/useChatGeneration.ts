@@ -142,30 +142,56 @@ export const useChatGeneration = (
       childrenIds: [],
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => {
+      const next = [...prev, userMsg];
+      // Patch the parent's childrenIds so the in-memory tree matches what
+      // linkLinearTree would rebuild on next load. Without this, the parent
+      // still looks like a leaf until reload and shows up as a spurious dot
+      // in BranchMiniMap.
+      if (parentForUser) {
+        const parentIdx = next.findIndex((m) => m.id === parentForUser);
+        if (parentIdx >= 0) {
+          const parent = { ...next[parentIdx] };
+          parent.childrenIds = [...(parent.childrenIds ?? []), userMsg.id];
+          next[parentIdx] = parent;
+        }
+      }
+      return next;
+    });
     setInputText("");
     setIsTyping(true);
 
     const botMsgId = generateId();
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: botMsgId,
-        role: Role.Model,
-        content: "",
-        timestamp: Date.now(),
-        isThinking: true,
-        parentId: userMsg.id,
-        childrenIds: [],
-        extra: activeGroup
-          ? {
-              characterId: respondingCharacter.id,
-              characterName: respondingCharacter.name,
-            }
-          : undefined,
-      } as GroupMessage,
-    ]);
+    setMessages((prev) => {
+      const next = [
+        ...prev,
+        {
+          id: botMsgId,
+          role: Role.Model,
+          content: "",
+          timestamp: Date.now(),
+          isThinking: true,
+          parentId: userMsg.id,
+          childrenIds: [],
+          extra: activeGroup
+            ? {
+                characterId: respondingCharacter.id,
+                characterName: respondingCharacter.name,
+              }
+            : undefined,
+        } as GroupMessage,
+      ];
+      // Record the bot as a child of the user message we just appended, for
+      // the same reason as the parent patch above.
+      const userIdx = next.findIndex((m) => m.id === userMsg.id);
+      if (userIdx >= 0) {
+        const user = { ...next[userIdx] };
+        user.childrenIds = [...(user.childrenIds ?? []), botMsgId];
+        next[userIdx] = user;
+      }
+      return next;
+    });
 
     // New tip becomes the active leaf so the chat surface renders the
     // branch we just grew.

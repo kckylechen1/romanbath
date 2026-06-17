@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import { expandMacros, MACRO_PATTERN, type MacroContext } from './macroService';
 
 const baseCtx = (): MacroContext => ({
@@ -116,6 +116,19 @@ describe('expandMacros — {{roll}}', () => {
 });
 
 describe('expandMacros — time / date / format', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('expands {{time}} to HH:mm (minute, not month)', () => {
+    // Pin system time so the assertion is deterministic. June 17, 2026,
+    // 14:30:45 local — the original bug rendered this as 14:06 because
+    // `MM` in the ST tokenizer is month, not minute.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 17, 14, 30, 45));
+    expect(expandMacros('{{time}}', baseCtx())).toBe('14:30');
+  });
+
   it('expands {{time}} to HH:MM shape', () => {
     expect(expandMacros('{{time}}', baseCtx())).toMatch(/^\d{2}:\d{2}$/);
   });
