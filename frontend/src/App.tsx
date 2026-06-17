@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { MessageCircle, Sparkles, Clock, X } from "lucide-react";
 import { LanguageProvider } from "./i18n";
 import { getTimeSinceLastChat } from "./services/chatPersistenceService";
@@ -17,13 +17,43 @@ import SettingsPanel from "./components/SettingsPanel";
 import GroupChatManager from "./components/GroupChatManager";
 import ImageGenModal from "./components/ImageGenModal";
 import CharacterEditor from "./components/CharacterEditor";
+import CommandPalette from "./components/CommandPalette";
 import { useToast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import DialogHost from "./components/DialogHost";
 
+// Command palette
+import { buildCommands } from "./commands/buildCommands";
+
 const AppContent: React.FC = () => {
   const logic = useAppLogic();
   const toast = useToast();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const commands = useMemo(() => buildCommands(logic), [logic]);
+
+  // Global hotkeys: ⌘K command palette, ⌘\ toggle left sidebar, ⌘. toggle right.
+  // These are chord bindings, so they're safe to fire even when an input
+  // has focus — the browser doesn't bind them by default.
+  useEffect(() => {
+    const isMod = (e: KeyboardEvent): boolean => e.metaKey || e.ctrlKey;
+    const onKey = (e: KeyboardEvent): void => {
+      if (!isMod(e)) return;
+      const key = e.key.toLowerCase();
+      if (key === "k") {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      } else if (key === "\\") {
+        e.preventDefault();
+        logic.setLeftSidebarOpen(!logic.leftSidebarOpen);
+      } else if (key === ".") {
+        e.preventDefault();
+        logic.setRightSidebarOpen(!logic.rightSidebarOpen);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [logic]);
 
   // Escape key handlers for modals and sidebars
   useEscapeKey(() => logic.setMobileMenuOpen(false), logic.mobileMenuOpen);
@@ -297,6 +327,14 @@ const AppContent: React.FC = () => {
 
       {/* Imperative confirm/prompt/alert dialogs (replaces window.*) */}
       <DialogHost />
+
+      {/* Cmd+K command palette */}
+      {paletteOpen && (
+        <CommandPalette
+          commands={commands}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
     </div>
   );
 };
