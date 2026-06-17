@@ -98,41 +98,56 @@ const parseLegacyStore = (raw: string | null): LegacyChatStore | null => {
 
 /**
  * Copy any chats still in localStorage into IndexedDB, then drop the legacy
- * key. Idempotent: if IndexedDB already has chats we assume migration ran
- * previously and skip the copy so we don't clobber newer writes.
+ * key. Idempotency keys off the legacy localStorage key itself — NOT the
+ * contents of IndexedDB — so a mid-loop failure or a race with saveChat
+ * cannot lose the unmigrated history.
  */
 export const migrateFromLocalStorageIfNeeded = async (): Promise<void> => {
   if (typeof globalThis === 'undefined' || !globalThis.localStorage) return;
 
-  // Idempotency check — IndexedDB already populated means we already migrated.
-  const existing = await storageListAllChats();
-  if (existing.length > 0) {
-    // Drop the legacy blob if it's still hanging around so we don't keep
-    // re-reading it on every launch.
-    if (globalThis.localStorage.getItem(LEGACY_STORAGE_KEY) !== null) {
-      globalThis.localStorage.removeItem(LEGACY_STORAGE_KEY);
-    }
+  // No legacy key means migration is fully done (or never had anything to
+  // migrate). This is the only correct idempotency signal: IDB contents
+  // can be non-empty from a saveChat that beat migration to the punch.
+  const legacyRaw = globalThis.localStorage.getItem(LEGACY_STORAGE_KEY);
+  if (legacyRaw === null) return;
+
+  const legacy = parseLegacyStore(legacyRaw);
+  if (!legacy) {
+    // Unparseable blob — drop it so a corrupt payload can't wedge migration
+    // forever. Logged so a support ticket can recover the raw value if needed.
+    console.error('Chat history legacy blob was unparseable; dropping it.');
+    globalThis.localStorage.removeItem(LEGACY_STORAGE_KEY);
     return;
   }
 
-  const legacy = parseLegacyStore(globalThis.localStorage.getItem(LEGACY_STORAGE_KEY));
-  if (!legacy) return;
-
+  // Watermark approach: each chat lands independently. Already-migrated
+  // chats (from a partial prior run) are detected by storageGetChat so we
+  // skip the rewrite instead of duplicating. Failures are logged and
+  // skipped so one bad record doesn't block the rest.
+  let allLanded = true;
   for (const characterId of Object.keys(legacy)) {
     for (const chat of legacy[characterId]) {
       try {
+        const alreadyThere = await storageGetChat(characterId, chat.fileName);
+        if (alreadyThere) continue;
         await storageSetChat(chat as IDBStoredChat);
       } catch (error) {
-        // Leave the legacy key intact so the next launch retries. Surface the
-        // error so it doesn't fail silently.
-        console.error('Chat history migration failed for', characterId, chat.fileName, error);
-        return;
+        allLanded = false;
+        console.error(
+          'Chat history migration failed for',
+          characterId,
+          chat.fileName,
+          error,
+        );
       }
     }
   }
 
-  // Only remove the source after every chat landed in IndexedDB.
-  globalThis.localStorage.removeItem(LEGACY_STORAGE_KEY);
+  // Only drop the source once every chat is in IndexedDB. Partial runs leave
+  // the legacy key in place so the next launch resumes from where it broke.
+  if (allLanded) {
+    globalThis.localStorage.removeItem(LEGACY_STORAGE_KEY);
+  }
 };
 
 const ensureMigrated = (): Promise<void> => {
@@ -161,7 +176,18 @@ export const saveChat = async (
   characterName: string,
 ): Promise<boolean> => {
   try {
-    await ensureMigrated();
+    // Explicit race guard: if the legacy localStorage key is still present
+    // when saveChat runs, the module-load migration kick hasn't finished
+    // yet. Awaiting here makes sure we don't land a write that the migration
+    // would then misclassify as "already migrated" and drop the blob.
+    if (
+      typeof globalThis !== 'undefined' &&
+      globalThis.localStorage &&
+      globalThis.localStorage.getItem(LEGACY_STORAGE_KEY) !== null
+    ) {
+      await ensureMigrated();
+    }
+
     const now = Date.now();
     const existing = await storageGetChat(characterId, chatFileName);
 
@@ -306,12 +332,15 @@ export const renameChat = async (
     await ensureMigrated();
     const chat = await storageGetChat(characterId, originalFileName);
     if (!chat) return false;
-    await storageDeleteChat(characterId, originalFileName);
+    // Write the new key first and only delete the old one once the new one
+    // is safely on disk. If setChat throws (quota, IO) the original is
+    // preserved so a rename can't lose the chat.
     await storageSetChat({
       ...chat,
       fileName: newFileName,
       updatedAt: Date.now(),
     });
+    await storageDeleteChat(characterId, originalFileName);
     return true;
   } catch (error) {
     console.error('Error renaming chat:', error);

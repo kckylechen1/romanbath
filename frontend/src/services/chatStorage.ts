@@ -38,7 +38,38 @@ export const storageGetChat = async (
 };
 
 export const storageSetChat = async (chat: StoredChat): Promise<void> => {
-  await set(buildKey(chat.characterId, chat.fileName), chat, store);
+  try {
+    await set(buildKey(chat.characterId, chat.fileName), chat, store);
+  } catch (error) {
+    // Quota exhaustion is recoverable by evicting the oldest chats across
+    // every character; rethrow anything else so the caller sees the real
+    // failure (structured-clone errors, IO faults, etc.).
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      const evicted = await _evictOldestAcrossCharacters();
+      if (!evicted) throw error;
+      await set(buildKey(chat.characterId, chat.fileName), chat, store);
+      return;
+    }
+    throw error;
+  }
+};
+
+// Drop the oldest chats across all characters to free IDB quota. Returns
+// true if anything was evicted so the caller can decide whether a retry is
+// worth attempting. Pure LRU on updatedAt — we don't try to be smart about
+// which character loses history, since cross-character fairness is the same
+// long-tail problem the old localStorage writeStore had.
+const EVICT_BATCH_SIZE = 5;
+
+export const _evictOldestAcrossCharacters = async (): Promise<boolean> => {
+  const all = await storageListAllChats();
+  if (all.length === 0) return false;
+  const sorted = all.slice().sort((a, b) => a.updatedAt - b.updatedAt);
+  const victims = sorted.slice(0, Math.min(EVICT_BATCH_SIZE, sorted.length));
+  for (const victim of victims) {
+    await del(buildKey(victim.characterId, victim.fileName), store);
+  }
+  return victims.length > 0;
 };
 
 export const storageDeleteChat = async (
