@@ -38,11 +38,13 @@
 //! but starts gentle.
 
 pub mod appraisal;
+pub mod memory;
 pub mod perception;
 pub mod persona;
 pub mod state;
 
 pub use appraisal::{EmpathyStrategy, appraise, select_strategy};
+pub use memory::{RelationshipMemory, TimestampedAffect};
 pub use perception::{AffectEstimator, ConversationContext, HeuristicEstimator, UserSignals};
 pub use persona::{Archetype, CompanionPersona, ExpressedStance};
 pub use state::{AffectState, UserEmotion};

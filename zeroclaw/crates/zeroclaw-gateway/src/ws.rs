@@ -1137,6 +1137,42 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
     }
 }
 
+/// Compute the affect prompt hint for a user message. Uses the
+/// HeuristicEstimator (keyword + sentiment based, no LLM call) to
+/// estimate valence/arousal/label, then appraises a strategy and
+/// produces a short `[affect]` block the agent will see alongside
+/// the user's message.
+///
+/// Returns empty string when the affect is neutral with low confidence
+/// (don't clutter the prompt for unremarkable turns).
+fn compute_affect_hint(user_message: &str) -> String {
+    use chrono::Timelike;
+    use zeroclaw_affect::{
+        CompanionPersona, ConversationContext, HeuristicEstimator, UserSignals,
+        perceive_and_appraise,
+    };
+
+    let ctx = ConversationContext {
+        local_hour: chrono::Local::now().hour() as u8,
+        ..Default::default()
+    };
+    let signals = UserSignals {
+        message_text: user_message.to_string(),
+        ..Default::default()
+    };
+    let persona = CompanionPersona::default();
+    let (affect, stance) = perceive_and_appraise(&HeuristicEstimator, &ctx, &signals, &persona);
+
+    // Skip the hint when confidence is very low and the affect is
+    // neutral — adding "[affect] warmth=0.60 energy=0.50
+    // strategy=Mirror" to every "ok" message is noise.
+    if affect.confidence < 0.35 {
+        return String::new();
+    }
+
+    stance.to_prompt_hint()
+}
+
 /// Process a single chat message through the agent and send the response.
 ///
 /// Uses [`Agent::turn_streamed`] so that intermediate text chunks, tool calls,
@@ -1200,7 +1236,18 @@ async fn process_chat_message(
     // `agent` into a spawned task (it is `&mut`), so we use a join
     // instead — `turn_streamed` writes to the channel and we drain it
     // from the other branch.
-    let content_owned = content.to_string();
+    // ── Affect modulation ─────────────────────────────────────────
+    // Estimate the user's emotional state from their message, pick an
+    // empathy strategy, and prepend a short prompt hint to the content
+    // the agent sees. The hint is NOT stored in memory or consolidation
+    // — those use the original `content` argument. Only the agent turn
+    // sees the hint.
+    let affect_hint = compute_affect_hint(content);
+    let content_owned = if affect_hint.is_empty() {
+        content.to_string()
+    } else {
+        format!("{affect_hint}\n\n{content}")
+    };
     let session_key_owned = session_key.to_string();
     let turn_fut = async {
         zeroclaw_runtime::agent::loop_::scope_session_key(

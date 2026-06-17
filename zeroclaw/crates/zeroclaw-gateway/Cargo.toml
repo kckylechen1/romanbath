@@ -20,6 +20,7 @@ zeroclaw-tools.workspace = true
 zeroclaw-plugins = { workspace = true, optional = true }
 zeroclaw-cards.workspace = true
 zeroclaw-memory-sigil.workspace = true
+zeroclaw-affect = { path = "../zeroclaw-affect" }
 
 # HTTP server
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws", "macros"] }
