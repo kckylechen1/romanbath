@@ -75,22 +75,33 @@ export const useMessageActions = (
 
       const tree = indexMessages(messages);
       const newLeaf = deepestLeaf(tree, nextSibling.id);
+      if (!newLeaf) return;
       setActiveLeafId(newLeaf.id);
     },
     [messages, setActiveLeafId],
   );
 
-  const handleGenerateSwipe = useCallback(
-    async (messageId: string) => {
-      const target = messages.find((m) => m.id === messageId);
-      if (!target || target.role !== Role.Model) return;
-
+  // Shared branch-creation helper for swipe and regenerate. Both flows
+  // build a placeholder child of `target.parent`, generate into it, and
+  // roll back on failure. The macro context needs the actual responding
+  // character name so {{char}} stays consistent across regenerations.
+  const appendModelBranch = useCallback(
+    async (
+      target: Message,
+      rollbackLeafId: string,
+      successToast: string,
+      errorToast: string,
+    ): Promise<void> => {
       const parent = target.parentId ? messages.find((m) => m.id === target.parentId) ?? null : null;
       const contextMessages = pathToRoot(indexMessages(messages), target.parentId ?? null);
 
-      setIsTyping(true);
+      const respondingCharacter =
+        characters.find(
+          (char) => char.name === characterNameForMessage(target, selectedCharacter),
+        ) ?? selectedCharacter;
 
       const placeholderId = generateId();
+      setIsTyping(true);
       appendChild(parent, {
         id: placeholderId,
         role: Role.Model,
@@ -103,11 +114,7 @@ export const useMessageActions = (
       setActiveLeafId(placeholderId);
 
       try {
-        const chatMessages = buildChatMessagesForContext(contextMessages);
-        const respondingCharacter =
-          characters.find(
-            (char) => char.name === characterNameForMessage(target, selectedCharacter),
-          ) ?? selectedCharacter;
+        const chatMessages = buildChatMessagesForContext(contextMessages, respondingCharacter.name);
         const responseText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
           buildChatOptions(),
@@ -120,14 +127,14 @@ export const useMessageActions = (
               : msg,
           ),
         );
-        toast.success("New branch generated");
+        toast.success(successToast);
       } catch (error: unknown) {
         // Roll back the placeholder branch so a failed generation doesn't
         // leave a dangling thinking bubble on the active path.
         setMessages((prev) => prev.filter((m) => m.id !== placeholderId));
-        setActiveLeafId(target.id);
+        setActiveLeafId(rollbackLeafId);
         toast.error(
-          "Failed to generate branch",
+          errorToast,
           error instanceof Error ? error.message : "Unknown error",
         );
       } finally {
@@ -147,6 +154,15 @@ export const useMessageActions = (
       buildChatRequest,
       buildChatMessagesForContext,
     ],
+  );
+
+  const handleGenerateSwipe = useCallback(
+    async (messageId: string) => {
+      const target = messages.find((m) => m.id === messageId);
+      if (!target || target.role !== Role.Model) return;
+      await appendModelBranch(target, target.id, "New branch generated", "Failed to generate branch");
+    },
+    [messages, appendModelBranch],
   );
 
   const handleRegenerate = useCallback(
@@ -165,70 +181,14 @@ export const useMessageActions = (
         }
       }
       if (!target || target.role !== Role.Model) return;
-
-      const parent = target.parentId ? messages.find((m) => m.id === target.parentId) ?? null : null;
-      const contextMessages = pathToRoot(indexMessages(messages), target.parentId ?? null);
-
-      const placeholderId = generateId();
-      const previousLeafId = activeLeafId;
-
-      setIsTyping(true);
-      appendChild(parent, {
-        id: placeholderId,
-        role: Role.Model,
-        content: "",
-        timestamp: Date.now(),
-        isThinking: true,
-        childrenIds: [],
-        extra: target.extra,
-      } as Message);
-      setActiveLeafId(placeholderId);
-
-      try {
-        const chatMessages = buildChatMessagesForContext(contextMessages);
-        const respondingCharacter =
-          characters.find(
-            (char) => char.name === characterNameForMessage(target, selectedCharacter),
-          ) ?? selectedCharacter;
-        const responseText = await generateText(
-          buildChatRequest(chatMessages, respondingCharacter),
-          buildChatOptions(),
-        );
-
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === placeholderId
-              ? { ...msg, content: responseText, isThinking: false, timestamp: Date.now() }
-              : msg,
-          ),
-        );
-        toast.success("Branch regenerated");
-      } catch (error: unknown) {
-        setMessages((prev) => prev.filter((m) => m.id !== placeholderId));
-        setActiveLeafId(previousLeafId);
-        toast.error(
-          "Regeneration failed",
-          error instanceof Error ? error.message : "Unknown error",
-        );
-      } finally {
-        setIsTyping(false);
-      }
+      await appendModelBranch(
+        target,
+        activeLeafId ?? target.id,
+        "Branch regenerated",
+        "Regeneration failed",
+      );
     },
-    [
-      messages,
-      activePath,
-      activeLeafId,
-      characters,
-      selectedCharacter,
-      setIsTyping,
-      setMessages,
-      setActiveLeafId,
-      appendChild,
-      toast,
-      buildChatOptions,
-      buildChatRequest,
-      buildChatMessagesForContext,
-    ],
+    [messages, activePath, activeLeafId, appendModelBranch],
   );
 
   const handleContinue = useCallback(
@@ -254,17 +214,17 @@ export const useMessageActions = (
 
       try {
         const contextMessages = activePath.slice(0, targetIndex + 1);
-        const chatMessages = buildChatMessagesForContext(contextMessages);
+        const respondingCharacter =
+          characters.find(
+            (char) => char.name === characterNameForMessage(target, selectedCharacter),
+          ) ?? selectedCharacter;
+        const chatMessages = buildChatMessagesForContext(contextMessages, respondingCharacter.name);
         chatMessages.push({
           role: "user",
           content:
             "[Continue your response naturally without repeating yourself. Do not acknowledge this instruction.]",
         });
 
-        const respondingCharacter =
-          characters.find(
-            (char) => char.name === characterNameForMessage(target, selectedCharacter),
-          ) ?? selectedCharacter;
         const continuationText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
           buildChatOptions(),
