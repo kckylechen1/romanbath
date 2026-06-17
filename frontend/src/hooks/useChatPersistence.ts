@@ -1,11 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type React from "react";
-import { Character, Message, ChatConfig, ChatInfo } from "../types";
+import { Character, Message, ChatConfig } from "../types";
+import type { ChatInfo } from "../services/chatService";
 import {
-  loadChatState,
-  debouncedSaveChatState,
   getAppSettings,
-  clearChatState,
+  saveLastSession,
+  loadLastSession,
+  clearLastSession,
 } from "../services/chatPersistenceService";
 import {
   saveChat,
@@ -94,17 +95,20 @@ export const useChatPersistence = (
     if (messages.length > 1 && currentChatFileName) {
       debouncedSaveToBackend();
     }
-    // Also save to localStorage for quick restore
+    // Persist a tiny last-session pointer so the boot-time restore
+    // prompt knows which character + chat to offer. The messages
+    // themselves live only in IndexedDB (single source of truth).
     if (
       messages.length > 0 &&
       selectedCharacter.id !== "default" &&
       appSettings.autoRestoreChat
     ) {
-      debouncedSaveChatState(
-        selectedCharacter.id,
-        messages,
-        currentChatFileName || undefined,
-      );
+      saveLastSession({
+        characterId: selectedCharacter.id,
+        chatFileName: currentChatFileName ?? "",
+        messageCount: messages.length,
+        lastUpdated: Date.now(),
+      });
     }
   }, [messages, currentChatFileName, debouncedSaveToBackend, selectedCharacter.id, appSettings.autoRestoreChat]);
 
@@ -212,12 +216,12 @@ export const useChatPersistence = (
   useEffect(() => {
     if (hasInitializedRef.current) return;
 
-    const savedChat = loadChatState();
-    if (savedChat && appSettings.autoRestoreChat && characters.length > 0) {
+    const lastSession = loadLastSession();
+    if (lastSession && appSettings.autoRestoreChat && characters.length > 0) {
       const savedCharacter = characters.find(
-        (c) => c.id === savedChat.characterId,
+        (c) => c.id === lastSession.characterId,
       );
-      if (savedCharacter && savedChat.messages.length > 1) {
+      if (savedCharacter && lastSession.messageCount > 1) {
         setSavedChatCharacterName(savedCharacter.name);
         setShowRestorePrompt(true);
       } else {
@@ -228,18 +232,28 @@ export const useChatPersistence = (
     }
   }, [characters, appSettings.autoRestoreChat]);
 
-  const handleRestoreChat = (characters: Character[]) => {
-    const savedChat = loadChatState();
-    if (savedChat) {
+  const handleRestoreChat = async (characters: Character[]) => {
+    const lastSession = loadLastSession();
+    if (lastSession) {
       const savedCharacter = characters.find(
-        (c) => c.id === savedChat.characterId,
+        (c) => c.id === lastSession.characterId,
       );
       if (savedCharacter) {
         restoreInProgressRef.current = true;
         setSelectedCharacter(savedCharacter);
-        setMessages(savedChat.messages);
+        // Pull the canonical messages from IndexedDB — the localStorage
+        // pointer only carries metadata, never the messages themselves.
+        try {
+          const { messages: loaded } = await loadChat(
+            savedCharacter.id,
+            lastSession.chatFileName,
+          );
+          setMessages(loaded.length > 0 ? loaded : []);
+        } catch {
+          setMessages([]);
+        }
         setCurrentChatFileName(
-          savedChat.chatFileName || createNewChatFileName(savedCharacter.name),
+          lastSession.chatFileName || createNewChatFileName(savedCharacter.name),
         );
       }
     }
@@ -263,7 +277,7 @@ export const useChatPersistence = (
   }, [selectedCharacter, setMessages, loadChatHistory]);
 
   const handleStartFresh = () => {
-    clearChatState();
+    clearLastSession();
     setShowRestorePrompt(false);
     hasInitializedRef.current = true;
     startNewChat();

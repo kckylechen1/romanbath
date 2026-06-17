@@ -92,6 +92,61 @@ const migrateLegacyStorage = (): void => {
 
 migrateLegacyStorage();
 
+// ── Last-session pointer ──────────────────────────────────────────────
+// Chat messages themselves live in IndexedDB (see chatStorage). This is
+// the tiny "what was the user last doing" pointer used by the restore
+// prompt on app boot — characterId + chatFileName + counts, never the
+// messages themselves. Keeping it in localStorage lets the prompt render
+// before the IDB migration finishes; the messages are pulled from IDB
+// when the user actually clicks Restore.
+const LAST_SESSION_KEY = `${STORAGE_PREFIX}_last_session_v1`;
+
+export interface LastSession {
+    characterId: string;
+    chatFileName: string;
+    messageCount: number;
+    lastUpdated: number;
+}
+
+export const saveLastSession = (session: LastSession): void => {
+    try {
+        localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(session));
+    } catch {
+        // Best-effort — private mode etc.
+    }
+};
+
+export const loadLastSession = (): LastSession | null => {
+    try {
+        const raw = localStorage.getItem(LAST_SESSION_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<LastSession>;
+        if (
+            typeof parsed.characterId !== 'string' ||
+            typeof parsed.chatFileName !== 'string' ||
+            typeof parsed.lastUpdated !== 'number'
+        ) {
+            return null;
+        }
+        return {
+            characterId: parsed.characterId,
+            chatFileName: parsed.chatFileName,
+            messageCount: typeof parsed.messageCount === 'number' ? parsed.messageCount : 0,
+            lastUpdated: parsed.lastUpdated,
+        };
+    } catch {
+        return null;
+    }
+};
+
+export const clearLastSession = (): void => {
+    try {
+        localStorage.removeItem(LAST_SESSION_KEY);
+    } catch {
+        // Best-effort.
+    }
+};
+
 // Default app settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
     autoRestoreChat: true,
