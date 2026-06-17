@@ -1,12 +1,24 @@
 /**
- * Chat Service — local chat history persistence (browser localStorage).
- * Local chat history persistence for Roman Bath.
- * Stored in the browser; ZeroClaw gateway has no chat-history endpoint.
+ * Chat Service — local chat history persistence.
+ *
+ * Backed by IndexedDB (see chatStorage.ts). The previous localStorage blob
+ * (`romanbath_chat_history_v1`) is read once on first launch to migrate
+ * existing chats into IndexedDB, then removed. After migration completes,
+ * IndexedDB is the sole source of truth.
  */
 
 import { Message } from '../types';
+import {
+  StoredChat as IDBStoredChat,
+  storageGetChat,
+  storageSetChat,
+  storageDeleteChat,
+  storageListChats,
+  storageListAllChats,
+  storageClearForTests,
+} from './chatStorage';
 
-const STORAGE_KEY = 'romanbath_chat_history_v1';
+const LEGACY_STORAGE_KEY = 'romanbath_chat_history_v1';
 
 export interface ChatInfo {
   file_name: string;
@@ -30,55 +42,24 @@ interface StoredChat {
   updatedAt: number;
 }
 
-interface ChatStore {
-  [characterId: string]: StoredChat[];
+// Shape persisted by the old localStorage blob.
+interface LegacyStoredChat {
+  fileName: string;
+  characterId: string;
+  characterName: string;
+  userName: string;
+  messages: Message[];
+  createdAt: number;
+  updatedAt: number;
 }
 
-const readStore = (): ChatStore => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as ChatStore;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-};
+interface LegacyChatStore {
+  [characterId: string]: LegacyStoredChat[];
+}
 
-const writeStore = (store: ChatStore): boolean => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-    return true;
-  } catch (e) {
-    if (
-      e instanceof DOMException &&
-      (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED")
-    ) {
-      // Try to free space by removing oldest chats across all characters
-      let freed = false;
-      for (const characterId of Object.keys(store)) {
-        const list = store[characterId];
-        if (list.length > 1) {
-          list.pop(); // Remove oldest
-          freed = true;
-        } else if (list.length === 1) {
-          delete store[characterId];
-          freed = true;
-        }
-        if (freed) break;
-      }
-      if (freed) {
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-          return true;
-        } catch {
-          // Still failing after cleanup
-        }
-      }
-    }
-    return false;
-  }
-};
+// Migration runs at most once per session. The promise is shared so callers
+// landing on chatService during the initial mount all await the same run.
+let migrationPromise: Promise<void> | null = null;
 
 const toChatInfo = (chat: StoredChat): ChatInfo => {
   const lastMessage = chat.messages[chat.messages.length - 1];
@@ -104,6 +85,74 @@ const formatDateForFilename = (characterName: string): string => {
   return `${characterName} - ${year}-${month}-${day} @${hours}h ${minutes}m ${seconds}s ${ms}ms`;
 };
 
+const parseLegacyStore = (raw: string | null): LegacyChatStore | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed as LegacyChatStore;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Copy any chats still in localStorage into IndexedDB, then drop the legacy
+ * key. Idempotent: if IndexedDB already has chats we assume migration ran
+ * previously and skip the copy so we don't clobber newer writes.
+ */
+export const migrateFromLocalStorageIfNeeded = async (): Promise<void> => {
+  if (typeof globalThis === 'undefined' || !globalThis.localStorage) return;
+
+  // Idempotency check — IndexedDB already populated means we already migrated.
+  const existing = await storageListAllChats();
+  if (existing.length > 0) {
+    // Drop the legacy blob if it's still hanging around so we don't keep
+    // re-reading it on every launch.
+    if (globalThis.localStorage.getItem(LEGACY_STORAGE_KEY) !== null) {
+      globalThis.localStorage.removeItem(LEGACY_STORAGE_KEY);
+    }
+    return;
+  }
+
+  const legacy = parseLegacyStore(globalThis.localStorage.getItem(LEGACY_STORAGE_KEY));
+  if (!legacy) return;
+
+  for (const characterId of Object.keys(legacy)) {
+    for (const chat of legacy[characterId]) {
+      try {
+        await storageSetChat(chat as IDBStoredChat);
+      } catch (error) {
+        // Leave the legacy key intact so the next launch retries. Surface the
+        // error so it doesn't fail silently.
+        console.error('Chat history migration failed for', characterId, chat.fileName, error);
+        return;
+      }
+    }
+  }
+
+  // Only remove the source after every chat landed in IndexedDB.
+  globalThis.localStorage.removeItem(LEGACY_STORAGE_KEY);
+};
+
+const ensureMigrated = (): Promise<void> => {
+  if (!migrationPromise) {
+    migrationPromise = migrateFromLocalStorageIfNeeded().catch((error) => {
+      // Allow a fresh retry next launch rather than pinning the failure.
+      migrationPromise = null;
+      console.error('Chat history migration error:', error);
+    });
+  }
+  return migrationPromise;
+};
+
+// Kick off migration eagerly on module load. Failure here doesn't block the
+// API — every public function below also awaits ensureMigrated() so a lazy
+// retry path still exists for late arrivals.
+if (typeof globalThis !== 'undefined' && globalThis.localStorage) {
+  void ensureMigrated();
+}
+
 export const saveChat = async (
   characterId: string,
   chatFileName: string,
@@ -112,10 +161,9 @@ export const saveChat = async (
   characterName: string,
 ): Promise<boolean> => {
   try {
-    const store = readStore();
-    const list = store[characterId] ?? [];
+    await ensureMigrated();
     const now = Date.now();
-    const existingIdx = list.findIndex((c) => c.fileName === chatFileName);
+    const existing = await storageGetChat(characterId, chatFileName);
 
     const entry: StoredChat = {
       fileName: chatFileName,
@@ -123,18 +171,12 @@ export const saveChat = async (
       characterName,
       userName,
       messages,
-      createdAt: existingIdx >= 0 ? list[existingIdx].createdAt : now,
+      createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
 
-    if (existingIdx >= 0) {
-      list[existingIdx] = entry;
-    } else {
-      list.unshift(entry);
-    }
-
-    store[characterId] = list;
-    return writeStore(store);
+    await storageSetChat(entry as IDBStoredChat);
+    return true;
   } catch (error) {
     console.error('Error saving chat:', error);
     return false;
@@ -146,8 +188,8 @@ export const loadChat = async (
   chatFileName: string,
 ): Promise<{ messages: Message[]; metadata: { user_name: string; character_name: string } | null }> => {
   try {
-    const store = readStore();
-    const chat = store[characterId]?.find((c) => c.fileName === chatFileName);
+    await ensureMigrated();
+    const chat = await storageGetChat(characterId, chatFileName);
     if (!chat) {
       return { messages: [], metadata: null };
     }
@@ -217,8 +259,8 @@ export const linkLinearTree = <T extends { id: string; parentId?: string | null;
 
 export const getChatList = async (characterId: string): Promise<ChatInfo[]> => {
   try {
-    const store = readStore();
-    const list = store[characterId] ?? [];
+    await ensureMigrated();
+    const list = await storageListChats(characterId);
     return list
       .slice()
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -231,14 +273,10 @@ export const getChatList = async (characterId: string): Promise<ChatInfo[]> => {
 
 export const getRecentChats = async (max: number = 20): Promise<ChatInfo[]> => {
   try {
-    const store = readStore();
-    const all: Array<StoredChat & { characterId: string }> = [];
-    for (const [characterId, chats] of Object.entries(store)) {
-      for (const chat of chats) {
-        all.push({ ...chat, characterId });
-      }
-    }
+    await ensureMigrated();
+    const all = await storageListAllChats();
     return all
+      .slice()
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, max)
       .map(toChatInfo);
@@ -250,10 +288,9 @@ export const getRecentChats = async (max: number = 20): Promise<ChatInfo[]> => {
 
 export const deleteChat = async (characterId: string, chatFileName: string): Promise<boolean> => {
   try {
-    const store = readStore();
-    const list = store[characterId] ?? [];
-    store[characterId] = list.filter((c) => c.fileName !== chatFileName);
-    return writeStore(store);
+    await ensureMigrated();
+    await storageDeleteChat(characterId, chatFileName);
+    return true;
   } catch (error) {
     console.error('Error deleting chat:', error);
     return false;
@@ -266,13 +303,16 @@ export const renameChat = async (
   newFileName: string,
 ): Promise<boolean> => {
   try {
-    const store = readStore();
-    const list = store[characterId] ?? [];
-    const chat = list.find((c) => c.fileName === originalFileName);
+    await ensureMigrated();
+    const chat = await storageGetChat(characterId, originalFileName);
     if (!chat) return false;
-    chat.fileName = newFileName;
-    chat.updatedAt = Date.now();
-    return writeStore(store);
+    await storageDeleteChat(characterId, originalFileName);
+    await storageSetChat({
+      ...chat,
+      fileName: newFileName,
+      updatedAt: Date.now(),
+    });
+    return true;
   } catch (error) {
     console.error('Error renaming chat:', error);
     return false;
@@ -284,3 +324,15 @@ export const createNewChatFileName = (characterName: string): string =>
 
 export const stripChatExtension = (fileName: string): string =>
   fileName.replace(/\.jsonl$/, '');
+
+/**
+ * Test-only: drop every IndexedDB chat record AND reset the cached migration
+ * promise so the next call re-evaluates localStorage. Not part of the public
+ * runtime API; exported purely so tests can isolate cases without restarting
+ * the module (idb-keyval keeps the DB connection open, which makes
+ * deleteDatabase block).
+ */
+export const _resetForTests = async (): Promise<void> => {
+  await storageClearForTests();
+  migrationPromise = null;
+};
