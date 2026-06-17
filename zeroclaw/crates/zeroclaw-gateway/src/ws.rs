@@ -249,6 +249,27 @@ pub async fn handle_ws_chat(
 /// Gateway session key prefix to avoid collisions with channel sessions.
 const GW_SESSION_PREFIX: &str = "gw_";
 
+async fn resolve_ws_memory_handle(
+    config: &zeroclaw_config::schema::Config,
+    agent_alias: &str,
+) -> anyhow::Result<Option<Arc<dyn zeroclaw_memory::Memory>>> {
+    if config.agent(agent_alias).is_some_and(|agent| {
+        matches!(
+            agent.memory.backend,
+            zeroclaw_config::multi_agent::MemoryBackendKind::None
+        )
+    }) {
+        return Ok(None);
+    }
+
+    let api_key = config
+        .resolved_model_provider_for_agent(agent_alias)
+        .and_then(|(_, _, cfg)| cfg.api_key.clone());
+    zeroclaw_memory::create_memory_for_agent(config, agent_alias, api_key.as_deref())
+        .await
+        .map(Some)
+}
+
 async fn handle_socket(
     socket: WebSocket,
     state: AppState,
@@ -269,6 +290,22 @@ async fn handle_socket(
     // construction is deferred until after the optional `connect` frame so the
     // client can provide a per-session cwd for the security sandbox root.
     let config = state.config.read().clone();
+    let ws_memory = match resolve_ws_memory_handle(&config, &agent_alias).await {
+        Ok(memory) => memory,
+        Err(e) => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "agent": &agent_alias,
+                        "error": format!("{e:#}"),
+                    })),
+                "WS per-agent memory resolution failed; consolidation disabled for connection"
+            );
+            None
+        }
+    };
     let mut resumed = false;
     let mut message_count: usize = 0;
     let mut effective_name: Option<String> = None;
@@ -454,7 +491,8 @@ async fn handle_socket(
     let memory_context = if let Some(char_name) = character_name.clone() {
         let data_dir = config.data_dir.clone();
         tokio::task::spawn_blocking(move || {
-            let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+            let mem_store =
+                zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
             mem_store.inject_memories_into_prompt(&char_name, "")
         })
         .await
@@ -559,6 +597,7 @@ async fn handle_socket(
                         &mut receiver,
                         &mut approval_event_rx,
                         &pending_approvals,
+                        &ws_memory,
                         &content,
                         &session_key,
                         character_name.clone(),
@@ -705,6 +744,7 @@ async fn handle_socket(
                     &mut receiver,
                     &mut approval_event_rx,
                     &pending_approvals,
+                    &ws_memory,
                     &content,
                     &session_key,
                     character_name.clone(),
@@ -989,6 +1029,7 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
 ///
 /// Uses [`Agent::turn_streamed`] so that intermediate text chunks, tool calls,
 /// and tool results are forwarded to the WebSocket client in real time.
+#[allow(clippy::too_many_arguments)]
 async fn process_chat_message(
     state: &AppState,
     agent: &mut zeroclaw_runtime::agent::Agent,
@@ -996,6 +1037,7 @@ async fn process_chat_message(
     receiver: &mut futures_util::stream::SplitStream<WebSocket>,
     approval_event_rx: &mut tokio::sync::mpsc::Receiver<zeroclaw_api::agent::TurnEvent>,
     pending_approvals: &PendingApprovals,
+    ws_memory: &Option<Arc<dyn zeroclaw_memory::Memory>>,
     content: &str,
     session_key: &str,
     character_name: Option<String>,
@@ -1248,10 +1290,7 @@ async fn process_chat_message(
 
     // ── Remove cancel token (turn finished) ──────────────────────
     {
-        state
-            .cancel_tokens
-            .lock()
-            .remove(session_key);
+        state.cancel_tokens.lock().remove(session_key);
     }
 
     // Check if this turn was cancelled. `turn_streamed` propagates
@@ -1351,34 +1390,41 @@ async fn process_chat_message(
             // Fire-and-forget memory consolidation so facts from WS sessions
             // are extracted to long-term memory (Daily + Core categories).
             if state.auto_save {
-                let mem = state.mem.clone();
-                let model_provider = state.model_provider.clone();
-                let model = state.model.clone();
-                let temperature = state.temperature;
-                let user_msg = content.to_string();
-                let assistant_resp = outcome.response.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = zeroclaw_memory::consolidation::consolidate_turn(
-                        model_provider.as_ref(),
-                        &model,
-                        temperature,
-                        mem.as_ref(),
-                        &user_msg,
-                        &assistant_resp,
-                    )
-                    .await
-                    {
-                        ::zeroclaw_log::record!(
-                            DEBUG,
-                            ::zeroclaw_log::Event::new(
-                                module_path!(),
-                                ::zeroclaw_log::Action::Note
-                            )
-                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
-                            "WS memory consolidation skipped"
-                        );
-                    }
-                });
+                if let Some(mem) = ws_memory.clone() {
+                    let model_provider = state.model_provider.clone();
+                    let model = state.model.clone();
+                    let temperature = state.temperature;
+                    let user_msg = content.to_string();
+                    let assistant_resp = outcome.response.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = zeroclaw_memory::consolidation::consolidate_turn(
+                            model_provider.as_ref(),
+                            &model,
+                            temperature,
+                            mem.as_ref(),
+                            &user_msg,
+                            &assistant_resp,
+                        )
+                        .await
+                        {
+                            ::zeroclaw_log::record!(
+                                DEBUG,
+                                ::zeroclaw_log::Event::new(
+                                    module_path!(),
+                                    ::zeroclaw_log::Action::Note
+                                )
+                                .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                                "WS memory consolidation skipped"
+                            );
+                        }
+                    });
+                } else {
+                    ::zeroclaw_log::record!(
+                        DEBUG,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                        "WS memory consolidation skipped"
+                    );
+                }
             }
 
             // Compute cost from accumulated tokens + configured pricing,
@@ -1692,6 +1738,35 @@ mod tests {
         assert!(event_matches_session(&target_event, "operator-1"));
         assert!(!event_matches_session(&other_event, "operator-1"));
         assert!(event_matches_session(&global_event, "operator-1"));
+    }
+
+    #[tokio::test]
+    async fn ws_memory_resolution_honors_agent_backend_none_over_install_backend() {
+        use tempfile::TempDir;
+        use zeroclaw_config::multi_agent::MemoryBackendKind;
+        use zeroclaw_config::schema::{AliasedAgentConfig, Config};
+
+        let tmp = TempDir::new().unwrap();
+        let mut config = Config {
+            data_dir: tmp.path().join("data"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
+        std::fs::create_dir_all(&config.data_dir).unwrap();
+        config.memory.backend = "sqlite.default".to_string();
+
+        let mut agent = AliasedAgentConfig::default();
+        agent.memory.backend = MemoryBackendKind::None;
+        config.agents.insert("web".to_string(), agent);
+
+        let memory = resolve_ws_memory_handle(&config, "web")
+            .await
+            .expect("WS per-agent memory resolution");
+
+        assert!(
+            memory.is_none(),
+            "WebSocket consolidation must disable memory when the agent backend is none"
+        );
     }
 
     #[test]

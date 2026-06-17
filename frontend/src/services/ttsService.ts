@@ -37,14 +37,14 @@ export const stripMetadataForTTS = (text: string): string => {
     .trim();
 };
 
-export const speak = async (text: string, config: TTSConfig, apiKey?: string, apiUrl?: string): Promise<void> => {
+export const speak = async (text: string, config: TTSConfig): Promise<void> => {
   if (!config.enabled) return;
   stop();
 
   const cleanText = stripMetadataForTTS(text);
 
   if (config.provider === "grok") {
-    await speakGrok(cleanText, config, apiKey, apiUrl);
+    await speakGrok(cleanText, config);
   } else {
     speakBrowser(cleanText, config);
   }
@@ -63,7 +63,7 @@ const speakBrowser = (text: string, config: TTSConfig): void => {
   window.speechSynthesis.speak(utterance);
 };
 
-const speakGrok = async (text: string, config: TTSConfig, _apiKey?: string, _apiUrl?: string): Promise<void> => {
+const speakGrok = async (text: string, config: TTSConfig): Promise<void> => {
   const voice = config.voice || 'ara';
 
   const audioData = await generateSpeech(text, voice, 'en-US');

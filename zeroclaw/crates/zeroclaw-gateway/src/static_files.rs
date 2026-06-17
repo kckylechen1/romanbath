@@ -4,6 +4,7 @@
 //! The directory path is configured via `gateway.web_dist_dir`.
 
 use axum::{
+    Json,
     extract::State,
     http::{StatusCode, Uri, header},
     response::{IntoResponse, Response},
@@ -36,7 +37,16 @@ pub async fn handle_static(State(state): State<AppState>, uri: Uri) -> Response 
 
 /// SPA fallback: serve index.html for any non-API, non-static GET request.
 /// Injects `window.__ZEROCLAW_BASE__` so the frontend knows the path prefix.
-pub async fn handle_spa_fallback(State(state): State<AppState>) -> Response {
+pub async fn handle_spa_fallback(State(state): State<AppState>, uri: Uri) -> Response {
+    if let Some(path) = api_fallback_path(uri.path(), &state.path_prefix) {
+        let body = serde_json::json!({
+            "error": "not_found",
+            "message": "No backend route matched this path.",
+            "path": path,
+        });
+        return (StatusCode::NOT_FOUND, Json(body)).into_response();
+    }
+
     let Some(bytes) = load_index_html_bytes(state.web_dist_dir.as_ref()).await else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -75,6 +85,25 @@ pub async fn handle_spa_fallback(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
+fn api_fallback_path<'a>(path: &'a str, path_prefix: &str) -> Option<&'a str> {
+    let path = strip_path_prefix(path, path_prefix);
+    (path == "/api" || path.strip_prefix("/api/").is_some()).then_some(path)
+}
+
+fn strip_path_prefix<'a>(path: &'a str, path_prefix: &str) -> &'a str {
+    if path_prefix.is_empty() || path_prefix == "/" {
+        return path;
+    }
+
+    if path == path_prefix {
+        return "/";
+    }
+
+    path.strip_prefix(path_prefix)
+        .filter(|rest| rest.starts_with('/'))
+        .unwrap_or(path)
+}
+
 async fn load_index_html_bytes(dist_dir: Option<&PathBuf>) -> Option<Vec<u8>> {
     #[cfg(feature = "embedded-web")]
     if let Some(file) = EMBEDDED_WEB_DIST.get_file("index.html") {
@@ -101,7 +130,9 @@ async fn serve_fs_file(dist_dir: Option<&PathBuf>, path: &str) -> Response {
     // Security: ensure resolved path stays within dist_dir
     let canonical_dir = match tokio::fs::canonicalize(dir).await {
         Ok(p) => p,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid dist directory").into_response(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid dist directory").into_response();
+        }
     };
     let canonical_file = match tokio::fs::canonicalize(&file_path).await {
         Ok(p) => p,

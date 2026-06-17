@@ -21,7 +21,10 @@ const getItemWithLegacyFallback = (primaryKey: string, legacyKeys: string[]): st
     for (const legacyKey of legacyKeys) {
         const legacyValue = localStorage.getItem(legacyKey);
         if (legacyValue !== null) {
+            // Migrate legacy value forward, then drop the legacy key so
+            // subsequent writes only touch the primary key.
             localStorage.setItem(primaryKey, legacyValue);
+            localStorage.removeItem(legacyKey);
             return legacyValue;
         }
     }
@@ -29,12 +32,9 @@ const getItemWithLegacyFallback = (primaryKey: string, legacyKeys: string[]): st
     return null;
 };
 
-const setItemForAllKeys = (primaryKey: string, legacyKeys: string[], value: string): boolean => {
+const safeSetItem = (primaryKey: string, value: string): boolean => {
     try {
         localStorage.setItem(primaryKey, value);
-        for (const legacyKey of legacyKeys) {
-            localStorage.setItem(legacyKey, value);
-        }
         return true;
     } catch (e) {
         if (
@@ -49,10 +49,101 @@ const setItemForAllKeys = (primaryKey: string, legacyKeys: string[], value: stri
     }
 };
 
+// Backwards-compatible aliases. The legacy "write to all keys" and
+// "remove from all keys" behavior is gone — the legacy keys are migrated
+// lazily on read and from then on only the primary key is touched.
+const setItemForAllKeys = (primaryKey: string, _legacyKeys: string[], value: string): boolean =>
+    safeSetItem(primaryKey, value);
+
 const removeItemForAllKeys = (primaryKey: string, legacyKeys: string[]): void => {
     localStorage.removeItem(primaryKey);
+    // Best-effort cleanup of any stale legacy keys so they don't sneak back
+    // as the source of truth on a future read.
     for (const legacyKey of legacyKeys) {
         localStorage.removeItem(legacyKey);
+    }
+};
+
+// One-shot migration at module load: copy any lingering legacy chat_state
+// and app_settings into the primary keys, then drop the legacy entries.
+// Safe to call repeatedly — once the legacy keys are gone this is a no-op.
+const migrateLegacyStorage = (): void => {
+    try {
+        const legacyPairs: Array<[string, string[]]> = [
+            [CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS],
+            [APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS],
+        ];
+        for (const [primary, legacyKeys] of legacyPairs) {
+            if (localStorage.getItem(primary) !== null) continue;
+            for (const legacyKey of legacyKeys) {
+                const legacyValue = localStorage.getItem(legacyKey);
+                if (legacyValue !== null) {
+                    localStorage.setItem(primary, legacyValue);
+                    localStorage.removeItem(legacyKey);
+                    break;
+                }
+            }
+        }
+    } catch {
+        // localStorage can throw in private browsing / disabled storage.
+        // Persistence is best-effort; the app still runs without it.
+    }
+};
+
+migrateLegacyStorage();
+
+// ── Last-session pointer ──────────────────────────────────────────────
+// Chat messages themselves live in IndexedDB (see chatStorage). This is
+// the tiny "what was the user last doing" pointer used by the restore
+// prompt on app boot — characterId + chatFileName + counts, never the
+// messages themselves. Keeping it in localStorage lets the prompt render
+// before the IDB migration finishes; the messages are pulled from IDB
+// when the user actually clicks Restore.
+const LAST_SESSION_KEY = `${STORAGE_PREFIX}_last_session_v1`;
+
+export interface LastSession {
+    characterId: string;
+    chatFileName: string;
+    messageCount: number;
+    lastUpdated: number;
+}
+
+export const saveLastSession = (session: LastSession): void => {
+    try {
+        localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(session));
+    } catch {
+        // Best-effort — private mode etc.
+    }
+};
+
+export const loadLastSession = (): LastSession | null => {
+    try {
+        const raw = localStorage.getItem(LAST_SESSION_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<LastSession>;
+        if (
+            typeof parsed.characterId !== 'string' ||
+            typeof parsed.chatFileName !== 'string' ||
+            typeof parsed.lastUpdated !== 'number'
+        ) {
+            return null;
+        }
+        return {
+            characterId: parsed.characterId,
+            chatFileName: parsed.chatFileName,
+            messageCount: typeof parsed.messageCount === 'number' ? parsed.messageCount : 0,
+            lastUpdated: parsed.lastUpdated,
+        };
+    } catch {
+        return null;
+    }
+};
+
+export const clearLastSession = (): void => {
+    try {
+        localStorage.removeItem(LAST_SESSION_KEY);
+    } catch {
+        // Best-effort.
     }
 };
 

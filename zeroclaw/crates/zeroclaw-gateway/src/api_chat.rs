@@ -330,9 +330,12 @@ async fn handle_streaming_chat(state: &AppState, req: ChatRequest) -> axum::resp
     let reply_accumulator = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
     let reply_accumulator_clone = reply_accumulator.clone();
 
-    let upstream = state
-        .model_provider
-        .stream_chat_with_history(&messages, &model, temperature, StreamOptions::new(true));
+    let upstream = state.model_provider.stream_chat_with_history(
+        &messages,
+        &model,
+        temperature,
+        StreamOptions::new(true),
+    );
 
     let stream = futures_util::stream::unfold(
         (
@@ -359,22 +362,36 @@ async fn handle_streaming_chat(state: &AppState, req: ChatRequest) -> axum::resp
                             let cn_c = cn.clone();
                             tokio::task::spawn_blocking(move || {
                                 let mem_store = ChatMemoryStore::new(&mem_dir.join("chat_memory"));
-                                let _ = mem_store.save_chat_memory(&cn_c, &uname_c, "assistant", &ft);
+                                let _ =
+                                    mem_store.save_chat_memory(&cn_c, &uname_c, "assistant", &ft);
                             });
                         }
                         let event = Event::default().data("[DONE]");
-                        Some((Ok::<_, Infallible>(event), (upstream, error_seen, reply_acc, char_name, uname, memory_dir)))
+                        Some((
+                            Ok::<_, Infallible>(event),
+                            (
+                                upstream, error_seen, reply_acc, char_name, uname, memory_dir,
+                            ),
+                        ))
                     } else {
                         reply_acc.lock().await.push_str(&chunk.delta);
                         let json = serde_json::json!({"token": chunk.delta});
                         let event = Event::default().data(json.to_string());
-                        Some((Ok(event), (upstream, error_seen, reply_acc, char_name, uname, memory_dir)))
+                        Some((
+                            Ok(event),
+                            (
+                                upstream, error_seen, reply_acc, char_name, uname, memory_dir,
+                            ),
+                        ))
                     }
                 }
                 Err(e) => {
                     let json = serde_json::json!({"error": e.to_string()});
                     let event = Event::default().data(json.to_string());
-                    Some((Ok(event), (upstream, true, reply_acc, char_name, uname, memory_dir)))
+                    Some((
+                        Ok(event),
+                        (upstream, true, reply_acc, char_name, uname, memory_dir),
+                    ))
                 }
             }
         },
@@ -409,7 +426,11 @@ async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Ve
         let memory_context = {
             let name = name.to_string();
             let user_name = user_name.to_string();
-            let last_content = messages.iter().rev().find(|m| m.role == "user").map(|m| m.content.clone());
+            let last_content = messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.clone());
             let conv_text = conversation_text.clone();
             let mem_dir = memory_dir.clone();
             tokio::task::spawn_blocking(move || {
@@ -445,7 +466,10 @@ async fn build_messages(state: &AppState, req: ChatRequest) -> anyhow::Result<Ve
         }
 
         // Prepend all prompt fragments as system messages in order (O(n) instead of O(n²))
-        let system_msgs: Vec<_> = fragments.into_iter().map(|f| ChatMessage::system(f.content)).collect();
+        let system_msgs: Vec<_> = fragments
+            .into_iter()
+            .map(|f| ChatMessage::system(f.content))
+            .collect();
         let mut new_messages = system_msgs;
         new_messages.append(&mut messages);
         messages = new_messages;

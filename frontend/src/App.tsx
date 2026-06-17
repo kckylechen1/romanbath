@@ -1,11 +1,12 @@
-import React from "react";
-import { MessageCircle, Sparkles, Clock, X } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { MessageCircle, Sparkles, Clock, X, Upload } from "lucide-react";
 import { LanguageProvider } from "./i18n";
 import { getTimeSinceLastChat } from "./services/chatPersistenceService";
 
 // Hooks
 import { useAppLogic } from "./hooks/useAppLogic";
 import { useEscapeKey } from "./hooks/useEscapeKey";
+import { useCharacterImportDrop } from "./hooks/useCharacterImportDrop";
 
 // Components
 import { LeftSidebar } from "./components/layout/LeftSidebar";
@@ -17,12 +18,43 @@ import SettingsPanel from "./components/SettingsPanel";
 import GroupChatManager from "./components/GroupChatManager";
 import ImageGenModal from "./components/ImageGenModal";
 import CharacterEditor from "./components/CharacterEditor";
+import CommandPalette from "./components/CommandPalette";
 import { useToast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import DialogHost from "./components/DialogHost";
+
+// Command palette
+import { buildCommands } from "./commands/buildCommands";
 
 const AppContent: React.FC = () => {
   const logic = useAppLogic();
   const toast = useToast();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const commands = useMemo(() => buildCommands(logic), [logic]);
+
+  // Global hotkeys: ⌘K command palette, ⌘\ toggle left sidebar, ⌘. toggle right.
+  // These are chord bindings, so they're safe to fire even when an input
+  // has focus — the browser doesn't bind them by default.
+  useEffect(() => {
+    const isMod = (e: KeyboardEvent): boolean => e.metaKey || e.ctrlKey;
+    const onKey = (e: KeyboardEvent): void => {
+      if (!isMod(e)) return;
+      const key = e.key.toLowerCase();
+      if (key === "k") {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      } else if (key === "\\") {
+        e.preventDefault();
+        logic.setLeftSidebarOpen(!logic.leftSidebarOpen);
+      } else if (key === ".") {
+        e.preventDefault();
+        logic.setRightSidebarOpen(!logic.rightSidebarOpen);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [logic]);
 
   // Escape key handlers for modals and sidebars
   useEscapeKey(() => logic.setMobileMenuOpen(false), logic.mobileMenuOpen);
@@ -33,10 +65,23 @@ const AppContent: React.FC = () => {
   useEscapeKey(() => logic.setShowCharacterEditor(false), logic.showCharacterEditor);
   useEscapeKey(logic.handleStartFresh, logic.showRestorePrompt);
 
+  const { isDragging, rootHandlers: dropHandlers } = useCharacterImportDrop({
+    onImported: (name) => {
+      logic.refreshCharacters();
+      toast.success("Character imported", name);
+    },
+    onError: (message) => {
+      toast.error("Import failed", message);
+    },
+  });
+
   return (
     <div
       className="relative w-full h-screen overflow-hidden font-sans text-stone-200 bg-black selection:bg-bath-500/20 selection:text-white"
       style={{ fontSize: `${logic.config.fontSize}px` }}
+      onDragOver={dropHandlers.onDragOver}
+      onDragLeave={dropHandlers.onDragLeave}
+      onDrop={dropHandlers.onDrop}
     >
       {/* Background Layer */}
       <div
@@ -142,6 +187,8 @@ const AppContent: React.FC = () => {
               onCharacterImported={logic.refreshCharacters}
               onEditCharacter={logic.handleEditCharacter}
               onCreateCharacter={logic.handleCreateCharacter}
+              filter={logic.characterFilter}
+              onFilterChange={logic.setCharacterFilter}
             />
           </div>
         )}
@@ -178,6 +225,10 @@ const AppContent: React.FC = () => {
             rightSidebarOpen={logic.rightSidebarOpen}
             setRightSidebarOpen={logic.setRightSidebarOpen}
             setMobileSettingsOpen={logic.setMobileSettingsOpen}
+            messages={logic.messages}
+            messageTree={logic.messageTree}
+            activeLeafId={logic.activeLeafId}
+            setActiveLeafId={logic.setActiveLeafId}
           />
 
           {/* Messages */}
@@ -185,26 +236,31 @@ const AppContent: React.FC = () => {
             <div
               className={`max-w-4xl mx-auto transition-transform ${logic.leftSidebarOpen ? "" : "md:-translate-x-10"}`}
             >
-              {logic.messages.map((msg, idx) => (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  character={logic.selectedCharacter}
-                  userName={logic.config.userName}
-                  ttsConfig={logic.config.tts}
-                  apiKey={logic.config.apiKey}
-                  apiUrl={logic.config.apiUrl}
-                  onSwipeChange={logic.handleSwipeChange}
-                  onGenerateSwipe={logic.handleGenerateSwipe}
-                  onRegenerate={logic.handleRegenerate}
-                  onContinue={logic.handleContinue}
-                  onEdit={logic.handleEditMessage}
-                  onDelete={logic.handleDeleteMessage}
-                  onGenerateImage={logic.handleGenerateImage}
-                  isLastMessage={idx === logic.messages.length - 1}
-                  isGenerating={logic.isTyping}
-                />
-              ))}
+              {logic.activePath.map((msg, idx) => {
+                const siblings = (logic.messageTree.childrenOf.get(msg.parentId ?? null) ?? [])
+                  .filter((m) => m.role === msg.role);
+                const branchIndex = siblings.findIndex((m) => m.id === msg.id);
+                return (
+                  <MessageBubble
+                    key={msg.id}
+                    message={msg}
+                    character={logic.selectedCharacter}
+                    userName={logic.config.userName}
+                    ttsConfig={logic.config.tts}
+                    branchCount={siblings.length}
+                    branchIndex={branchIndex >= 0 ? branchIndex : 0}
+                    onSwipeChange={logic.handleSwipeChange}
+                    onGenerateSwipe={logic.handleGenerateSwipe}
+                    onRegenerate={logic.handleRegenerate}
+                    onContinue={logic.handleContinue}
+                    onEdit={logic.handleEditMessage}
+                    onDelete={logic.handleDeleteMessage}
+                    onGenerateImage={logic.handleGenerateImage}
+                    isLastMessage={idx === logic.activePath.length - 1}
+                    isGenerating={logic.isTyping}
+                  />
+                );
+              })}
               <div ref={logic.chatEndRef} className="h-4" />
             </div>
           </div>
@@ -295,6 +351,36 @@ const AppContent: React.FC = () => {
 
       {/* Toast Notifications */}
       <toast.ToastContainer />
+
+      {/* Imperative confirm/prompt/alert dialogs (replaces window.*) */}
+      <DialogHost />
+
+      {/* Cmd+K command palette */}
+      {paletteOpen && (
+        <CommandPalette
+          commands={commands}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
+
+      {/* Drag-and-drop character import overlay */}
+      {isDragging && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm pointer-events-none">
+          <div className="flex flex-col items-center gap-4 p-10 rounded-3xl border-2 border-dashed border-bath-500/60 bg-stone-900/60">
+            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-bath-500/20 to-bath-600/20 flex items-center justify-center border border-bath-500/40">
+              <Upload className="text-bath-300" size={36} />
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-semibold text-white">
+                Drop character card to import
+              </p>
+              <p className="text-sm text-stone-400 mt-1">
+                Supports PNG, JSON, WebP
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

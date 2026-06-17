@@ -7,5 +7,6 @@ mod otel_dependency_feature_regression;
 mod provider_resolution;
 mod provider_schema;
 mod reply_target_field_regression;
+mod romanbath_compat_api;
 mod security;
 mod whatsapp_webhook_security;

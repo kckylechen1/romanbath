@@ -147,4 +147,6 @@ export const useToast = () => {
     };
 };
 
+export type ToastAPI = ReturnType<typeof useToast>;
+
 export default Toast;

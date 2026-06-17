@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import type React from "react";
 import { DEFAULT_CONFIG } from "../constants";
 import {
@@ -30,6 +30,8 @@ import { useCharacterManagement } from "./useCharacterManagement";
 import { useChatPersistence } from "./useChatPersistence";
 import { useChatGeneration } from "./useChatGeneration";
 import { useMessageActions } from "./useMessageActions";
+import { confirm as confirmDialog, prompt as promptDialog } from "../services/dialogService";
+import { indexMessages, pathToRoot } from "./useMessageTree";
 
 export const useAppLogic = () => {
   const { t, language, setLanguage } = useLanguage();
@@ -41,6 +43,38 @@ export const useAppLogic = () => {
   // ==================== SHARED CHAT STATE ====================
   const [messages, setMessages] = useState<Message[]>([]);
   const [config, setConfig] = useState<ChatConfig>(DEFAULT_CONFIG);
+
+  // ==================== MESSAGE TREE STATE ====================
+  // Active leaf is the bottom of the currently rendered branch. Stays in
+  // sync with messages: when messages reset/swap (new chat, character
+  // switch, restore), activeLeafId is recomputed to the last message.
+  const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
+
+  const messageTree = useMemo(() => indexMessages(messages), [messages]);
+
+  // If the active leaf got removed (delete, character switch, restore),
+  // fall back to the deepest reachable leaf from any root. This keeps
+  // the rendered path non-empty whenever messages is non-empty.
+  useEffect(() => {
+    if (messages.length === 0) {
+      setActiveLeafId(null);
+      return;
+    }
+    if (!activeLeafId || !messageTree.byId.has(activeLeafId)) {
+      // Default to the most recent message — matches the pre-tree UX
+      // where the chat always scrolled to the bottom.
+      const last = messages[messages.length - 1];
+      setActiveLeafId(last.id);
+    }
+  }, [messages, activeLeafId, messageTree]);
+
+  // Active path = walk from leaf to root, reversed. This is what the
+  // chat view renders. Other consumers (persistence, token count) keep
+  // using the full `messages` array so saving stores every branch.
+  const activePath = useMemo(
+    () => pathToRoot(messageTree, activeLeafId),
+    [messageTree, activeLeafId],
+  );
 
   // ==================== UI STATE ====================
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
@@ -81,7 +115,9 @@ export const useAppLogic = () => {
     activeGroup,
     config,
     messages,
+    activePath,
     setMessages,
+    setActiveLeafId,
     toast,
     t,
   );
@@ -100,7 +136,10 @@ export const useAppLogic = () => {
   // ==================== MESSAGE ACTIONS ====================
   const messageActions = useMessageActions(
     messages,
+    activePath,
+    activeLeafId,
     setMessages,
+    setActiveLeafId,
     characterMgmt.selectedCharacter,
     characterMgmt.characters,
     config,
@@ -156,7 +195,7 @@ export const useAppLogic = () => {
     }
   }, [characterMgmt.selectedCharacter.id]);
 
-  const handleCreateBookmark = () => {
+  const handleCreateBookmark = async () => {
     if (
       !chatPersistence.currentChatFileName ||
       messages.length === 0
@@ -165,10 +204,13 @@ export const useAppLogic = () => {
       return;
     }
 
-    const name = window.prompt(
-      "Enter bookmark name:",
-      `Checkpoint - ${messages.length} messages`,
-    );
+    const name = await promptDialog({
+      title: "Create bookmark",
+      message: "Give this checkpoint a name so you can find it later.",
+      defaultValue: `Checkpoint - ${messages.length} messages`,
+      placeholder: "Bookmark name",
+      confirmLabel: "Create",
+    });
     if (!name) return;
 
     const bookmark = createBookmark(
@@ -183,25 +225,33 @@ export const useAppLogic = () => {
     toast.success("Bookmark created");
   };
 
-  const handleRestoreBookmark = (bookmark: ChatBookmark) => {
-    if (
-      !window.confirm(
-        `Restore to "${bookmark.name}"? Current messages after this point will be replaced.`,
-      )
-    )
-      return;
+  const handleRestoreBookmark = async (bookmark: ChatBookmark) => {
+    const ok = await confirmDialog({
+      title: "Restore bookmark?",
+      message: `Restoring to "${bookmark.name}" will replace the current messages in this conversation.`,
+      confirmLabel: "Restore",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
 
     setMessages(bookmark.messages);
     setShowBookmarks(false);
     toast.success("Restored from bookmark");
   };
 
-  const handleDeleteBookmark = (
+  const handleDeleteBookmark = async (
     bookmarkId: string,
     e: React.MouseEvent,
   ) => {
     e.stopPropagation();
-    if (!window.confirm("Delete this bookmark?")) return;
+    const ok = await confirmDialog({
+      title: "Delete bookmark?",
+      message: "This bookmark will be removed permanently.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
 
     deleteBookmark(bookmarkId);
     setBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
@@ -254,8 +304,15 @@ export const useAppLogic = () => {
   };
 
   // ==================== CLEAR CHAT ====================
-  const clearChat = () => {
-    if (window.confirm("Reset this conversation with new settings?")) {
+  const clearChat = async () => {
+    const ok = await confirmDialog({
+      title: "Reset conversation?",
+      message: "This will clear the current chat and start a new one with your latest settings. Bookmarks are kept.",
+      confirmLabel: "Reset",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (ok) {
       chatPersistence.startNewChat();
     }
   };
@@ -271,6 +328,8 @@ export const useAppLogic = () => {
     selectedCharacter: characterMgmt.selectedCharacter,
     setSelectedCharacter: characterMgmt.setSelectedCharacter,
     refreshCharacters: characterMgmt.refreshCharacters,
+    characterFilter: characterMgmt.characterFilter,
+    setCharacterFilter: characterMgmt.setCharacterFilter,
     handleEditCharacter: characterMgmt.handleEditCharacter,
     handleCreateCharacter: characterMgmt.handleCreateCharacter,
     handleSaveCharacter: characterMgmt.handleSaveCharacter,
@@ -282,6 +341,12 @@ export const useAppLogic = () => {
     // Chat state
     messages,
     setMessages,
+    // Tree-rendered view. Active path is what the chat surface shows; the
+    // full `messages` array above still carries every branch for save.
+    activePath,
+    activeLeafId,
+    setActiveLeafId,
+    messageTree,
     inputText: generation.inputText,
     setInputText: generation.setInputText,
     isTyping: generation.isTyping,
@@ -307,8 +372,8 @@ export const useAppLogic = () => {
     currentChatFileName: chatPersistence.currentChatFileName,
     setCurrentChatFileName: chatPersistence.setCurrentChatFileName,
     chatHistory: chatPersistence.chatHistory,
-    showChatHistory,
-    setShowChatHistory,
+    showChatHistory: chatPersistence.showChatHistory,
+    setShowChatHistory: chatPersistence.setShowChatHistory,
     isSavingChat: chatPersistence.isSavingChat,
 
     // Bookmarks

@@ -1,9 +1,31 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Character } from '../types';
-import { Users, Upload, Loader2, Plus, Pencil, Trash2, Copy, Download } from 'lucide-react';
-import { importCharacterCard, duplicateCharacter, exportCharacter, deleteCharacter } from '../services/zeroclawService';
+import {
+  Users,
+  Upload,
+  Loader2,
+  Plus,
+  Pencil,
+  Trash2,
+  Copy,
+  Download,
+  Search,
+  X,
+  BookOpen,
+  Image as ImageIcon,
+  MessageSquare,
+} from 'lucide-react';
+import {
+  importCharacterCard,
+  duplicateCharacter,
+  exportCharacter,
+  deleteCharacter,
+} from '../services/zeroclawService';
+import type { GetCharactersOptions } from '../services/zeroclawService';
 import { useLanguage } from '../i18n';
 import { CharacterAvatar } from './CharacterAvatar';
+import { confirm as confirmDialog } from '../services/dialogService';
+import { useDebouncedValue } from '../hooks/useCharacterSearch';
 
 interface CharacterListProps {
   characters: Character[];
@@ -13,7 +35,16 @@ interface CharacterListProps {
   onCharacterImported?: () => void;  // Callback to refresh character list
   onEditCharacter?: (charId: string) => void;  // Callback to edit character
   onCreateCharacter?: () => void;  // Callback to create new character
+  // Server-side filter state. When provided, the list drives search/tag
+  // selection through this pair instead of mutating its own copy.
+  filter?: GetCharactersOptions;
+  onFilterChange?: (opts: GetCharactersOptions) => void;
 }
+
+// Pull the top N unique tags out of the current character list so the
+// user can click-filter without a separate tag management screen. 5 keeps
+// the chip row from overflowing when collapsed sidebars render it.
+const TOP_TAG_COUNT = 5;
 
 const CharacterList: React.FC<CharacterListProps> = ({
   characters,
@@ -23,11 +54,41 @@ const CharacterList: React.FC<CharacterListProps> = ({
   onCharacterImported,
   onEditCharacter,
   onCreateCharacter,
+  filter,
+  onFilterChange,
 }) => {
   const { t } = useLanguage();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+
+  // Search box is local so the input feels instant; the debounce pushes
+  // the value up through onFilterChange and the parent refetches.
+  const [searchInput, setSearchInput] = useState<string>(filter?.search ?? '');
+  const debouncedSearch = useDebouncedValue(searchInput, 200);
+  React.useEffect(() => {
+    if (!onFilterChange) return;
+    if ((filter?.search ?? '') === debouncedSearch) return;
+    onFilterChange({ ...filter, search: debouncedSearch || undefined });
+    // We deliberately exclude `filter` from deps — including it would
+    // re-fire this effect on every parent-driven filter change and loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch, onFilterChange]);
+
+  const activeTag = filter?.tag;
+
+  const topTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const char of characters) {
+      for (const tag of char.tags ?? []) {
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, TOP_TAG_COUNT)
+      .map(([tag]) => tag);
+  }, [characters]);
 
   // Context Menu State
   const [contextMenuChar, setContextMenuChar] = useState<string | null>(null);
@@ -108,7 +169,13 @@ const CharacterList: React.FC<CharacterListProps> = ({
 
   const handleDeleteFromMenu = async (charId: string) => {
     setContextMenuChar(null);
-    if (!window.confirm('Are you sure you want to delete this character?')) return;
+    const ok = await confirmDialog({
+      title: 'Delete character?',
+      message: `"${charId}" and its avatar will be removed permanently. Chat history is kept.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     const result = await deleteCharacter(charId);
     if (result.success) {
       onCharacterImported?.();
@@ -133,6 +200,65 @@ const CharacterList: React.FC<CharacterListProps> = ({
         {!isCollapsed && <h2 className="text-lg font-bold text-white tracking-wide flex items-center gap-2"><Users size={20} /> {t('character.contacts')}</h2>}
         {isCollapsed && <Users size={24} className="text-gray-400" />}
       </div>
+
+      {/* Search + tag filter. Hidden when the sidebar collapses to a
+          rail — the icons-only mode doesn't have room for an input. */}
+      {!isCollapsed && onFilterChange && (
+        <div className="px-2 space-y-2">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 pointer-events-none" />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search characters…"
+              className="w-full bg-stone-900/60 border border-white/10 rounded-xl pl-9 pr-9 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/40"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => setSearchInput('')}
+                aria-label="Clear search"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-stone-500 hover:text-white hover:bg-white/5"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          {topTags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {topTags.map((tag) => {
+                const active = activeTag === tag;
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() =>
+                      onFilterChange({ ...filter, tag: active ? undefined : tag })
+                    }
+                    className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
+                      active
+                        ? 'bg-bath-500/20 border-bath-500/40 text-bath-200'
+                        : 'bg-stone-900/40 border-white/10 text-stone-400 hover:text-stone-200 hover:border-white/20'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+              {activeTag && (
+                <button
+                  type="button"
+                  onClick={() => onFilterChange({ ...filter, tag: undefined })}
+                  className="text-[11px] px-2 py-0.5 rounded-full border border-white/10 text-stone-500 hover:text-white"
+                >
+                  clear
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto space-y-2 px-2">
         {characters.map((char) => (
@@ -168,6 +294,36 @@ const CharacterList: React.FC<CharacterListProps> = ({
                   <span className="text-[10px] text-stone-600 truncate w-full">
                     {char.description}
                   </span>
+                  {/* V3 summary badges. Muted stone so they don't crowd
+                      the layout; each is a title-tooltip so the meaning
+                      is one hover away. */}
+                  {(char.hasCharacterBook ||
+                    char.hasAssets ||
+                    (char.alternateGreetingCount ?? 0) > 0) && (
+                    <div className="flex items-center gap-1.5 mt-1 text-stone-600">
+                      {char.hasCharacterBook && (
+                        <span title="Has lorebook" className="inline-flex">
+                          <BookOpen size={11} />
+                        </span>
+                      )}
+                      {char.hasAssets && (
+                        <span title="Has character assets" className="inline-flex">
+                          <ImageIcon size={11} />
+                        </span>
+                      )}
+                      {(char.alternateGreetingCount ?? 0) > 0 && (
+                        <span
+                          title={`${char.alternateGreetingCount} alternate greeting${char.alternateGreetingCount === 1 ? '' : 's'}`}
+                          className="inline-flex items-center gap-0.5"
+                        >
+                          <MessageSquare size={11} />
+                          <span className="text-[10px] leading-none">
+                            {char.alternateGreetingCount}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </button>

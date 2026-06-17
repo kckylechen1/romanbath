@@ -20,58 +20,80 @@ const jsonHeaders = (): Record<string, string> => {
 
 // ── Pairing ──
 
+// Pairing promise cache. Before this was added, every API call ran
+// ensurePairing() independently — N concurrent requests triggered N
+// /health fetches (and potentially N pairing-code round-trips if the
+// token was missing). Now the first call drives the flow and every
+// concurrent caller awaits the same promise. The cache clears on
+// failure so the next call retries, and clears on token change so a
+// fresh `setToken` re-evaluates against /health.
+let pairingPromise: Promise<void> | null = null;
+
+export const invalidatePairingCache = (): void => {
+  pairingPromise = null;
+};
+
 export const ensurePairing = async (): Promise<void> => {
-  const existingToken = getToken();
-  if (existingToken) {
-    try {
-      const health = await fetch('/health', {
-        headers: { Authorization: `Bearer ${existingToken}` },
-      });
-      if (health.ok) {
-        const data = await health.json();
-        if (data.paired) return;
+  if (pairingPromise) return pairingPromise;
+
+  pairingPromise = (async () => {
+    const existingToken = getToken();
+    if (existingToken) {
+      try {
+        const health = await fetch('/health', {
+          headers: { Authorization: `Bearer ${existingToken}` },
+        });
+        if (health.ok) {
+          const data = await health.json();
+          if (data.paired) return;
+        }
+      } catch {
+        // Gateway might not be reachable; continue to pair
       }
-    } catch {
-      // Gateway might not be reachable; continue to pair
     }
-  }
 
-  const codeRes = await fetch('/pair/code');
-  if (!codeRes.ok) {
-    throw new Error(`Failed to fetch pairing code: ${codeRes.status}`);
-  }
-  const data = await codeRes.json();
-  let code = data.pairing_code;
-  if (!code) {
-    const newCodeRes = await fetch('/admin/paircode/new', { method: 'POST' });
-    if (newCodeRes.ok) {
-      const nd = await newCodeRes.json();
-      code = nd.pairing_code;
+    const codeRes = await fetch('/pair/code');
+    if (!codeRes.ok) {
+      throw new Error(`Failed to fetch pairing code: ${codeRes.status}`);
     }
-  }
-  if (!code) {
-    const health = await fetch('/health');
-    if (health.ok) {
-      const h = await health.json();
-      if (h.paired) return;
+    const data = await codeRes.json();
+    let code = data.pairing_code;
+    if (!code) {
+      const newCodeRes = await fetch('/admin/paircode/new', { method: 'POST' });
+      if (newCodeRes.ok) {
+        const nd = await newCodeRes.json();
+        code = nd.pairing_code;
+      }
     }
-    throw new Error('No pairing code available. Restart the gateway to generate one.');
-  }
+    if (!code) {
+      const health = await fetch('/health');
+      if (health.ok) {
+        const h = await health.json();
+        if (h.paired) return;
+      }
+      throw new Error('No pairing code available. Restart the gateway to generate one.');
+    }
 
-  const pairRes = await fetch('/pair', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Pairing-Code': code,
-    },
+    const pairRes = await fetch('/pair', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Pairing-Code': code,
+      },
+    });
+    if (!pairRes.ok) {
+      throw new Error(`Pairing failed: ${pairRes.status}`);
+    }
+    const result = await pairRes.json();
+    if (result.token) {
+      setToken(result.token);
+    }
+  })().catch((err: unknown) => {
+    pairingPromise = null; // allow next call to retry
+    throw err;
   });
-  if (!pairRes.ok) {
-    throw new Error(`Pairing failed: ${pairRes.status}`);
-  }
-  const { token } = await pairRes.json();
-  if (token) {
-    setToken(token);
-  }
+
+  return pairingPromise;
 };
 
 // ── Types ──
@@ -108,6 +130,9 @@ export interface ChatOptions {
 }
 
 export interface CharacterBookEntry {
+  // Server-assigned entry id. New clients store it; old cards loaded
+  // without ids get backfilled via replaceCharacterBook on first edit.
+  id?: string;
   keys: string[];
   secondaryKeys?: string[];
   content: string;
@@ -156,7 +181,7 @@ export interface CharacterFormData {
   removeAvatar?: boolean;
 }
 
-interface CharacterSummary {
+export interface CharacterSummary {
   name: string;
   description: string;
   personality: string;
@@ -165,7 +190,14 @@ interface CharacterSummary {
   tags: string[];
   creator: string;
   character_version: string;
-  has_avatar?: boolean;
+  has_avatar: boolean;
+  // V3 fields — always present, may be defaults for legacy cards.
+  nickname: string;
+  has_character_book: boolean;
+  has_assets: boolean;
+  alternate_greeting_count: number;
+  creator_notes_badge: string | null;
+  modification_date: string | null;
 }
 
 interface CharacterAsset {
@@ -199,11 +231,21 @@ interface CharacterDataResponse {
 const characterAvatarUrl = (name: string): string =>
   `/api/characters/${encodeURIComponent(name)}/avatar`;
 
+// Module-level cache buster. Bumped after avatar upload/delete so the
+// browser refetches the new image instead of serving the cached one.
+let avatarCacheVersion = Date.now();
+
+export const bumpAvatarVersion = (): void => {
+  avatarCacheVersion = Date.now();
+};
+
 interface CharacterBookEntryWire extends Omit<CharacterBookEntry, 'secondaryKeys' | 'tokenBudget'> {
+  // SillyTavern spec uses snake_case and `uid` as the legacy entry id.
   secondary_keys?: string[];
   token_budget?: number;
   secondaryKeys?: string[];
   tokenBudget?: number;
+  uid?: number | string;
 }
 
 interface CharacterBookWire extends Omit<CharacterBook, 'entries'> {
@@ -280,11 +322,21 @@ const mapSummaryToCharacter = (char: CharacterSummary): Character => {
   return {
     id: char.name,
     name: char.name,
-    avatar: char.has_avatar ? `${characterAvatarUrl(char.name)}?v=1` : '',
+    avatar: char.has_avatar ? `${characterAvatarUrl(char.name)}?v=${avatarCacheVersion}` : '',
     description: char.description || '',
     systemInstruction: systemInstruction.trim(),
     firstMessage: char.first_mes || '',
     backgroundImage: `https://picsum.photos/seed/${encodeURIComponent(char.name + '-bg')}/1920/1080?blur=2`,
+    // V3 summary fields. Older gateways omit them, so fall back to
+    // sensible defaults instead of surfacing `undefined` to the UI.
+    nickname: char.nickname ?? '',
+    tags: char.tags ?? [],
+    creator: char.creator ?? '',
+    hasCharacterBook: char.has_character_book ?? false,
+    hasAssets: char.has_assets ?? false,
+    alternateGreetingCount: char.alternate_greeting_count ?? 0,
+    creatorNotesBadge: char.creator_notes_badge ?? null,
+    modificationDate: char.modification_date ?? null,
   };
 };
 
@@ -385,9 +437,31 @@ export const buildOptionsBody = (options: ChatOptions): Record<string, unknown> 
 
 // ── Character API ──
 
-export const getCharacters = async (): Promise<Character[]> => {
+export type CharacterSort = 'name' | 'recent' | 'created';
+
+export interface GetCharactersOptions {
+  search?: string;
+  tag?: string;
+  creator?: string;
+  sort?: CharacterSort;
+}
+
+const buildCharactersQuery = (opts?: GetCharactersOptions): string => {
+  if (!opts) return '';
+  const params = new URLSearchParams();
+  if (opts.search && opts.search.trim()) params.set('search', opts.search.trim());
+  if (opts.tag && opts.tag.trim()) params.set('tag', opts.tag.trim());
+  if (opts.creator && opts.creator.trim()) params.set('creator', opts.creator.trim());
+  if (opts.sort) params.set('sort', opts.sort);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+};
+
+export const getCharacters = async (opts?: GetCharactersOptions): Promise<Character[]> => {
   const loadList = async (): Promise<Character[]> => {
-    const res = await fetch('/api/characters', { headers: jsonHeaders() });
+    const res = await fetch(`/api/characters${buildCharactersQuery(opts)}`, {
+      headers: jsonHeaders(),
+    });
     if (!res.ok) throw new Error(`Failed to fetch characters: ${res.status}`);
     const data = await res.json();
     const summaries: CharacterSummary[] = data.characters ?? [];
@@ -526,6 +600,7 @@ export const uploadCharacterAvatar = async (
       const err = await res.json().catch(() => ({ error: res.statusText }));
       return { success: false, error: err.error || 'Avatar upload failed' };
     }
+    bumpAvatarVersion();
     return { success: true };
   } catch (e) {
     return {
@@ -558,6 +633,7 @@ export const deleteCharacterAvatar = async (
       const err = await res.json().catch(() => ({ error: res.statusText }));
       return { success: false, error: err.error || 'Avatar delete failed' };
     }
+    bumpAvatarVersion();
     return { success: true };
   } catch (e) {
     return {
@@ -637,48 +713,229 @@ export const deleteCharacter = async (
   }
 };
 
+// ── Character Book (Lorebook) API ──
+// These endpoints operate on the lorebook independently of the character
+// card. The frontend calls them per-entry so edits save immediately
+// instead of waiting for the whole-card PUT. Entry ids are server-assigned
+// and stable; callers must carry them between reads and writes.
+
+const mapBookEntryResponse = (entry: unknown): CharacterBookEntry => {
+  // The server may return either camelCase (our wire format) or snake_case
+  // (raw SillyTavern spec). Normalize defensively like the rest of the
+  // service does so the editor never sees an undefined field.
+  const e = entry as CharacterBookEntryWire;
+  const id = typeof e.id === 'string' && e.id
+    ? e.id
+    : e.uid != null
+      ? String(e.uid)
+      : '';
+  const secondaryKeys = e.secondaryKeys ?? e.secondary_keys ?? [];
+  const tokenBudget = e.tokenBudget ?? e.token_budget;
+  return {
+    id,
+    keys: e.keys ?? [],
+    secondaryKeys,
+    content: e.content ?? '',
+    enabled: e.enabled ?? true,
+    selective: e.selective ?? false,
+    constant: e.constant ?? false,
+    position: e.position ?? 'before_char',
+    tokenBudget,
+    priority: e.priority,
+    recursive: e.recursive ?? false,
+  };
+};
+
+const mapBookResponse = (book: unknown): CharacterBook => {
+  const b = book as CharacterBookWire;
+  return {
+    name: b.name ?? '',
+    description: b.description ?? '',
+    entries: (b.entries ?? []).map(mapBookEntryResponse),
+  };
+};
+
+export const getCharacterBook = async (name: string): Promise<CharacterBook | null> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(`/api/characters/${encodeURIComponent(name)}/book`, {
+      headers: jsonHeaders(),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { book: CharacterBook | null };
+    return data.book ? mapBookResponse(data.book) : null;
+  } catch (e) {
+    console.error('Error getting character book:', e);
+    return null;
+  }
+};
+
+export const replaceCharacterBook = async (
+  name: string,
+  book: CharacterBook,
+): Promise<CharacterBook> => {
+  await ensurePairing();
+  const res = await fetch(`/api/characters/${encodeURIComponent(name)}/book`, {
+    method: 'PUT',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ book: mapBookToWire(book) }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Replace book failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { book: CharacterBook };
+  return mapBookResponse(data.book);
+};
+
+export const addBookEntry = async (
+  name: string,
+  entry: Omit<CharacterBookEntry, 'id'>,
+): Promise<CharacterBookEntry> => {
+  await ensurePairing();
+  // Omit<..., 'id'> is structurally compatible with CharacterBookEntry
+  // (id is optional), but the server assigns fresh ids on POST — so we
+  // never send one. Casting keeps the call to mapBookEntryToWire clean.
+  const entryForWire = entry as CharacterBookEntry;
+  const res = await fetch(`/api/characters/${encodeURIComponent(name)}/book/entries`, {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ entry: mapBookEntryToWire({ ...entryForWire, id: undefined }) }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Add entry failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { entry: CharacterBookEntry };
+  return mapBookEntryResponse(data.entry);
+};
+
+export const updateBookEntry = async (
+  name: string,
+  entryId: string,
+  entry: CharacterBookEntry,
+): Promise<CharacterBookEntry> => {
+  await ensurePairing();
+  const res = await fetch(
+    `/api/characters/${encodeURIComponent(name)}/book/entries/${encodeURIComponent(entryId)}`,
+    {
+      method: 'PUT',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ entry: mapBookEntryToWire({ ...entry, id: entryId }) }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Update entry failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { entry: CharacterBookEntry };
+  return mapBookEntryResponse(data.entry);
+};
+
+export const deleteBookEntry = async (name: string, entryId: string): Promise<boolean> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(name)}/book/entries/${encodeURIComponent(entryId)}`,
+      { method: 'DELETE', headers: jsonHeaders() },
+    );
+    // 204 No Content on success.
+    return res.ok;
+  } catch (e) {
+    console.error('Error deleting book entry:', e);
+    return false;
+  }
+};
+
 // ── Chat via POST /api/chat (SSE) — matches zeroclaw/web CharacterChat ──
 
-const parseSseStream = async (
+// Parses an SSE byte stream into discrete event payloads. Handles the
+// cases that bit the old naive parser:
+//   - CRLF line endings (some proxies rewrite `\n` → `\r\n`)
+//   - Lone `\r` line endings (legacy but spec-legal)
+//   - Multi-line `data:` fields (concatenated with `\n` per SSE spec)
+//   - Comment lines starting with `:` (heartbeat / keep-alive)
+//   - Event boundaries that arrive split across read() chunks
+//
+// Yields one string per event — the concatenated `data:` payload, or '' for
+// events with no data field (so callers can still observe keep-alives if
+// they care). The caller decides what to do with each payload.
+export async function* parseSseEvents(
   res: Response,
-  onToken: (fullText: string) => void,
-): Promise<string> => {
+): AsyncGenerator<string, void, unknown> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('No response body');
 
   const decoder = new TextDecoder();
   let buffer = '';
-  let fullText = '';
+
+  const normalizeLineEndings = (s: string): string =>
+    s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() ?? '';
+    buffer += normalizeLineEndings(decoder.decode(value, { stream: true }));
 
-    for (const part of parts) {
-      for (const line of part.split('\n')) {
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') return fullText;
+    // Events are separated by one or more blank lines.
+    const events = buffer.split(/\n{2,}/);
+    buffer = events.pop() ?? '';
 
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          // Ignore malformed chunks (keep-alives, comments, partial data)
-          continue;
-        }
-        if (typeof parsed !== 'object' || parsed === null) continue;
-        const p = parsed as Record<string, unknown>;
-        if (p.error) throw new Error(String(p.error));
-        if (typeof p.token === 'string') {
-          fullText += p.token;
-          onToken(fullText);
-        }
+    for (const eventBlock of events) {
+      const dataLines: string[] = [];
+      for (const line of eventBlock.split('\n')) {
+        if (line === '' || line.startsWith(':')) continue; // blank or comment
+        const colonIdx = line.indexOf(':');
+        if (colonIdx === -1) continue;
+        const field = line.slice(0, colonIdx);
+        let val = line.slice(colonIdx + 1);
+        if (val.startsWith(' ')) val = val.slice(1); // spec: leading space stripped
+        if (field === 'data') dataLines.push(val);
+        // event:, id:, retry: are ignored — not needed for chat streaming
       }
+      yield dataLines.join('\n');
+    }
+  }
+
+  // Flush trailing event if the stream ended without a final blank line.
+  if (buffer.length > 0) {
+    const dataLines: string[] = [];
+    for (const line of buffer.split('\n')) {
+      if (line === '' || line.startsWith(':')) continue;
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) continue;
+      const field = line.slice(0, colonIdx);
+      let val = line.slice(colonIdx + 1);
+      if (val.startsWith(' ')) val = val.slice(1);
+      if (field === 'data') dataLines.push(val);
+    }
+    if (dataLines.length > 0) yield dataLines.join('\n');
+  }
+}
+
+const parseSseStream = async (
+  res: Response,
+  onToken: (fullText: string) => void,
+): Promise<string> => {
+  let fullText = '';
+
+  for await (const data of parseSseEvents(res)) {
+    if (data === '[DONE]') return fullText;
+    if (data === '') continue; // keep-alive with no payload
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      // Malformed JSON chunk — ignore (gateway may emit advisory payloads)
+      continue;
+    }
+    if (typeof parsed !== 'object' || parsed === null) continue;
+    const p = parsed as Record<string, unknown>;
+    if (p.error) throw new Error(String(p.error));
+    if (typeof p.token === 'string') {
+      fullText += p.token;
+      onToken(fullText);
     }
   }
 

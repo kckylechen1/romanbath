@@ -16,6 +16,7 @@ pub struct OpenAiModelProvider {
     base_url: String,
     credential: Option<String>,
     max_tokens: Option<u32>,
+    timeout_secs: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -203,7 +204,14 @@ impl OpenAiModelProvider {
                 .unwrap_or_else(|| BASE_URL.to_string()),
             credential: credential.map(ToString::to_string),
             max_tokens: None,
+            timeout_secs: 120,
         }
+    }
+
+    /// Override the HTTP request timeout for LLM API calls.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self
     }
 
     /// Set the maximum output tokens for API requests.
@@ -229,6 +237,8 @@ impl OpenAiModelProvider {
                 | "gpt-5.3-chat-latest"
                 | "o1"
                 | "o1-2024-12-17"
+                | "o1-mini"
+                | "o1-mini-2024-09-12"
                 | "o3"
                 | "o3-2025-04-16"
                 | "o3-mini"
@@ -355,7 +365,7 @@ impl OpenAiModelProvider {
     fn http_client(&self) -> Client {
         zeroclaw_config::schema::build_runtime_proxy_client_with_timeouts(
             "model_provider.openai",
-            120,
+            self.timeout_secs,
             10,
         )
     }
@@ -998,6 +1008,14 @@ mod tests {
         );
         assert_eq!(
             OpenAiModelProvider::adjust_temperature_for_model("o1-2024-12-17", 0.5),
+            1.0
+        );
+        assert_eq!(
+            OpenAiModelProvider::adjust_temperature_for_model("o1-mini", 0.5),
+            1.0
+        );
+        assert_eq!(
+            OpenAiModelProvider::adjust_temperature_for_model("o1-mini-2024-09-12", 0.7),
             1.0
         );
     }

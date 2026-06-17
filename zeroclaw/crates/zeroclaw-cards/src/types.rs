@@ -78,6 +78,17 @@ pub struct CharacterData {
     pub assets: Vec<CharacterAsset>,
     #[serde(default)]
     pub extensions: serde_json::Value,
+    /// RFC 3339 / ISO 8601 timestamp the card was created. Source of truth
+    /// for the field is the card JSON on disk; `CardManager::save` stamps
+    /// it on first create. Older V2 cards imported without this field
+    /// deserialize as empty string and surface as `None` in summary views.
+    #[serde(default)]
+    pub creation_date: String,
+    /// RFC 3339 / ISO 8601 timestamp of the last edit. `CardManager::save`
+    /// refreshes this on every write. Older cards import as empty and
+    /// surface as `None` in summary views.
+    #[serde(default)]
+    pub modification_date: String,
 }
 
 /// V3 character asset entry (e.g. embedded images, audio, or other files).
@@ -92,7 +103,7 @@ pub struct CharacterAsset {
 }
 
 /// A character's lorebook / world info book.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CharacterBook {
     #[serde(default)]
     pub name: String,
@@ -105,6 +116,12 @@ pub struct CharacterBook {
 /// A single lorebook entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CharacterBookEntry {
+    /// Stable identifier for this entry. ST V2 uses array index; ST V3 and
+    /// our independent CRUD routes require a stable id. Empty for legacy
+    /// cards; `CardManager` back-fills a UUID v4 on next save and never
+    /// changes it afterwards.
+    #[serde(default)]
+    pub id: String,
     #[serde(default)]
     pub keys: Vec<String>,
     pub content: String,
@@ -190,6 +207,32 @@ impl PromptFragment {
 }
 
 impl CharacterCard {
+    /// Returns `(spec, spec_version)` based on whether the card carries any
+    /// V3-only field. V3 detection keys off `nickname`, `group_only_greetings`,
+    /// `source`, or `assets` — any of these populated forces a V3 envelope so
+    /// strict ST parsers don't strip them on import.
+    pub fn detect_spec(&self) -> (&'static str, &'static str) {
+        let d = &self.data;
+        let has_v3 = !d.nickname.is_empty()
+            || !d.group_only_greetings.is_empty()
+            || !d.source.is_empty()
+            || !d.assets.is_empty();
+        if has_v3 {
+            ("chara_card_v3", "3.0")
+        } else {
+            ("chara_card_v2", "2.0")
+        }
+    }
+
+    /// Rewrite `spec` / `spec_version` to match `detect_spec`. Call before
+    /// serializing the card for export so strict ST parsers see the right
+    /// envelope. Idempotent on already-correct cards.
+    pub fn sync_spec(&mut self) {
+        let (spec, spec_version) = self.detect_spec();
+        self.spec = spec.to_string();
+        self.spec_version = spec_version.to_string();
+    }
+
     /// Build the full prompt message array in SillyTavern style.
     ///
     /// Order follows ST's default prompt order:
@@ -466,12 +509,8 @@ impl CharacterCard {
                 combined_text.push('\n');
                 combined_text.push_str(&content);
 
-                let (rec_before, rec_after) = self.split_lorebook_with_text(
-                    book,
-                    &combined_text,
-                    depth + 1,
-                    seen,
-                );
+                let (rec_before, rec_after) =
+                    self.split_lorebook_with_text(book, &combined_text, depth + 1, seen);
                 before.extend(rec_before);
                 after.extend(rec_after);
             }
@@ -508,6 +547,7 @@ mod tests {
                     description: "".into(),
                     entries: vec![
                         CharacterBookEntry {
+                            id: String::new(),
                             keys: vec!["whiskey".into()],
                             content: "The bar's whiskey collection includes a rare 30-year Macallan.".into(),
                             enabled: true,
@@ -520,6 +560,7 @@ mod tests {
                             recursive: false,
                         },
                         CharacterBookEntry {
+                            id: String::new(),
                             keys: vec!["secret".into()],
                             content: "Daniel used to work for a government agency.".into(),
                             enabled: true,
@@ -538,6 +579,8 @@ mod tests {
                 source: Vec::new(),
                 assets: Vec::new(),
                 extensions: serde_json::Value::Object(serde_json::Map::new()),
+                creation_date: String::new(),
+                modification_date: String::new(),
             },
         }
     }
@@ -621,6 +664,7 @@ mod tests {
         if let Some(book) = card.data.character_book.as_mut() {
             // Replace the first entry with a self-referential recursive one.
             book.entries[0] = CharacterBookEntry {
+                id: String::new(),
                 keys: vec!["whiskey".into()],
                 content: "The bar's whiskey collection includes a rare 30-year Macallan. Whiskey flows freely here.".into(),
                 enabled: true,
@@ -638,6 +682,49 @@ mod tests {
             .iter()
             .filter(|f| f.content.contains("30-year Macallan"))
             .count();
-        assert_eq!(macallan_count, 1, "self-referential recursive entry must not duplicate its own content");
+        assert_eq!(
+            macallan_count, 1,
+            "self-referential recursive entry must not duplicate its own content"
+        );
+    }
+
+    #[test]
+    fn detect_spec_returns_v2_for_pure_v2_card() {
+        let card = make_card();
+        let (spec, version) = card.detect_spec();
+        assert_eq!(spec, "chara_card_v2");
+        assert_eq!(version, "2.0");
+    }
+
+    #[test]
+    fn detect_spec_returns_v3_when_nickname_present() {
+        let mut card = make_card();
+        card.data.nickname = "Danny".into();
+        let (spec, version) = card.detect_spec();
+        assert_eq!(spec, "chara_card_v3");
+        assert_eq!(version, "3.0");
+    }
+
+    #[test]
+    fn detect_spec_returns_v3_when_assets_present() {
+        let mut card = make_card();
+        card.data.assets.push(CharacterAsset {
+            asset_type: "icon".into(),
+            uri: "data:image/png;base64,AA==".into(),
+            name: "avatar".into(),
+            ext: "png".into(),
+        });
+        let (spec, _) = card.detect_spec();
+        assert_eq!(spec, "chara_card_v3");
+    }
+
+    #[test]
+    fn sync_spec_upgrades_envelope_to_v3() {
+        let mut card = make_card();
+        card.data.nickname = "Danny".into();
+        assert_eq!(card.spec, "chara_card_v2");
+        card.sync_spec();
+        assert_eq!(card.spec, "chara_card_v3");
+        assert_eq!(card.spec_version, "3.0");
     }
 }

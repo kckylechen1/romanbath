@@ -7,6 +7,8 @@ import {
   Menu, Globe, EllipsisVertical, Plus, Sparkles, Bookmark, History, Users, X, Trash2, Settings as SettingsIcon
 } from "lucide-react";
 import { useLanguage } from "../../i18n";
+import type { MessageTree } from "../../hooks/useMessageTree";
+import { BranchMiniMap } from "./BranchMiniMap";
 
 interface ChatHeaderProps {
   selectedCharacter: Character;
@@ -38,6 +40,10 @@ interface ChatHeaderProps {
   rightSidebarOpen: boolean;
   setRightSidebarOpen: (open: boolean) => void;
   setMobileSettingsOpen: (open: boolean) => void;
+  messages: Message[];
+  messageTree: MessageTree;
+  activeLeafId: string | null;
+  setActiveLeafId: (id: string) => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -69,11 +75,16 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   rightSidebarOpen,
   setRightSidebarOpen,
   setMobileSettingsOpen,
+  messages,
+  messageTree,
+  activeLeafId,
+  setActiveLeafId,
 }) => {
   const { t } = useLanguage();
 
   return (
-    <header className="h-16 border-b border-white/5 flex items-center justify-between px-6 md:px-8 backdrop-blur-md z-20 bath-reveal bath-reveal-delay-2">
+    <div className="flex flex-col border-b border-white/5 backdrop-blur-md z-20 bath-reveal bath-reveal-delay-2">
+    <header className="h-16 flex items-center justify-between px-6 md:px-8">
       <div className="flex items-center gap-3 md:hidden">
         <button
           onClick={() => setMobileMenuOpen(true)}
@@ -376,5 +387,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         </button>
       </div>
     </header>
+    <BranchMiniMap
+      messages={messages}
+      messageTree={messageTree}
+      activeLeafId={activeLeafId}
+      onSelectLeaf={setActiveLeafId}
+    />
+    </div>
   );
 };

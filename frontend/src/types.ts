@@ -18,21 +18,30 @@ export interface Message {
   timestamp: number;
   isThinking?: boolean;
 
-  // Swipe support (alternative AI responses)
-  swipes?: string[]; // Array of alternative responses
-  swipeId?: number; // Currently selected swipe index (0-based)
-  swipeTimestamps?: number[]; // Timestamp for each swipe
+  // Tree structure. parentId === null marks a root. childrenIds enumerates
+  // every direct child branch (regenerates, edits, etc.). Older chats
+  // loaded without these fields get them populated by chatService.loadChat
+  // so the whole conversation starts on a single linear branch.
+  parentId?: string | null;
+  childrenIds?: string[];
+
+  // Legacy swipe support — kept for backward compatibility with older
+  // saved chats. New branches created via regenerate/edit use the tree
+  // fields above instead of pushing into swipes[].
+  swipes?: string[];
+  swipeId?: number;
+  swipeTimestamps?: number[];
 
   // Tool call info (for WS chat with image gen / TTS)
   toolCalls?: ToolCallInfo[];
 
   // Generation metadata
   extra?: {
-    api?: string; // Which API generated this
-    model?: string; // Model used
-    generationId?: string; // Unique generation ID
-    characterId?: string; // Character ID (for group chats)
-    characterName?: string; // Character name (for group chats)
+    api?: string;
+    model?: string;
+    generationId?: string;
+    characterId?: string;
+    characterName?: string;
   };
 }
 
@@ -45,6 +54,16 @@ export interface Character {
   firstMessage: string;
   exampleDialogue?: string;
   backgroundImage: string;
+  // V3 summary badges surfaced from GET /api/characters. Optional so
+  // legacy callers and tests that build Character by hand keep compiling.
+  nickname?: string;
+  tags?: string[];
+  creator?: string;
+  hasCharacterBook?: boolean;
+  hasAssets?: boolean;
+  alternateGreetingCount?: number;
+  creatorNotesBadge?: string | null;
+  modificationDate?: string | null;
 }
 
 export interface LorebookEntry {
@@ -121,90 +140,21 @@ export interface AppSettings {
 
 // ── ChatConfig sub-types ──
 
-export type MainApi =
-  | "kobold"
-  | "koboldhorde"
-  | "openai"
-  | "textgenerationwebui"
-  | "openrouter"
-  | "google"
-  | "ollama"
-  | "grok"
-  | "custom";
-
-export interface ApiConfig {
-  mainApi: MainApi;
-  apiUrl: string;
-  apiKey: string;
-  modelName: string;
-}
-
-export interface HordeConfig {
-  hordeModels: string[];
-  hordeAdjustContext: boolean;
-  hordeAdjustResponse: boolean;
-  hordeTrustedOnly: boolean;
-}
+// Note: ApiConfig (mainApi/apiUrl/apiKey/modelName) and HordeConfig were
+// removed. RomanBath talks to the LLM exclusively through the ZeroClaw
+// gateway — it never holds provider credentials or hits an LLM endpoint
+// directly. If you need per-character provider routing, configure it in
+// ZeroClaw's config.toml, not here.
 
 export interface GenerationConfig {
   temperature: number;
   topK: number;
   topP: number;
   maxOutputTokens: number;
-  thinkingBudget: number;
   stopSequences: string[];
   presencePenalty: number;
   frequencyPenalty: number;
-  repetitionPenalty: number;
-  minP: number;
-  topA: number;
-  typicalP: number;
-  tfs: number;
-  repPenRange: number;
   seed: number;
-}
-
-export interface AdvancedGenerationConfig {
-  logitBias: Array<{ sequence: string; bias: number }>;
-  bannedTokens: string;
-  globalBannedTokens: string;
-  sendBannedTokens: boolean;
-  negativePrompt: string;
-  grammarString: string;
-  jsonSchema: object | null;
-  jsonSchemaAllowEmpty: boolean;
-  noRepeatNgramSize: number;
-  repPenSlope: number;
-  repPenDecay: number;
-  smoothingFactor: number;
-  smoothingCurve: number;
-  numBeams: number;
-  lengthPenalty: number;
-  earlyStopping: boolean;
-  encoderRepPenalty: number;
-  banEosToken: boolean;
-  skipSpecialTokens: boolean;
-  addBosToken: boolean;
-  guidanceScale: number;
-  penaltyAlpha: number;
-  maxTokensSecond: number;
-  n: number;
-}
-
-export interface SamplerConfig {
-  dryMultiplier: number;
-  dryBase: number;
-  dryAllowedLength: number;
-  dryPenaltyLastN: number;
-  xtcThreshold: number;
-  xtcProbability: number;
-  mirostatMode: 0 | 1 | 2;
-  mirostatTau: number;
-  mirostatEta: number;
-  dynatemp: boolean;
-  minTemp: number;
-  maxTemp: number;
-  dynatempExponent: number;
 }
 
 export interface PromptConfig {
@@ -217,6 +167,7 @@ export interface PromptConfig {
   authorsNote: string;
   authorsNoteDepth: number;
   promptOrder: "default" | "style_first" | "scenario_last";
+  negativePrompt: string;
 }
 
 export interface FormattingConfig {
@@ -231,11 +182,7 @@ export interface InterfaceConfig {
 }
 
 export interface ChatConfig
-  extends ApiConfig,
-    HordeConfig,
-    GenerationConfig,
-    AdvancedGenerationConfig,
-    SamplerConfig,
+  extends GenerationConfig,
     PromptConfig,
     FormattingConfig,
     InterfaceConfig {

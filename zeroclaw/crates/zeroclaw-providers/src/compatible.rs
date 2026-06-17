@@ -651,13 +651,18 @@ impl OpenAiCompatibleModelProvider {
             .next()
             .unwrap_or(model)
             .to_ascii_lowercase();
+        // gpt-5*-chat-latest (gpt-5-chat-latest, gpt-5.1-chat-latest, ...) are
+        // OpenAI's non-reasoning chat-router models; the Chat Completions API
+        // rejects reasoning_effort for them. Treat them as a distinct family, the
+        // same way the native openai.rs provider already special-cases them.
+        let is_gpt5_chat_latest = id.starts_with("gpt-5") && id.ends_with("-chat-latest");
         let is_openai_reasoning_model = id == "o1"
             || id.starts_with("o1-")
             || id == "o3"
             || id.starts_with("o3-")
             || id == "o4"
             || id.starts_with("o4-")
-            || id.starts_with("gpt-5");
+            || (id.starts_with("gpt-5") && !is_gpt5_chat_latest);
         let is_likely_codex_supported = id.contains("codex") && id.starts_with("gpt-");
 
         (is_openai_reasoning_model || is_likely_codex_supported).then(|| effort.clone())
@@ -668,7 +673,8 @@ impl OpenAiCompatibleModelProvider {
 struct ApiChatRequest {
     model: String,
     messages: Vec<Message>,
-    temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -967,7 +973,8 @@ struct Function {
 struct NativeChatRequest {
     model: String,
     messages: Vec<NativeMessage>,
-    temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     /// Mirrors `ApiChatRequest::stream_options`. Without this, tool-enabled
@@ -1721,7 +1728,7 @@ impl OpenAiCompatibleModelProvider {
         effective_messages: &[ChatMessage],
         tools: Option<Vec<serde_json::Value>>,
         model: &str,
-        temperature: f64,
+        temperature: Option<f64>,
         allow_user_image_parts: bool,
     ) -> NativeChatRequest {
         let has_tool_entries = tools.as_ref().is_some_and(|tools| !tools.is_empty());
@@ -2216,7 +2223,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<String> {
         let this = self.clone();
-        let temperature = temperature.unwrap_or(this.default_temperature());
         let credential = this.credential.as_deref();
 
         // Normalize image markers (e.g. local file paths from channel
@@ -2329,7 +2335,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         model: &str,
         temperature: Option<f64>,
     ) -> anyhow::Result<String> {
-        let temperature = temperature.unwrap_or(self.default_temperature());
         let credential = self.credential.as_deref();
 
         let normalized = Self::normalize_messages_for_upstream(messages).await?;
@@ -2411,7 +2416,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         model: &str,
         temperature: Option<f64>,
     ) -> anyhow::Result<ProviderChatResponse> {
-        let temperature = temperature.unwrap_or(self.default_temperature());
         let credential = self.credential.as_deref();
 
         let normalized = Self::normalize_messages_for_upstream(messages).await?;
@@ -2452,9 +2456,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                         self.name
                     )
                 );
-                let text = self
-                    .chat_with_history(messages, model, Some(temperature))
-                    .await?;
+                let text = self.chat_with_history(messages, model, temperature).await?;
                 return Ok(ProviderChatResponse {
                     text: Some(text),
                     tool_calls: vec![],
@@ -2522,7 +2524,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         temperature: Option<f64>,
     ) -> anyhow::Result<ProviderChatResponse> {
         let this = self.clone();
-        let temperature = temperature.unwrap_or(this.default_temperature());
         let credential = this.credential.as_deref();
 
         let normalized = Self::normalize_messages_for_upstream(request.messages).await?;
@@ -2533,8 +2534,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         } else {
             this.strip_native_tool_messages(&effective_messages)
         };
-
-        // When wire_api = "responses", route all turns through the responses API.
 
         let tools = this.convert_tool_specs_for_model(request.tools, model);
         let native_request = this.build_native_tool_chat_request(
@@ -2567,7 +2566,7 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
                 let fallback_messages =
                     Self::with_prompt_guided_tool_instructions(request.messages, request.tools);
                 let text = this
-                    .chat_with_history(&fallback_messages, model, Some(temperature))
+                    .chat_with_history(&fallback_messages, model, temperature)
                     .await?;
                 return Ok(ProviderChatResponse {
                     text: Some(text),
@@ -2631,7 +2630,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
             return stream::once(async { Ok(StreamEvent::Final) }).boxed();
         }
 
-        let temperature = temperature.unwrap_or(self.default_temperature());
         let provider = self.clone();
         let messages_owned: Vec<ChatMessage> = request.messages.to_vec();
         let tools_owned: Option<Vec<zeroclaw_api::tool::ToolSpec>> =
@@ -2779,7 +2777,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         temperature: Option<f64>,
         options: StreamOptions,
     ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
-        let temperature = temperature.unwrap_or(self.default_temperature());
         let provider = self.clone();
         let system_prompt_owned: Option<String> = system_prompt.map(str::to_string);
         let message_owned = message.to_string();
@@ -2916,7 +2913,6 @@ impl ModelProvider for OpenAiCompatibleModelProvider {
         temperature: Option<f64>,
         options: StreamOptions,
     ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
-        let temperature = temperature.unwrap_or(self.default_temperature());
         let provider = self.clone();
         let messages_owned: Vec<ChatMessage> = messages.to_vec();
         let model = model.to_string();
@@ -3104,7 +3100,7 @@ mod tests {
                 tool_calls: None,
                 reasoning_content: None,
             }],
-            temperature: 0.7,
+            temperature: Some(0.7),
             stream: Some(true),
             stream_options: Some(StreamOptionsBody {
                 include_usage: true,
@@ -3135,7 +3131,7 @@ mod tests {
         let req = NativeChatRequest {
             model: "gpt-4o".to_string(),
             messages: vec![],
-            temperature: 0.7,
+            temperature: Some(0.7),
             stream: Some(false),
             stream_options: None,
             reasoning_effort: None,
@@ -3179,7 +3175,7 @@ mod tests {
                     content: MessageContent::Text("hello".to_string()),
                 },
             ],
-            temperature: 0.4,
+            temperature: Some(0.4),
             stream: Some(false),
             stream_options: None,
             reasoning_effort: None,
@@ -3755,7 +3751,7 @@ mod tests {
         let req = NativeChatRequest {
             model: "mistral-large-latest".to_string(),
             messages: provider.convert_messages_for_native(&messages, true),
-            temperature: 0.7,
+            temperature: Some(0.7),
             stream: Some(false),
             stream_options: None,
             reasoning_effort: None,
@@ -3923,6 +3919,16 @@ mod tests {
         assert_eq!(
             model_provider.reasoning_effort_for_model("openai/gpt-5"),
             Some("high".to_string())
+        );
+        assert_eq!(
+            model_provider.reasoning_effort_for_model("gpt-5-chat-latest"),
+            None,
+            "gpt-5*-chat-latest are non-reasoning chat-router models and must not receive reasoning_effort",
+        );
+        assert_eq!(
+            model_provider.reasoning_effort_for_model("gpt-5.1-chat-latest"),
+            None,
+            "gpt-5*-chat-latest are non-reasoning chat-router models and must not receive reasoning_effort",
         );
         assert_eq!(
             model_provider.reasoning_effort_for_model("gpt-4-codex"),
@@ -4267,7 +4273,7 @@ mod tests {
                 role: "user".to_string(),
                 content: MessageContent::Text("What is the weather?".to_string()),
             }],
-            temperature: 0.7,
+            temperature: Some(0.7),
             stream: Some(false),
             stream_options: None,
             reasoning_effort: None,
@@ -4291,7 +4297,7 @@ mod tests {
                 role: "user".to_string(),
                 content: MessageContent::Text("List /tmp".to_string()),
             }],
-            temperature: 0.7,
+            temperature: Some(0.7),
             stream: Some(false),
             stream_options: None,
             reasoning_effort: None,
@@ -4326,7 +4332,7 @@ mod tests {
                 role: "user".to_string(),
                 content: MessageContent::Text("List /tmp".to_string()),
             }],
-            temperature: 0.7,
+            temperature: Some(0.7),
             stream: Some(false),
             stream_options: None,
             reasoning_effort: None,
@@ -4502,7 +4508,7 @@ mod tests {
             &messages,
             Some(tools),
             "deepseek-v4-flash",
-            0.7,
+            Some(0.7),
             true,
         );
         let value = serde_json::to_value(&request).unwrap();
@@ -5433,5 +5439,45 @@ mod tests {
             vec!["user", "assistant"]
         );
         assert_eq!(stripped[1].content, "Here are the results");
+    }
+
+    fn minimal_request(temperature: Option<f64>) -> ApiChatRequest {
+        ApiChatRequest {
+            model: "any-model".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            }],
+            temperature,
+            stream: None,
+            stream_options: None,
+            reasoning_effort: None,
+            tool_stream: None,
+            tools: None,
+            tool_choice: None,
+            max_tokens: None,
+        }
+    }
+
+    #[test]
+    fn unset_temperature_is_omitted_from_wire() {
+        // `None` must honor the `Option<f64>` contract: no `temperature` field
+        // on the wire, regardless of model name. Generalizes the former
+        // kimi-k2-only special case (issue #7145).
+        let body = serde_json::to_value(minimal_request(None)).unwrap();
+        assert!(
+            body.get("temperature").is_none(),
+            "unset temperature must be omitted from the request body, got: {body}"
+        );
+    }
+
+    #[test]
+    fn explicit_temperature_is_sent_on_wire() {
+        let body = serde_json::to_value(minimal_request(Some(0.5))).unwrap();
+        assert_eq!(
+            body.get("temperature").and_then(|v| v.as_f64()),
+            Some(0.5),
+            "explicit temperature must be sent verbatim, got: {body}"
+        );
     }
 }
