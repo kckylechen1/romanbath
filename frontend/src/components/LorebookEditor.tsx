@@ -278,6 +278,15 @@ const LorebookEditor: React.FC<LorebookEditorProps> = ({
   const [localBook, setLocalBook] = useState<CharacterBook>(() => cloneBook(value));
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 
+  // Always-fresh mirror of localBook so async callbacks (POST/PUT/DELETE
+  // resolutions) can read the latest state without re-subscribing. Without
+  // this, a callback created in one render reads a stale closure snapshot
+  // and clobbers concurrent edits when it propagates via onChange.
+  const bookRef = useRef<CharacterBook>(localBook);
+  useEffect(() => {
+    bookRef.current = localBook;
+  }, [localBook]);
+
   // Track which effect cycle last pushed localBook up to the parent so we
   // don't echo our own updates back into local state.
   const lastPushedRef = useRef<string>('');
@@ -407,13 +416,14 @@ const LorebookEditor: React.FC<LorebookEditorProps> = ({
     void _drop;
     addBookEntry(characterName, entryPayload)
       .then((saved) => {
-        setLocalBook((curr) => ({
-          ...curr,
-          entries: curr.entries.map((e) => (e.id === tempId ? saved : e)),
-        }));
-        onChange({
-          ...localBook,
-          entries: localBook.entries.map((e) => (e.id === tempId ? saved : e)),
+        setLocalBook((curr) => {
+          const next: CharacterBook = {
+            ...curr,
+            entries: curr.entries.map((e) => (e.id === tempId ? saved : e)),
+          };
+          bookRef.current = next;
+          onChange(next);
+          return next;
         });
       })
       .catch((e: unknown) => {

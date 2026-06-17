@@ -495,7 +495,7 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                     the rest of the card is persisted on Save Changes.
                   </p>
                   <LorebookEditor
-                    characterName={formData.name}
+                    characterName={characterId ? formData.name : undefined}
                     value={formData.characterBook ?? null}
                     onChange={(book) => handleChange('characterBook', book)}
                   />
