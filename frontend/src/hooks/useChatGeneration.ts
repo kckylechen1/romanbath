@@ -44,7 +44,9 @@ export const useChatGeneration = (
   activeGroup: GroupChat | null,
   config: ChatConfig,
   messages: Message[],
+  activePath: Message[],
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>,
+  setActiveLeafId: React.Dispatch<React.SetStateAction<string | null>>,
   toast: ToastAPI,
   t: (key: string) => string,
 ): UseChatGenerationReturn => {
@@ -64,6 +66,14 @@ export const useChatGeneration = (
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // Same trick for activePath — used both for the outgoing context body
+  // (only the rendered branch should go to the model, not sibling
+  // branches) and for assigning parentId on the new messages.
+  const activePathRef = useRef<Message[]>(activePath);
+  useEffect(() => {
+    activePathRef.current = activePath;
+  }, [activePath]);
 
   const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } =
     useChatHelpers(config, activeGroup, characters);
@@ -88,7 +98,8 @@ export const useChatGeneration = (
     // must NOT end up in the request body — sending an empty assistant
     // turn confuses the model. Using the ref also means `messages` no
     // longer needs to be in the dependency array.
-    const priorMessages = messagesRef.current;
+    const priorPath = activePathRef.current;
+    const parentForUser = priorPath.length > 0 ? priorPath[priorPath.length - 1].id : null;
 
     let respondingCharacter = selectedCharacter;
     if (activeGroup) {
@@ -114,6 +125,8 @@ export const useChatGeneration = (
       role: Role.User,
       content: inputText,
       timestamp: Date.now(),
+      parentId: parentForUser,
+      childrenIds: [],
     };
 
     setMessages((prev) => [...prev, userMsg]);
@@ -130,6 +143,8 @@ export const useChatGeneration = (
         content: "",
         timestamp: Date.now(),
         isThinking: true,
+        parentId: userMsg.id,
+        childrenIds: [],
         extra: activeGroup
           ? {
               characterId: respondingCharacter.id,
@@ -138,6 +153,10 @@ export const useChatGeneration = (
           : undefined,
       } as GroupMessage,
     ]);
+
+    // New tip becomes the active leaf so the chat surface renders the
+    // branch we just grew.
+    setActiveLeafId(botMsgId);
 
     try {
       if (isPhotoRequest(inputText)) {
@@ -284,7 +303,7 @@ export const useChatGeneration = (
         abortCtrlRef.current?.abort();
         abortCtrlRef.current = new AbortController();
 
-        const chatMessages = buildChatMessagesForContext([...priorMessages, userMsg]);
+        const chatMessages = buildChatMessagesForContext([...priorPath, userMsg]);
 
         await generateTextStream(
           buildChatRequest(chatMessages, respondingCharacter),
@@ -386,6 +405,7 @@ export const useChatGeneration = (
     characters,
     config,
     setMessages,
+    setActiveLeafId,
     toast,
     t,
     buildChatOptions,

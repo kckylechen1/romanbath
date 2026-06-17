@@ -4,6 +4,8 @@ import { generateText } from "../services/zeroclawService";
 import { useChatHelpers, characterNameForMessage } from "./useChatHelpers";
 import type { ToastAPI } from "../components/Toast";
 import { confirm as confirmDialog } from "../services/dialogService";
+import { pathToRoot, indexMessages, deepestLeaf } from "./useMessageTree";
+import { generateId } from "../utils/id";
 
 export interface UseMessageActionsReturn {
   handleSwipeChange: (messageId: string, direction: "left" | "right") => void;
@@ -16,7 +18,10 @@ export interface UseMessageActionsReturn {
 
 export const useMessageActions = (
   messages: Message[],
+  activePath: Message[],
+  activeLeafId: string | null,
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>,
+  setActiveLeafId: React.Dispatch<React.SetStateAction<string | null>>,
   selectedCharacter: Character,
   characters: Character[],
   config: ChatConfig,
@@ -27,52 +32,81 @@ export const useMessageActions = (
   const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } =
     useChatHelpers(config, activeGroup, characters);
 
-  const handleSwipeChange = useCallback(
-    (messageId: string, direction: "left" | "right") => {
-      setMessages((prev) =>
-        prev.map((msg) => {
-          if (msg.id !== messageId || !msg.swipes || msg.swipes.length <= 1)
-            return msg;
-
-          const currentIndex = msg.swipeId ?? 0;
-          const maxIndex = msg.swipes.length - 1;
-
-          let newIndex: number;
-          if (direction === "left") {
-            newIndex = currentIndex > 0 ? currentIndex - 1 : maxIndex;
-          } else {
-            newIndex = currentIndex < maxIndex ? currentIndex + 1 : 0;
+  // Append `child` to `messages`, recording the back-reference on the
+  // parent so childrenIds stays consistent without re-indexing the world.
+  const appendChild = useCallback(
+    (parent: Message | null, child: Message): void => {
+      setMessages((prev) => {
+        const next = [...prev, { ...child, parentId: parent?.id ?? null }];
+        if (parent) {
+          const parentIdx = next.findIndex((m) => m.id === parent.id);
+          if (parentIdx >= 0) {
+            const updated = { ...next[parentIdx] };
+            updated.childrenIds = [...(updated.childrenIds ?? []), child.id];
+            next[parentIdx] = updated;
           }
-
-          return {
-            ...msg,
-            content: msg.swipes[newIndex],
-            swipeId: newIndex,
-            timestamp: msg.swipeTimestamps?.[newIndex] ?? msg.timestamp,
-          };
-        }),
-      );
+        }
+        return next;
+      });
     },
     [setMessages],
   );
 
+  // handleSwipeChange now navigates siblings in the tree. We pick the
+  // prev/next sibling under the same parent, then walk down to whatever
+  // leaf that sibling currently resolves to and make it the active tip.
+  // The name is kept for backwards-compatibility with the message toolbar.
+  const handleSwipeChange = useCallback(
+    (messageId: string, direction: "left" | "right") => {
+      const target = messages.find((m) => m.id === messageId);
+      if (!target) return;
+
+      const siblings = messages
+        .filter((m) => (m.parentId ?? null) === (target.parentId ?? null) && m.role === target.role)
+        .sort((a, b) => a.timestamp - b.timestamp);
+      if (siblings.length <= 1) return;
+
+      const currentIdx = siblings.findIndex((m) => m.id === messageId);
+      const nextIdx =
+        direction === "left"
+          ? (currentIdx - 1 + siblings.length) % siblings.length
+          : (currentIdx + 1) % siblings.length;
+      const nextSibling = siblings[nextIdx];
+
+      const tree = indexMessages(messages);
+      const newLeaf = deepestLeaf(tree, nextSibling.id);
+      setActiveLeafId(newLeaf.id);
+    },
+    [messages, setActiveLeafId],
+  );
+
   const handleGenerateSwipe = useCallback(
     async (messageId: string) => {
-      const messageIndex = messages.findIndex((m) => m.id === messageId);
-      if (messageIndex === -1) return;
+      const target = messages.find((m) => m.id === messageId);
+      if (!target || target.role !== Role.Model) return;
 
-      const message = messages[messageIndex];
-      if (message.role !== Role.Model) return;
+      const parent = target.parentId ? messages.find((m) => m.id === target.parentId) ?? null : null;
+      const contextMessages = pathToRoot(indexMessages(messages), target.parentId ?? null);
 
-      const contextMessages = messages.slice(0, messageIndex);
       setIsTyping(true);
+
+      const placeholderId = generateId();
+      appendChild(parent, {
+        id: placeholderId,
+        role: Role.Model,
+        content: "",
+        timestamp: Date.now(),
+        isThinking: true,
+        childrenIds: [],
+        extra: target.extra,
+      } as Message);
+      setActiveLeafId(placeholderId);
 
       try {
         const chatMessages = buildChatMessagesForContext(contextMessages);
         const respondingCharacter =
           characters.find(
-            (char) =>
-              char.name === characterNameForMessage(message, selectedCharacter),
+            (char) => char.name === characterNameForMessage(target, selectedCharacter),
           ) ?? selectedCharacter;
         const responseText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
@@ -80,30 +114,20 @@ export const useMessageActions = (
         );
 
         setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id !== messageId) return msg;
-
-            const currentSwipes = msg.swipes || [msg.content];
-            const currentTimestamps = msg.swipeTimestamps || [msg.timestamp];
-            const newSwipes = [...currentSwipes, responseText];
-            const newTimestamps = [...currentTimestamps, Date.now()];
-            const newIndex = newSwipes.length - 1;
-
-            return {
-              ...msg,
-              content: responseText,
-              swipes: newSwipes,
-              swipeId: newIndex,
-              swipeTimestamps: newTimestamps,
-              timestamp: Date.now(),
-            };
-          }),
+          prev.map((msg) =>
+            msg.id === placeholderId
+              ? { ...msg, content: responseText, isThinking: false, timestamp: Date.now() }
+              : msg,
+          ),
         );
-
-        toast.success("New swipe generated");
+        toast.success("New branch generated");
       } catch (error: unknown) {
+        // Roll back the placeholder branch so a failed generation doesn't
+        // leave a dangling thinking bubble on the active path.
+        setMessages((prev) => prev.filter((m) => m.id !== placeholderId));
+        setActiveLeafId(target.id);
         toast.error(
-          "Failed to generate swipe",
+          "Failed to generate branch",
           error instanceof Error ? error.message : "Unknown error",
         );
       } finally {
@@ -116,6 +140,8 @@ export const useMessageActions = (
       selectedCharacter,
       setIsTyping,
       setMessages,
+      setActiveLeafId,
+      appendChild,
       toast,
       buildChatOptions,
       buildChatRequest,
@@ -125,37 +151,44 @@ export const useMessageActions = (
 
   const handleRegenerate = useCallback(
     async (messageId?: string) => {
-      let targetIndex: number;
+      // Resolve the target. With no id, default to the last assistant
+      // message on the active path.
+      let target: Message | undefined;
       if (messageId) {
-        targetIndex = messages.findIndex((m) => m.id === messageId);
+        target = messages.find((m) => m.id === messageId);
       } else {
-        targetIndex = messages.length - 1;
-        while (targetIndex >= 0 && messages[targetIndex].role !== Role.Model) {
-          targetIndex--;
+        for (let i = activePath.length - 1; i >= 0; i -= 1) {
+          if (activePath[i].role === Role.Model) {
+            target = activePath[i];
+            break;
+          }
         }
       }
+      if (!target || target.role !== Role.Model) return;
 
-      if (targetIndex === -1) return;
+      const parent = target.parentId ? messages.find((m) => m.id === target.parentId) ?? null : null;
+      const contextMessages = pathToRoot(indexMessages(messages), target.parentId ?? null);
 
-      const targetMessage = messages[targetIndex];
-      if (targetMessage.role !== Role.Model) return;
+      const placeholderId = generateId();
+      const previousLeafId = activeLeafId;
 
-      const contextMessages = messages.slice(0, targetIndex);
-
-      setMessages((prev) =>
-        prev.map((msg, idx) =>
-          idx === targetIndex ? { ...msg, isThinking: true, content: "" } : msg,
-        ),
-      );
       setIsTyping(true);
+      appendChild(parent, {
+        id: placeholderId,
+        role: Role.Model,
+        content: "",
+        timestamp: Date.now(),
+        isThinking: true,
+        childrenIds: [],
+        extra: target.extra,
+      } as Message);
+      setActiveLeafId(placeholderId);
 
       try {
         const chatMessages = buildChatMessagesForContext(contextMessages);
         const respondingCharacter =
           characters.find(
-            (char) =>
-              char.name ===
-              characterNameForMessage(targetMessage, selectedCharacter),
+            (char) => char.name === characterNameForMessage(target, selectedCharacter),
           ) ?? selectedCharacter;
         const responseText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
@@ -163,43 +196,19 @@ export const useMessageActions = (
         );
 
         setMessages((prev) =>
-          prev.map((msg, idx) => {
-            if (idx !== targetIndex) return msg;
-
-            const currentSwipes =
-              msg.swipes && msg.swipes.length > 0
-                ? msg.swipes
-                : [targetMessage.content];
-            const currentTimestamps = msg.swipeTimestamps || [
-              targetMessage.timestamp,
-            ];
-            const newSwipes = [...currentSwipes, responseText];
-            const newTimestamps = [...currentTimestamps, Date.now()];
-
-            return {
-              ...msg,
-              content: responseText,
-              swipes: newSwipes,
-              swipeId: newSwipes.length - 1,
-              swipeTimestamps: newTimestamps,
-              timestamp: Date.now(),
-              isThinking: false,
-            };
-          }),
+          prev.map((msg) =>
+            msg.id === placeholderId
+              ? { ...msg, content: responseText, isThinking: false, timestamp: Date.now() }
+              : msg,
+          ),
         );
-
-        toast.success("Message regenerated");
+        toast.success("Branch regenerated");
       } catch (error: unknown) {
+        setMessages((prev) => prev.filter((m) => m.id !== placeholderId));
+        setActiveLeafId(previousLeafId);
         toast.error(
           "Regeneration failed",
           error instanceof Error ? error.message : "Unknown error",
-        );
-        setMessages((prev) =>
-          prev.map((msg, idx) =>
-            idx === targetIndex
-              ? { ...msg, isThinking: false, content: targetMessage.content }
-              : msg,
-          ),
         );
       } finally {
         setIsTyping(false);
@@ -207,10 +216,14 @@ export const useMessageActions = (
     },
     [
       messages,
+      activePath,
+      activeLeafId,
       characters,
       selectedCharacter,
       setIsTyping,
       setMessages,
+      setActiveLeafId,
+      appendChild,
       toast,
       buildChatOptions,
       buildChatRequest,
@@ -220,27 +233,28 @@ export const useMessageActions = (
 
   const handleContinue = useCallback(
     async (messageId?: string) => {
-      let targetIndex: number;
+      let target: Message | undefined;
       if (messageId) {
-        targetIndex = messages.findIndex((m) => m.id === messageId);
+        target = messages.find((m) => m.id === messageId);
       } else {
-        targetIndex = messages.length - 1;
-        while (targetIndex >= 0 && messages[targetIndex].role !== Role.Model) {
-          targetIndex--;
+        for (let i = activePath.length - 1; i >= 0; i -= 1) {
+          if (activePath[i].role === Role.Model) {
+            target = activePath[i];
+            break;
+          }
         }
       }
+      if (!target || target.role !== Role.Model) return;
 
+      const targetId = target.id;
+      const targetIndex = activePath.findIndex((m) => m.id === targetId);
       if (targetIndex === -1) return;
-
-      const targetMessage = messages[targetIndex];
-      if (targetMessage.role !== Role.Model) return;
 
       setIsTyping(true);
 
       try {
-        const contextMessages = messages.slice(0, targetIndex + 1);
+        const contextMessages = activePath.slice(0, targetIndex + 1);
         const chatMessages = buildChatMessagesForContext(contextMessages);
-
         chatMessages.push({
           role: "user",
           content:
@@ -249,39 +263,23 @@ export const useMessageActions = (
 
         const respondingCharacter =
           characters.find(
-            (char) =>
-              char.name ===
-              characterNameForMessage(targetMessage, selectedCharacter),
+            (char) => char.name === characterNameForMessage(target, selectedCharacter),
           ) ?? selectedCharacter;
         const continuationText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
           buildChatOptions(),
         );
 
+        // Continue appends to the active branch's content in place. This
+        // is intentionally not a new branch — extending a half-finished
+        // answer is a correction, not an exploration.
         setMessages((prev) =>
-          prev.map((msg, idx) => {
-            if (idx !== targetIndex) return msg;
-
-            const newContent = msg.content + " " + continuationText;
-
-            if (msg.swipes && msg.swipes.length > 0) {
-              const newSwipes = [...msg.swipes];
-              const currentSwipeId = msg.swipeId ?? 0;
-              newSwipes[currentSwipeId] = newContent;
-              return {
-                ...msg,
-                content: newContent,
-                swipes: newSwipes,
-              };
-            }
-
-            return {
-              ...msg,
-              content: newContent,
-            };
-          }),
+          prev.map((msg) =>
+            msg.id === targetId
+              ? { ...msg, content: `${msg.content} ${continuationText}` }
+              : msg,
+          ),
         );
-
         toast.success("Message continued");
       } catch (error: unknown) {
         toast.error(
@@ -294,6 +292,7 @@ export const useMessageActions = (
     },
     [
       messages,
+      activePath,
       characters,
       selectedCharacter,
       setIsTyping,
@@ -305,28 +304,13 @@ export const useMessageActions = (
     ],
   );
 
+  // Edit stays in-place for MVP. The user uses edit to fix typos, not to
+  // fork the conversation — that's what regenerate is for. We can promote
+  // this to branch-on-edit later if the UX calls for it.
   const handleEditMessage = useCallback(
     (messageId: string, newContent: string) => {
       setMessages((prev) =>
-        prev.map((msg) => {
-          if (msg.id !== messageId) return msg;
-
-          if (msg.swipes && msg.swipes.length > 0) {
-            const newSwipes = [...msg.swipes];
-            const currentSwipeId = msg.swipeId ?? 0;
-            newSwipes[currentSwipeId] = newContent;
-            return {
-              ...msg,
-              content: newContent,
-              swipes: newSwipes,
-            };
-          }
-
-          return {
-            ...msg,
-            content: newContent,
-          };
-        }),
+        prev.map((msg) => (msg.id === messageId ? { ...msg, content: newContent } : msg)),
       );
       toast.success("Message edited");
     },
@@ -337,15 +321,63 @@ export const useMessageActions = (
     async (messageId: string) => {
       const ok = await confirmDialog({
         title: "Delete message?",
-        message: "This message will be removed from the conversation.",
+        message: "This message and any branches below it will be removed from the conversation.",
         confirmLabel: "Delete",
         danger: true,
       });
       if (!ok) return;
-      setMessages((prev) => prev.filter((msg) => msg.id !== messageId));
+
+      // Removing a node also removes every descendant branch. We compute
+      // the descendant set with a BFS so a single setMessages pass
+      // cleans them all.
+      const childrenOf = new Map<string, string[]>();
+      for (const msg of messages) {
+        const parent = msg.parentId ?? "";
+        const list = childrenOf.get(parent) ?? [];
+        list.push(msg.id);
+        childrenOf.set(parent, list);
+      }
+
+      const toRemove = new Set<string>([messageId]);
+      const queue = [messageId];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        for (const childId of childrenOf.get(cur) ?? []) {
+          if (!toRemove.has(childId)) {
+            toRemove.add(childId);
+            queue.push(childId);
+          }
+        }
+      }
+
+      const target = messages.find((m) => m.id === messageId);
+      const targetParentId = target?.parentId ?? null;
+
+      setMessages((prev) => {
+        const next = prev.filter((m) => !toRemove.has(m.id));
+        // Patch the parent's childrenIds so the deleted branch doesn't
+        // leave a dangling reference.
+        if (targetParentId) {
+          const parentIdx = next.findIndex((m) => m.id === targetParentId);
+          if (parentIdx >= 0) {
+            const parent = { ...next[parentIdx] };
+            parent.childrenIds = (parent.childrenIds ?? []).filter((id) => !toRemove.has(id));
+            next[parentIdx] = parent;
+          }
+        }
+        return next;
+      });
+
+      // If the active leaf was inside the deleted subtree, fall back to
+      // the target's parent (or its nearest surviving sibling). The
+      // activeLeafId effect in useAppLogic will further recover if this
+      // still points at a removed node.
+      if (activeLeafId && toRemove.has(activeLeafId)) {
+        setActiveLeafId(targetParentId);
+      }
       toast.success("Message deleted");
     },
-    [setMessages, toast],
+    [messages, activeLeafId, setMessages, setActiveLeafId, toast],
   );
 
   return {

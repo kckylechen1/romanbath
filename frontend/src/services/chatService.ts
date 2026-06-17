@@ -152,8 +152,14 @@ export const loadChat = async (
       return { messages: [], metadata: null };
     }
 
+    // Backfill tree structure. Legacy chats saved before Message Tree
+    // ship without parentId/childrenIds; we link them linearly so the
+    // first regenerate/edit creates a sibling under the right parent
+    // instead of starting a parallel root branch.
+    const messages = linkLinearTree(chat.messages.map((msg) => ({ ...msg })));
+
     return {
-      messages: chat.messages.map((msg) => ({ ...msg })),
+      messages,
       metadata: {
         user_name: chat.userName,
         character_name: chat.characterName,
@@ -163,6 +169,50 @@ export const loadChat = async (
     console.error('Error loading chat:', error);
     return { messages: [], metadata: null };
   }
+};
+
+// Ensure every message has parentId and childrenIds. If the saved chat
+// pre-dates the tree model we synthesize a linear chain (each message's
+// parent is the previous message in array order). Messages that already
+// declare a parentId are left alone — their existing tree is respected.
+export const linkLinearTree = <T extends { id: string; parentId?: string | null; childrenIds?: string[] }>(
+  messages: T[],
+): T[] => {
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const next = messages.map((msg) => ({
+    ...msg,
+    parentId: msg.parentId ?? null,
+    childrenIds: [...(msg.childrenIds ?? [])],
+  }));
+
+  // First pass: if parentId is null but the message is not actually a
+  // root in array order, link it to the previous message. This is the
+  // legacy-data migration path.
+  for (let i = 0; i < next.length; i += 1) {
+    const msg = next[i];
+    if (msg.parentId === null && i > 0) {
+      const prev = next[i - 1];
+      msg.parentId = prev.id;
+    }
+  }
+
+  // Second pass: rebuild childrenIds from the now-complete parentId set
+  // so it's consistent even if the saved file had stale entries.
+  const childrenOf = new Map<string | null, string[]>();
+  for (const msg of next) {
+    const list = childrenOf.get(msg.parentId) ?? [];
+    list.push(msg.id);
+    childrenOf.set(msg.parentId, list);
+  }
+  for (const msg of next) {
+    msg.childrenIds = childrenOf.get(msg.id) ?? [];
+  }
+
+  // Suppress unused-var warning for byId — kept for future random-access
+  // utilities without re-introducing a second scan.
+  void byId;
+
+  return next;
 };
 
 export const getChatList = async (characterId: string): Promise<ChatInfo[]> => {

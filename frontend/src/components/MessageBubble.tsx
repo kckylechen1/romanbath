@@ -26,6 +26,10 @@ interface MessageBubbleProps {
   character: Character;
   userName?: string;
   ttsConfig?: TTSConfig;
+  /** Total branches at this message's position (siblings sharing parent + role). */
+  branchCount?: number;
+  /** 0-based index of this message within its sibling set. */
+  branchIndex?: number;
   // Action callbacks
   onSwipeChange?: (id: string, direction: "left" | "right") => void;
   onGenerateSwipe?: (id: string) => void;
@@ -52,14 +56,14 @@ const messageBubblePropsEqual = (
   if (prev.userName !== next.userName) return false;
   if (prev.character.id !== next.character.id) return false;
   if (prev.ttsConfig !== next.ttsConfig) return false;
+  if (prev.branchCount !== next.branchCount) return false;
+  if (prev.branchIndex !== next.branchIndex) return false;
 
   const pm = prev.message;
   const nm = next.message;
   if (pm.id !== nm.id) return false;
   if (pm.content !== nm.content) return false;
   if (pm.isThinking !== nm.isThinking) return false;
-  if (pm.swipeId !== nm.swipeId) return false;
-  if (pm.swipes !== nm.swipes) return false;
   if (pm.toolCalls !== nm.toolCalls) return false;
 
   return true;
@@ -70,6 +74,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   character,
   userName,
   ttsConfig,
+  branchCount = 1,
+  branchIndex = 0,
   onSwipeChange,
   onGenerateSwipe,
   onRegenerate,
@@ -117,9 +123,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     navigator.clipboard.writeText(message.content);
   };
 
-  const hasSwipes = !isUser && message.swipes && message.swipes.length > 1;
-  const currentSwipeIndex = message.swipeId ?? 0;
-  const totalSwipes = message.swipes?.length ?? 1;
+  // Branch navigation: show "< 2/3 >" when this message has sibling
+  // branches (regenerates, alt-generates) under the same parent. Hides
+  // itself when there's only the one branch so the UI stays calm for
+  // linear chats.
+  const hasBranches = !isUser && branchCount > 1;
 
   const groupExtra = (message as GroupMessage).extra;
   const displayName = groupExtra?.characterName || character.name;
@@ -224,25 +232,27 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 )}
               </div>
 
-              {/* Swipe Navigation */}
-              {hasSwipes && (
+              {/* Branch Navigation */}
+              {hasBranches && (
                 <div className="flex items-center gap-2 mt-2 text-xs text-stone-500">
                   <button
                     onClick={() => onSwipeChange?.(message.id, "left")}
                     className="p-1 hover:bg-white/10 rounded transition-colors"
                     disabled={isGenerating}
-                    aria-label="Previous swipe"
+                    aria-label="Previous branch"
+                    title="Previous branch"
                   >
                     <ChevronLeft size={14} />
                   </button>
-                  <span className="font-mono">
-                    {currentSwipeIndex + 1} / {totalSwipes}
+                  <span className="font-mono" title={`${branchCount} branches at this point`}>
+                    {branchIndex + 1} / {branchCount}
                   </span>
                   <button
                     onClick={() => onSwipeChange?.(message.id, "right")}
                     className="p-1 hover:bg-white/10 rounded transition-colors"
                     disabled={isGenerating}
-                    aria-label="Next swipe"
+                    aria-label="Next branch"
+                    title="Next branch"
                   >
                     <ChevronRight size={14} />
                   </button>

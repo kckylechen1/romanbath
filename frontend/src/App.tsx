@@ -216,24 +216,31 @@ const AppContent: React.FC = () => {
             <div
               className={`max-w-4xl mx-auto transition-transform ${logic.leftSidebarOpen ? "" : "md:-translate-x-10"}`}
             >
-              {logic.messages.map((msg, idx) => (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  character={logic.selectedCharacter}
-                  userName={logic.config.userName}
-                  ttsConfig={logic.config.tts}
-                  onSwipeChange={logic.handleSwipeChange}
-                  onGenerateSwipe={logic.handleGenerateSwipe}
-                  onRegenerate={logic.handleRegenerate}
-                  onContinue={logic.handleContinue}
-                  onEdit={logic.handleEditMessage}
-                  onDelete={logic.handleDeleteMessage}
-                  onGenerateImage={logic.handleGenerateImage}
-                  isLastMessage={idx === logic.messages.length - 1}
-                  isGenerating={logic.isTyping}
-                />
-              ))}
+              {logic.activePath.map((msg, idx) => {
+                const siblings = (logic.messageTree.childrenOf.get(msg.parentId ?? null) ?? [])
+                  .filter((m) => m.role === msg.role);
+                const branchIndex = siblings.findIndex((m) => m.id === msg.id);
+                return (
+                  <MessageBubble
+                    key={msg.id}
+                    message={msg}
+                    character={logic.selectedCharacter}
+                    userName={logic.config.userName}
+                    ttsConfig={logic.config.tts}
+                    branchCount={siblings.length}
+                    branchIndex={branchIndex >= 0 ? branchIndex : 0}
+                    onSwipeChange={logic.handleSwipeChange}
+                    onGenerateSwipe={logic.handleGenerateSwipe}
+                    onRegenerate={logic.handleRegenerate}
+                    onContinue={logic.handleContinue}
+                    onEdit={logic.handleEditMessage}
+                    onDelete={logic.handleDeleteMessage}
+                    onGenerateImage={logic.handleGenerateImage}
+                    isLastMessage={idx === logic.activePath.length - 1}
+                    isGenerating={logic.isTyping}
+                  />
+                );
+              })}
               <div ref={logic.chatEndRef} className="h-4" />
             </div>
           </div>

@@ -18,21 +18,30 @@ export interface Message {
   timestamp: number;
   isThinking?: boolean;
 
-  // Swipe support (alternative AI responses)
-  swipes?: string[]; // Array of alternative responses
-  swipeId?: number; // Currently selected swipe index (0-based)
-  swipeTimestamps?: number[]; // Timestamp for each swipe
+  // Tree structure. parentId === null marks a root. childrenIds enumerates
+  // every direct child branch (regenerates, edits, etc.). Older chats
+  // loaded without these fields get them populated by chatService.loadChat
+  // so the whole conversation starts on a single linear branch.
+  parentId?: string | null;
+  childrenIds?: string[];
+
+  // Legacy swipe support — kept for backward compatibility with older
+  // saved chats. New branches created via regenerate/edit use the tree
+  // fields above instead of pushing into swipes[].
+  swipes?: string[];
+  swipeId?: number;
+  swipeTimestamps?: number[];
 
   // Tool call info (for WS chat with image gen / TTS)
   toolCalls?: ToolCallInfo[];
 
   // Generation metadata
   extra?: {
-    api?: string; // Which API generated this
-    model?: string; // Model used
-    generationId?: string; // Unique generation ID
-    characterId?: string; // Character ID (for group chats)
-    characterName?: string; // Character name (for group chats)
+    api?: string;
+    model?: string;
+    generationId?: string;
+    characterId?: string;
+    characterName?: string;
   };
 }
 

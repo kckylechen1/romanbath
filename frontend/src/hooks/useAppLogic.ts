@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import type React from "react";
 import { DEFAULT_CONFIG } from "../constants";
 import {
@@ -31,6 +31,7 @@ import { useChatPersistence } from "./useChatPersistence";
 import { useChatGeneration } from "./useChatGeneration";
 import { useMessageActions } from "./useMessageActions";
 import { confirm as confirmDialog, prompt as promptDialog } from "../services/dialogService";
+import { indexMessages, pathToRoot } from "./useMessageTree";
 
 export const useAppLogic = () => {
   const { t, language, setLanguage } = useLanguage();
@@ -42,6 +43,38 @@ export const useAppLogic = () => {
   // ==================== SHARED CHAT STATE ====================
   const [messages, setMessages] = useState<Message[]>([]);
   const [config, setConfig] = useState<ChatConfig>(DEFAULT_CONFIG);
+
+  // ==================== MESSAGE TREE STATE ====================
+  // Active leaf is the bottom of the currently rendered branch. Stays in
+  // sync with messages: when messages reset/swap (new chat, character
+  // switch, restore), activeLeafId is recomputed to the last message.
+  const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
+
+  const messageTree = useMemo(() => indexMessages(messages), [messages]);
+
+  // If the active leaf got removed (delete, character switch, restore),
+  // fall back to the deepest reachable leaf from any root. This keeps
+  // the rendered path non-empty whenever messages is non-empty.
+  useEffect(() => {
+    if (messages.length === 0) {
+      setActiveLeafId(null);
+      return;
+    }
+    if (!activeLeafId || !messageTree.byId.has(activeLeafId)) {
+      // Default to the most recent message — matches the pre-tree UX
+      // where the chat always scrolled to the bottom.
+      const last = messages[messages.length - 1];
+      setActiveLeafId(last.id);
+    }
+  }, [messages, activeLeafId, messageTree]);
+
+  // Active path = walk from leaf to root, reversed. This is what the
+  // chat view renders. Other consumers (persistence, token count) keep
+  // using the full `messages` array so saving stores every branch.
+  const activePath = useMemo(
+    () => pathToRoot(messageTree, activeLeafId),
+    [messageTree, activeLeafId],
+  );
 
   // ==================== UI STATE ====================
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
@@ -82,7 +115,9 @@ export const useAppLogic = () => {
     activeGroup,
     config,
     messages,
+    activePath,
     setMessages,
+    setActiveLeafId,
     toast,
     t,
   );
@@ -101,7 +136,10 @@ export const useAppLogic = () => {
   // ==================== MESSAGE ACTIONS ====================
   const messageActions = useMessageActions(
     messages,
+    activePath,
+    activeLeafId,
     setMessages,
+    setActiveLeafId,
     characterMgmt.selectedCharacter,
     characterMgmt.characters,
     config,
@@ -301,6 +339,12 @@ export const useAppLogic = () => {
     // Chat state
     messages,
     setMessages,
+    // Tree-rendered view. Active path is what the chat surface shows; the
+    // full `messages` array above still carries every branch for save.
+    activePath,
+    activeLeafId,
+    setActiveLeafId,
+    messageTree,
     inputText: generation.inputText,
     setInputText: generation.setInputText,
     isTyping: generation.isTyping,
