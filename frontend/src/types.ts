@@ -151,60 +151,10 @@ export interface GenerationConfig {
   topK: number;
   topP: number;
   maxOutputTokens: number;
-  thinkingBudget: number;
   stopSequences: string[];
   presencePenalty: number;
   frequencyPenalty: number;
-  repetitionPenalty: number;
-  minP: number;
-  topA: number;
-  typicalP: number;
-  tfs: number;
-  repPenRange: number;
   seed: number;
-}
-
-export interface AdvancedGenerationConfig {
-  logitBias: Array<{ sequence: string; bias: number }>;
-  bannedTokens: string;
-  globalBannedTokens: string;
-  sendBannedTokens: boolean;
-  negativePrompt: string;
-  grammarString: string;
-  jsonSchema: object | null;
-  jsonSchemaAllowEmpty: boolean;
-  noRepeatNgramSize: number;
-  repPenSlope: number;
-  repPenDecay: number;
-  smoothingFactor: number;
-  smoothingCurve: number;
-  numBeams: number;
-  lengthPenalty: number;
-  earlyStopping: boolean;
-  encoderRepPenalty: number;
-  banEosToken: boolean;
-  skipSpecialTokens: boolean;
-  addBosToken: boolean;
-  guidanceScale: number;
-  penaltyAlpha: number;
-  maxTokensSecond: number;
-  n: number;
-}
-
-export interface SamplerConfig {
-  dryMultiplier: number;
-  dryBase: number;
-  dryAllowedLength: number;
-  dryPenaltyLastN: number;
-  xtcThreshold: number;
-  xtcProbability: number;
-  mirostatMode: 0 | 1 | 2;
-  mirostatTau: number;
-  mirostatEta: number;
-  dynatemp: boolean;
-  minTemp: number;
-  maxTemp: number;
-  dynatempExponent: number;
 }
 
 export interface PromptConfig {
@@ -217,6 +167,7 @@ export interface PromptConfig {
   authorsNote: string;
   authorsNoteDepth: number;
   promptOrder: "default" | "style_first" | "scenario_last";
+  negativePrompt: string;
 }
 
 export interface FormattingConfig {
@@ -232,8 +183,6 @@ export interface InterfaceConfig {
 
 export interface ChatConfig
   extends GenerationConfig,
-    AdvancedGenerationConfig,
-    SamplerConfig,
     PromptConfig,
     FormattingConfig,
     InterfaceConfig {
