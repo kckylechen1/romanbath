@@ -1401,10 +1401,7 @@ pub async fn handle_api_session_delete(
     // this, deleting a session mid-turn leaks the map entry until the
     // streaming task happens to wake up — and on a process crash the
     // entry is lost entirely.
-    let token = state
-        .cancel_tokens
-        .lock()
-        .remove(&session_key);
+    let token = state.cancel_tokens.lock().remove(&session_key);
     if let Some(token) = token {
         token.cancel();
         ::zeroclaw_log::record!(
@@ -1586,11 +1583,7 @@ pub async fn handle_api_session_abort(
 
     // Look up and cancel the token. Hold the lock only long enough to
     // clone the token — cancellation itself does not need the lock.
-    let token = state
-        .cancel_tokens
-        .lock()
-        .get(&session_key)
-        .cloned();
+    let token = state.cancel_tokens.lock().get(&session_key).cloned();
 
     if let Some(token) = token {
         token.cancel();

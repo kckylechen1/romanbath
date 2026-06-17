@@ -819,17 +819,20 @@ fn is_channel_photo_request(content: &str) -> bool {
     }
 
     let photo_terms = [
-        "照片",
-        "自拍",
-        "图片",
-        "相片",
-        "photo",
-        "picture",
-        "selfie",
-        "pic",
+        "照片", "自拍", "图片", "相片", "photo", "picture", "selfie", "pic",
     ];
     let request_terms = [
-        "发", "来", "给", "看看", "看一下", "拍", "send", "show", "take", "make", "generate",
+        "发",
+        "来",
+        "给",
+        "看看",
+        "看一下",
+        "拍",
+        "send",
+        "show",
+        "take",
+        "make",
+        "generate",
     ];
 
     photo_terms.iter().any(|term| text.contains(term))
@@ -908,7 +911,11 @@ fn resolve_photo_character_card(
     None
 }
 
-fn build_channel_photo_prompt(agent_alias: &str, request_text: &str, system_prompt: &str) -> String {
+fn build_channel_photo_prompt(
+    agent_alias: &str,
+    request_text: &str,
+    system_prompt: &str,
+) -> String {
     if let Some(card) = resolve_photo_character_card(agent_alias, request_text) {
         return card_image_profile_prompt(&card, request_text);
     }
@@ -988,9 +995,7 @@ async fn maybe_handle_channel_photo_request(
                     };
                     format!("[IMAGE:{}]", absolute.display())
                 }
-                None => {
-                    "Image generation succeeded but did not return an image path.".to_string()
-                }
+                None => "Image generation succeeded but did not return an image path.".to_string(),
             }
         }
         Ok(result) => format!(
