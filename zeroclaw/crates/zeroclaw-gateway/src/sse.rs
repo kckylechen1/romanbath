@@ -90,6 +90,139 @@ pub async fn handle_sse_events(
         .into_response()
 }
 
+/// Query parameters for `/api/chat/subscribe`.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ChatSubscribeParams {
+    /// Agent alias to subscribe to (`agents.<alias>`). Required.
+    pub agent: String,
+    /// Optional character filter. When set, only pushes tagged with this
+    /// character_name are delivered. Empty = all characters on this agent.
+    #[serde(default)]
+    pub character: Option<String>,
+}
+
+/// GET /api/chat/subscribe — SSE stream of server-initiated chat pushes
+/// for a given agent (and optionally a specific character).
+///
+/// Sources of pushes:
+/// - Cron-fired "always-on" messages (character reaches out proactively)
+/// - Sigil dreaming milestones ("Ada just thought about your last conversation")
+/// - Future: cross-device sync ("you sent a message from another client")
+///
+/// Pushes ride the same global `event_tx` broadcast as `/api/events`,
+/// filtered to `type: "chat_push"` and matching agent_alias. The filter
+/// keeps per-session events off this stream — those stay scoped to the
+/// WS chat socket they came from.
+///
+/// Offline behavior: MVP is "drop if no subscriber". Pending-notification
+/// queueing (deliver on reconnect) is a follow-up — for now, anything
+/// fired while the browser is closed is lost.
+pub async fn handle_chat_subscribe(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<ChatSubscribeParams>,
+) -> impl IntoResponse {
+    if state.pairing.require_pairing() {
+        let token = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|auth| auth.strip_prefix("Bearer "))
+            .unwrap_or("");
+
+        if !state.pairing.is_authenticated(token) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Unauthorized — provide Authorization: Bearer <token>",
+            )
+                .into_response();
+        }
+    }
+
+    let agent_alias = params.agent.trim().to_string();
+    if agent_alias.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "missing required `agent` query param",
+        )
+            .into_response();
+    }
+    let character_filter = params
+        .character
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
+
+    let rx = state.event_tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(move |result| {
+        let agent_alias = agent_alias.clone();
+        let character_filter = character_filter.clone();
+        let value = match result {
+            Ok(v) => v,
+            Err(_) => return None, // lagged
+        };
+        // Only chat_push events
+        if value.get("type").and_then(|v| v.as_str()) != Some("chat_push") {
+            return None;
+        }
+        // Match agent_alias
+        if value.get("agent_alias").and_then(|v| v.as_str()) != Some(&agent_alias) {
+            return None;
+        }
+        // Optional character filter
+        if let Some(want) = character_filter.as_deref() {
+            let got = value
+                .get("character_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if got != want {
+                return None;
+            }
+        }
+        Some(Ok::<_, Infallible>(
+            Event::default().data(value.to_string()),
+        ))
+    });
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// Publish a chat push event to all subscribers on the given agent.
+///
+/// Event shape on the wire:
+/// ```json
+/// { "type": "chat_push", "agent_alias": "ada", "character_name": "Ada",
+///   "push_kind": "always_on" | "dreaming" | "sync" | ...,
+///   "content": "<message text>", "metadata": { ... } }
+/// ```
+///
+/// Returns the number of active subscribers that received the push (0 = no
+/// client connected; the push is dropped per MVP offline policy).
+pub fn publish_chat_push(
+    state: &AppState,
+    agent_alias: &str,
+    character_name: &str,
+    push_kind: &str,
+    content: &str,
+    metadata: Option<serde_json::Value>,
+) -> usize {
+    let mut event = serde_json::json!({
+        "type": "chat_push",
+        "agent_alias": agent_alias,
+        "character_name": character_name,
+        "push_kind": push_kind,
+        "content": content,
+        "ts": chrono::Utc::now().to_rfc3339(),
+    });
+    if let Some(meta) = metadata {
+        event
+            .as_object_mut()
+            .unwrap()
+            .insert("metadata".to_string(), meta);
+    }
+    state.event_tx.send(event).unwrap_or(0)
+}
+
 /// GET /api/events/history — return buffered recent events as JSON.
 pub async fn handle_events_history(
     State(state): State<AppState>,

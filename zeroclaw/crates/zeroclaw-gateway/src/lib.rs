@@ -1417,6 +1417,7 @@ pub async fn run_gateway(
         // ── SSE event stream ──
         .route("/api/events", get(sse::handle_sse_events))
         .route("/api/events/history", get(sse::handle_events_history))
+        .route("/api/chat/subscribe", get(sse::handle_chat_subscribe))
         // ── WebSocket agent chat ──
         .route("/ws/chat", get(ws::handle_ws_chat))
         // ── WebSocket canvas updates ──
