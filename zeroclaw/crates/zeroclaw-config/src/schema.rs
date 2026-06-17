@@ -2814,6 +2814,26 @@ pub struct AliasedAgentConfig {
     #[serde(default)]
     pub classifier_provider: crate::providers::ModelProviderRef,
 
+    /// Optional override for the sigil dreaming pipeline's LLM enricher
+    /// (`MemoryEnricher` in zeroclaw-memory-sigil). When non-empty, the
+    /// gateway constructs `MemoryEnricher::with_single_provider` using the
+    /// referenced `[providers.models.<type>.<alias>]` provider, and
+    /// `DreamingPipeline::with_enricher` attaches it. Light/deep/rem sleep
+    /// stages then call the small model for fact extraction / verification /
+    /// pattern discovery instead of running pure-Rust heuristics.
+    /// Empty = dreaming runs heuristics-only (the historical default).
+    ///
+    /// Source of truth follows the same pattern as `classifier_provider`:
+    /// api_key / uri / model / temperature etc. live on the referenced
+    /// `[providers.models.<type>.<alias>]` entry. This field is a reference
+    /// only — per AGENTS.md SINGLE SOURCE OF TRUTH.
+    ///
+    /// Use case: dreaming enrichment is cheap, repetitive, and benefits
+    /// from a fast model. Point this at `qwen-turbo` / `kimi-k2.5` while
+    /// `model_provider` stays on the expensive answering model.
+    #[serde(default)]
+    pub enricher_provider: crate::providers::ModelProviderRef,
+
     // ── Agent loop / runtime tunables (folded from `[agent]` ──────
     // These are per-agent. Defaults preserve the legacy single-agent
     // behavior so an unconfigured agent runs identically to a config
@@ -2947,6 +2967,7 @@ impl Default for AliasedAgentConfig {
             tts_provider: crate::providers::TtsProviderRef::default(),
             transcription_provider: crate::providers::TranscriptionProviderRef::default(),
             classifier_provider: crate::providers::ModelProviderRef::default(),
+            enricher_provider: crate::providers::ModelProviderRef::default(),
             compact_context: default_agent_compact_context(),
             max_tool_iterations: default_agent_max_tool_iterations(),
             max_history_messages: default_agent_max_history_messages(),
@@ -14912,6 +14933,12 @@ impl Config {
                     "providers.models",
                     "classifier_provider",
                     agent.classifier_provider.trim(),
+                ),
+                // Sigil dreaming enricher override (small-model routing).
+                (
+                    "providers.models",
+                    "enricher_provider",
+                    agent.enricher_provider.trim(),
                 ),
             ];
             for (section_prefix, field, value) in typed_provider_refs {

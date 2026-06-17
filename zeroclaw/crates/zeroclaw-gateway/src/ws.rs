@@ -270,6 +270,116 @@ async fn resolve_ws_memory_handle(
         .map(Some)
 }
 
+/// Build a sigil DreamingPipeline for the agent, attaching an LLM
+/// enricher when `agents.<alias>.enricher_provider` is set. Empty ref
+/// → pure-Rust heuristics only (the historical default before this
+/// hook existed).
+///
+/// This is called fire-and-forget from the chat-completion path; failures
+/// are logged and downgraded to a no-enricher pipeline so a misconfigured
+/// `enricher_provider` never breaks the chat surface.
+async fn resolve_ws_dreaming_pipeline(
+    config: &zeroclaw_config::schema::Config,
+    agent_alias: &str,
+    data_dir: &Path,
+) -> zeroclaw_memory_sigil::DreamingPipeline {
+    let db_path = data_dir.join("chat_memory");
+    let db_path_str = db_path.to_string_lossy().to_string();
+    let pipeline = zeroclaw_memory_sigil::DreamingPipeline::new(&db_path_str);
+
+    let enricher_ref = config
+        .agent(agent_alias)
+        .map(|a| a.enricher_provider.as_str().trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+    if enricher_ref.is_empty() {
+        return pipeline;
+    }
+
+    // Resolve model + provider from the same `[providers.models.<type>.<alias>]`
+    // entry that classifier_provider uses — single source of truth.
+    let (type_key, alias_key) = match enricher_ref.split_once('.') {
+        Some(parts) => parts,
+        None => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_attrs(::serde_json::json!({"enricher_provider": enricher_ref})),
+                "enricher_provider must be dotted `<type>.<alias>`; dreaming runs heuristics-only"
+            );
+            return pipeline;
+        }
+    };
+    let model_cfg = match config.providers.models.find(type_key, alias_key) {
+        Some(cfg) => cfg,
+        None => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_attrs(::serde_json::json!({"enricher_provider": enricher_ref})),
+                "enricher_provider references unknown [providers.models] entry; dreaming runs heuristics-only"
+            );
+            return pipeline;
+        }
+    };
+    let model = match model_cfg.model.as_deref() {
+        Some(m) if !m.is_empty() => m.to_string(),
+        _ => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_attrs(::serde_json::json!({"enricher_provider": enricher_ref})),
+                "enricher_provider entry has no `model` field; dreaming runs heuristics-only"
+            );
+            return pipeline;
+        }
+    };
+
+    let opts = zeroclaw_providers::provider_runtime_options_from_config(config);
+    let provider_result = zeroclaw_providers::create_resilient_model_provider_from_ref(
+        config,
+        enricher_ref,
+        model_cfg.api_key.as_deref(),
+        model_cfg.uri.as_deref(),
+        &config.reliability,
+        &opts,
+    );
+    let provider: Arc<dyn zeroclaw_api::model_provider::ModelProvider> = match provider_result {
+        Ok(p) => Arc::from(p),
+        Err(e) => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                    .with_attrs(::serde_json::json!({
+                        "enricher_provider": enricher_ref,
+                        "error": format!("{e:#}"),
+                    })),
+                "Failed to initialize enricher_provider; dreaming runs heuristics-only"
+            );
+            return pipeline;
+        }
+    };
+
+    // Same model handles extract (Light) and distill (Deep/REM) for now.
+    // The MemoryEnricher API allows splitting them later if a user wants
+    // a cheaper extract model and a stronger distill model.
+    let enricher = Arc::new(zeroclaw_memory_sigil::MemoryEnricher::with_single_provider(
+        provider, &model, &model,
+    ));
+    ::zeroclaw_log::record!(
+        INFO,
+        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(
+            ::serde_json::json!({
+                "enricher_provider": enricher_ref,
+                "model": model.as_str(),
+            })
+        ),
+        "enricher_provider override active for dreaming"
+    );
+    pipeline.with_enricher(enricher)
+}
+
 async fn handle_socket(
     socket: WebSocket,
     state: AppState,
@@ -598,6 +708,7 @@ async fn handle_socket(
                         &mut approval_event_rx,
                         &pending_approvals,
                         &ws_memory,
+                        &agent_alias,
                         &content,
                         &session_key,
                         character_name.clone(),
@@ -745,6 +856,7 @@ async fn handle_socket(
                     &mut approval_event_rx,
                     &pending_approvals,
                     &ws_memory,
+                    &agent_alias,
                     &content,
                     &session_key,
                     character_name.clone(),
@@ -1038,6 +1150,7 @@ async fn process_chat_message(
     approval_event_rx: &mut tokio::sync::mpsc::Receiver<zeroclaw_api::agent::TurnEvent>,
     pending_approvals: &PendingApprovals,
     ws_memory: &Option<Arc<dyn zeroclaw_memory::Memory>>,
+    agent_alias: &str,
     content: &str,
     session_key: &str,
     character_name: Option<String>,
@@ -1425,6 +1538,46 @@ async fn process_chat_message(
                         "WS memory consolidation skipped"
                     );
                 }
+            }
+
+            // Sigil dreaming: fire-and-forget light sleep so the just-saved
+            // assistant turn gets fact-extracted, deduped, and importance-
+            // scored before the next user message arrives. Pure-Rust
+            // heuristics run unconditionally; LLM enrichment activates only
+            // when the agent has `enricher_provider` configured.
+            //
+            // Deep/REM sleep is intentionally NOT triggered here — those are
+            // scheduled offline passes (daily / weekly) and belong on the
+            // cron scheduler, not in the per-turn hot path.
+            if let Some(cn) = character_name.as_ref() {
+                let config_snapshot = state.config.read().clone();
+                let data_dir_dream = config_snapshot.data_dir.clone();
+                let agent_alias_dream = agent_alias.to_string();
+                let cn_dream = cn.clone();
+                tokio::spawn(async move {
+                    let pipeline = resolve_ws_dreaming_pipeline(
+                        &config_snapshot,
+                        &agent_alias_dream,
+                        &data_dir_dream,
+                    )
+                    .await;
+                    let report = pipeline.run_light_sleep(&cn_dream).await;
+                    ::zeroclaw_log::record!(
+                        DEBUG,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                            .with_attrs(::serde_json::json!({
+                                "agent": &agent_alias_dream,
+                                "character": &cn_dream,
+                                "stage": report.stage,
+                                "processed": report.memories_processed,
+                                "created": report.memories_created,
+                                "merged": report.memories_merged,
+                                "promoted": report.memories_promoted,
+                                "duration_ms": report.duration_ms,
+                            })),
+                        "Sigil dreaming light sleep completed"
+                    );
+                });
             }
 
             // Compute cost from accumulated tokens + configured pricing,
