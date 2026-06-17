@@ -4,6 +4,7 @@ import { Users, Upload, Loader2, Plus, Pencil, Trash2, Copy, Download } from 'lu
 import { importCharacterCard, duplicateCharacter, exportCharacter, deleteCharacter } from '../services/zeroclawService';
 import { useLanguage } from '../i18n';
 import { CharacterAvatar } from './CharacterAvatar';
+import { confirm as confirmDialog } from '../services/dialogService';
 
 interface CharacterListProps {
   characters: Character[];
@@ -108,7 +109,13 @@ const CharacterList: React.FC<CharacterListProps> = ({
 
   const handleDeleteFromMenu = async (charId: string) => {
     setContextMenuChar(null);
-    if (!window.confirm('Are you sure you want to delete this character?')) return;
+    const ok = await confirmDialog({
+      title: 'Delete character?',
+      message: `"${charId}" and its avatar will be removed permanently. Chat history is kept.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     const result = await deleteCharacter(charId);
     if (result.success) {
       onCharacterImported?.();

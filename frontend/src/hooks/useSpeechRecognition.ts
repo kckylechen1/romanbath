@@ -1,5 +1,6 @@
 /// <reference types="dom-speech-recognition" />
 import { useState, useEffect, useRef } from "react";
+import { alert as alertDialog } from "../services/dialogService";
 
 export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
   const [isListening, setIsListening] = useState(false);
@@ -40,7 +41,11 @@ export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
 
   const toggleVoiceInput = () => {
     if (!recognitionRef.current) {
-      alert("Speech recognition not supported in this browser.");
+      void alertDialog({
+        title: "Voice input unavailable",
+        message: "This browser does not support the Web Speech API. Try Chrome or Edge on desktop, or Safari on iOS 14.5+.",
+        okLabel: "OK",
+      });
       return;
     }
 

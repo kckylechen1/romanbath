@@ -19,6 +19,7 @@ import ImageGenModal from "./components/ImageGenModal";
 import CharacterEditor from "./components/CharacterEditor";
 import { useToast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import DialogHost from "./components/DialogHost";
 
 const AppContent: React.FC = () => {
   const logic = useAppLogic();
@@ -192,8 +193,6 @@ const AppContent: React.FC = () => {
                   character={logic.selectedCharacter}
                   userName={logic.config.userName}
                   ttsConfig={logic.config.tts}
-                  apiKey={logic.config.apiKey}
-                  apiUrl={logic.config.apiUrl}
                   onSwipeChange={logic.handleSwipeChange}
                   onGenerateSwipe={logic.handleGenerateSwipe}
                   onRegenerate={logic.handleRegenerate}
@@ -295,6 +294,9 @@ const AppContent: React.FC = () => {
 
       {/* Toast Notifications */}
       <toast.ToastContainer />
+
+      {/* Imperative confirm/prompt/alert dialogs (replaces window.*) */}
+      <DialogHost />
     </div>
   );
 };

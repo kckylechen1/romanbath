@@ -20,58 +20,80 @@ const jsonHeaders = (): Record<string, string> => {
 
 // ── Pairing ──
 
+// Pairing promise cache. Before this was added, every API call ran
+// ensurePairing() independently — N concurrent requests triggered N
+// /health fetches (and potentially N pairing-code round-trips if the
+// token was missing). Now the first call drives the flow and every
+// concurrent caller awaits the same promise. The cache clears on
+// failure so the next call retries, and clears on token change so a
+// fresh `setToken` re-evaluates against /health.
+let pairingPromise: Promise<void> | null = null;
+
+export const invalidatePairingCache = (): void => {
+  pairingPromise = null;
+};
+
 export const ensurePairing = async (): Promise<void> => {
-  const existingToken = getToken();
-  if (existingToken) {
-    try {
-      const health = await fetch('/health', {
-        headers: { Authorization: `Bearer ${existingToken}` },
-      });
-      if (health.ok) {
-        const data = await health.json();
-        if (data.paired) return;
+  if (pairingPromise) return pairingPromise;
+
+  pairingPromise = (async () => {
+    const existingToken = getToken();
+    if (existingToken) {
+      try {
+        const health = await fetch('/health', {
+          headers: { Authorization: `Bearer ${existingToken}` },
+        });
+        if (health.ok) {
+          const data = await health.json();
+          if (data.paired) return;
+        }
+      } catch {
+        // Gateway might not be reachable; continue to pair
       }
-    } catch {
-      // Gateway might not be reachable; continue to pair
     }
-  }
 
-  const codeRes = await fetch('/pair/code');
-  if (!codeRes.ok) {
-    throw new Error(`Failed to fetch pairing code: ${codeRes.status}`);
-  }
-  const data = await codeRes.json();
-  let code = data.pairing_code;
-  if (!code) {
-    const newCodeRes = await fetch('/admin/paircode/new', { method: 'POST' });
-    if (newCodeRes.ok) {
-      const nd = await newCodeRes.json();
-      code = nd.pairing_code;
+    const codeRes = await fetch('/pair/code');
+    if (!codeRes.ok) {
+      throw new Error(`Failed to fetch pairing code: ${codeRes.status}`);
     }
-  }
-  if (!code) {
-    const health = await fetch('/health');
-    if (health.ok) {
-      const h = await health.json();
-      if (h.paired) return;
+    const data = await codeRes.json();
+    let code = data.pairing_code;
+    if (!code) {
+      const newCodeRes = await fetch('/admin/paircode/new', { method: 'POST' });
+      if (newCodeRes.ok) {
+        const nd = await newCodeRes.json();
+        code = nd.pairing_code;
+      }
     }
-    throw new Error('No pairing code available. Restart the gateway to generate one.');
-  }
+    if (!code) {
+      const health = await fetch('/health');
+      if (health.ok) {
+        const h = await health.json();
+        if (h.paired) return;
+      }
+      throw new Error('No pairing code available. Restart the gateway to generate one.');
+    }
 
-  const pairRes = await fetch('/pair', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Pairing-Code': code,
-    },
+    const pairRes = await fetch('/pair', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Pairing-Code': code,
+      },
+    });
+    if (!pairRes.ok) {
+      throw new Error(`Pairing failed: ${pairRes.status}`);
+    }
+    const result = await pairRes.json();
+    if (result.token) {
+      setToken(result.token);
+    }
+  })().catch((err: unknown) => {
+    pairingPromise = null; // allow next call to retry
+    throw err;
   });
-  if (!pairRes.ok) {
-    throw new Error(`Pairing failed: ${pairRes.status}`);
-  }
-  const { token } = await pairRes.json();
-  if (token) {
-    setToken(token);
-  }
+
+  return pairingPromise;
 };
 
 // ── Types ──
@@ -199,6 +221,14 @@ interface CharacterDataResponse {
 const characterAvatarUrl = (name: string): string =>
   `/api/characters/${encodeURIComponent(name)}/avatar`;
 
+// Module-level cache buster. Bumped after avatar upload/delete so the
+// browser refetches the new image instead of serving the cached one.
+let avatarCacheVersion = Date.now();
+
+export const bumpAvatarVersion = (): void => {
+  avatarCacheVersion = Date.now();
+};
+
 interface CharacterBookEntryWire extends Omit<CharacterBookEntry, 'secondaryKeys' | 'tokenBudget'> {
   secondary_keys?: string[];
   token_budget?: number;
@@ -280,7 +310,7 @@ const mapSummaryToCharacter = (char: CharacterSummary): Character => {
   return {
     id: char.name,
     name: char.name,
-    avatar: char.has_avatar ? `${characterAvatarUrl(char.name)}?v=1` : '',
+    avatar: char.has_avatar ? `${characterAvatarUrl(char.name)}?v=${avatarCacheVersion}` : '',
     description: char.description || '',
     systemInstruction: systemInstruction.trim(),
     firstMessage: char.first_mes || '',
@@ -526,6 +556,7 @@ export const uploadCharacterAvatar = async (
       const err = await res.json().catch(() => ({ error: res.statusText }));
       return { success: false, error: err.error || 'Avatar upload failed' };
     }
+    bumpAvatarVersion();
     return { success: true };
   } catch (e) {
     return {
@@ -558,6 +589,7 @@ export const deleteCharacterAvatar = async (
       const err = await res.json().catch(() => ({ error: res.statusText }));
       return { success: false, error: err.error || 'Avatar delete failed' };
     }
+    bumpAvatarVersion();
     return { success: true };
   } catch (e) {
     return {
@@ -639,46 +671,93 @@ export const deleteCharacter = async (
 
 // ── Chat via POST /api/chat (SSE) — matches zeroclaw/web CharacterChat ──
 
-const parseSseStream = async (
+// Parses an SSE byte stream into discrete event payloads. Handles the
+// cases that bit the old naive parser:
+//   - CRLF line endings (some proxies rewrite `\n` → `\r\n`)
+//   - Lone `\r` line endings (legacy but spec-legal)
+//   - Multi-line `data:` fields (concatenated with `\n` per SSE spec)
+//   - Comment lines starting with `:` (heartbeat / keep-alive)
+//   - Event boundaries that arrive split across read() chunks
+//
+// Yields one string per event — the concatenated `data:` payload, or '' for
+// events with no data field (so callers can still observe keep-alives if
+// they care). The caller decides what to do with each payload.
+export async function* parseSseEvents(
   res: Response,
-  onToken: (fullText: string) => void,
-): Promise<string> => {
+): AsyncGenerator<string, void, unknown> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('No response body');
 
   const decoder = new TextDecoder();
   let buffer = '';
-  let fullText = '';
+
+  const normalizeLineEndings = (s: string): string =>
+    s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() ?? '';
+    buffer += normalizeLineEndings(decoder.decode(value, { stream: true }));
 
-    for (const part of parts) {
-      for (const line of part.split('\n')) {
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') return fullText;
+    // Events are separated by one or more blank lines.
+    const events = buffer.split(/\n{2,}/);
+    buffer = events.pop() ?? '';
 
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          // Ignore malformed chunks (keep-alives, comments, partial data)
-          continue;
-        }
-        if (typeof parsed !== 'object' || parsed === null) continue;
-        const p = parsed as Record<string, unknown>;
-        if (p.error) throw new Error(String(p.error));
-        if (typeof p.token === 'string') {
-          fullText += p.token;
-          onToken(fullText);
-        }
+    for (const eventBlock of events) {
+      const dataLines: string[] = [];
+      for (const line of eventBlock.split('\n')) {
+        if (line === '' || line.startsWith(':')) continue; // blank or comment
+        const colonIdx = line.indexOf(':');
+        if (colonIdx === -1) continue;
+        const field = line.slice(0, colonIdx);
+        let val = line.slice(colonIdx + 1);
+        if (val.startsWith(' ')) val = val.slice(1); // spec: leading space stripped
+        if (field === 'data') dataLines.push(val);
+        // event:, id:, retry: are ignored — not needed for chat streaming
       }
+      yield dataLines.join('\n');
+    }
+  }
+
+  // Flush trailing event if the stream ended without a final blank line.
+  if (buffer.length > 0) {
+    const dataLines: string[] = [];
+    for (const line of buffer.split('\n')) {
+      if (line === '' || line.startsWith(':')) continue;
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) continue;
+      const field = line.slice(0, colonIdx);
+      let val = line.slice(colonIdx + 1);
+      if (val.startsWith(' ')) val = val.slice(1);
+      if (field === 'data') dataLines.push(val);
+    }
+    if (dataLines.length > 0) yield dataLines.join('\n');
+  }
+}
+
+const parseSseStream = async (
+  res: Response,
+  onToken: (fullText: string) => void,
+): Promise<string> => {
+  let fullText = '';
+
+  for await (const data of parseSseEvents(res)) {
+    if (data === '[DONE]') return fullText;
+    if (data === '') continue; // keep-alive with no payload
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      // Malformed JSON chunk — ignore (gateway may emit advisory payloads)
+      continue;
+    }
+    if (typeof parsed !== 'object' || parsed === null) continue;
+    const p = parsed as Record<string, unknown>;
+    if (p.error) throw new Error(String(p.error));
+    if (typeof p.token === 'string') {
+      fullText += p.token;
+      onToken(fullText);
     }
   }
 

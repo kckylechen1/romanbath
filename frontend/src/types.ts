@@ -121,30 +121,11 @@ export interface AppSettings {
 
 // ── ChatConfig sub-types ──
 
-export type MainApi =
-  | "kobold"
-  | "koboldhorde"
-  | "openai"
-  | "textgenerationwebui"
-  | "openrouter"
-  | "google"
-  | "ollama"
-  | "grok"
-  | "custom";
-
-export interface ApiConfig {
-  mainApi: MainApi;
-  apiUrl: string;
-  apiKey: string;
-  modelName: string;
-}
-
-export interface HordeConfig {
-  hordeModels: string[];
-  hordeAdjustContext: boolean;
-  hordeAdjustResponse: boolean;
-  hordeTrustedOnly: boolean;
-}
+// Note: ApiConfig (mainApi/apiUrl/apiKey/modelName) and HordeConfig were
+// removed. RomanBath talks to the LLM exclusively through the ZeroClaw
+// gateway — it never holds provider credentials or hits an LLM endpoint
+// directly. If you need per-character provider routing, configure it in
+// ZeroClaw's config.toml, not here.
 
 export interface GenerationConfig {
   temperature: number;
@@ -231,9 +212,7 @@ export interface InterfaceConfig {
 }
 
 export interface ChatConfig
-  extends ApiConfig,
-    HordeConfig,
-    GenerationConfig,
+  extends GenerationConfig,
     AdvancedGenerationConfig,
     SamplerConfig,
     PromptConfig,

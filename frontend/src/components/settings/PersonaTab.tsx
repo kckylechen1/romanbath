@@ -10,6 +10,7 @@ import {
 } from "../../services/personaService";
 import { useLanguage } from "../../i18n";
 import { BufferedInput, BufferedTextArea } from "./SharedComponents";
+import { confirm as confirmDialog } from "../../services/dialogService";
 import {
   UserCircle,
   Plus,
@@ -69,13 +70,17 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
     setActiveId(persona.id);
   };
 
-  const handleDeletePersona = (id: string) => {
-    if (window.confirm(t("persona.deleteConfirm"))) {
-      deletePersona(id);
-      setPersonas(getPersonas());
-      if (activePersonaId === id) {
-        setActiveId(null);
-      }
+  const handleDeletePersona = async (id: string) => {
+    const ok = await confirmDialog({
+      title: t("persona.deleteConfirm"),
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+    deletePersona(id);
+    setPersonas(getPersonas());
+    if (activePersonaId === id) {
+      setActiveId(null);
     }
   };
 

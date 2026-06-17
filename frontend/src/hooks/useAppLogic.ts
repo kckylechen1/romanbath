@@ -30,6 +30,7 @@ import { useCharacterManagement } from "./useCharacterManagement";
 import { useChatPersistence } from "./useChatPersistence";
 import { useChatGeneration } from "./useChatGeneration";
 import { useMessageActions } from "./useMessageActions";
+import { confirm as confirmDialog, prompt as promptDialog } from "../services/dialogService";
 
 export const useAppLogic = () => {
   const { t, language, setLanguage } = useLanguage();
@@ -156,7 +157,7 @@ export const useAppLogic = () => {
     }
   }, [characterMgmt.selectedCharacter.id]);
 
-  const handleCreateBookmark = () => {
+  const handleCreateBookmark = async () => {
     if (
       !chatPersistence.currentChatFileName ||
       messages.length === 0
@@ -165,10 +166,13 @@ export const useAppLogic = () => {
       return;
     }
 
-    const name = window.prompt(
-      "Enter bookmark name:",
-      `Checkpoint - ${messages.length} messages`,
-    );
+    const name = await promptDialog({
+      title: "Create bookmark",
+      message: "Give this checkpoint a name so you can find it later.",
+      defaultValue: `Checkpoint - ${messages.length} messages`,
+      placeholder: "Bookmark name",
+      confirmLabel: "Create",
+    });
     if (!name) return;
 
     const bookmark = createBookmark(
@@ -183,25 +187,33 @@ export const useAppLogic = () => {
     toast.success("Bookmark created");
   };
 
-  const handleRestoreBookmark = (bookmark: ChatBookmark) => {
-    if (
-      !window.confirm(
-        `Restore to "${bookmark.name}"? Current messages after this point will be replaced.`,
-      )
-    )
-      return;
+  const handleRestoreBookmark = async (bookmark: ChatBookmark) => {
+    const ok = await confirmDialog({
+      title: "Restore bookmark?",
+      message: `Restoring to "${bookmark.name}" will replace the current messages in this conversation.`,
+      confirmLabel: "Restore",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
 
     setMessages(bookmark.messages);
     setShowBookmarks(false);
     toast.success("Restored from bookmark");
   };
 
-  const handleDeleteBookmark = (
+  const handleDeleteBookmark = async (
     bookmarkId: string,
     e: React.MouseEvent,
   ) => {
     e.stopPropagation();
-    if (!window.confirm("Delete this bookmark?")) return;
+    const ok = await confirmDialog({
+      title: "Delete bookmark?",
+      message: "This bookmark will be removed permanently.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
 
     deleteBookmark(bookmarkId);
     setBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
@@ -254,8 +266,15 @@ export const useAppLogic = () => {
   };
 
   // ==================== CLEAR CHAT ====================
-  const clearChat = () => {
-    if (window.confirm("Reset this conversation with new settings?")) {
+  const clearChat = async () => {
+    const ok = await confirmDialog({
+      title: "Reset conversation?",
+      message: "This will clear the current chat and start a new one with your latest settings. Bookmarks are kept.",
+      confirmLabel: "Reset",
+      cancelLabel: "Cancel",
+      danger: true,
+    });
+    if (ok) {
       chatPersistence.startNewChat();
     }
   };
@@ -307,8 +326,8 @@ export const useAppLogic = () => {
     currentChatFileName: chatPersistence.currentChatFileName,
     setCurrentChatFileName: chatPersistence.setCurrentChatFileName,
     chatHistory: chatPersistence.chatHistory,
-    showChatHistory,
-    setShowChatHistory,
+    showChatHistory: chatPersistence.showChatHistory,
+    setShowChatHistory: chatPersistence.setShowChatHistory,
     isSavingChat: chatPersistence.isSavingChat,
 
     // Bookmarks

@@ -55,7 +55,17 @@ export const useChatGeneration = (
   const wsChatRef = useRef<WsChatConnection | null>(null);
   const abortCtrlRef = useRef<AbortController | null>(null);
 
-  const { buildChatOptions, buildChatRequest } =
+  // Mirror `messages` into a ref so handleSendMessage can capture the
+  // pre-mutation snapshot for the outgoing request body without depending
+  // on `messages` itself. Keeping `messages` out of the useCallback deps
+  // stops the callback (and therefore handleKeyDown) from rebuilding on
+  // every streaming token — which previously cost the textarea its focus.
+  const messagesRef = useRef<Message[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } =
     useChatHelpers(config, activeGroup, characters);
 
   // Scroll to bottom when messages change
@@ -73,6 +83,12 @@ export const useChatGeneration = (
 
   const handleSendMessage = useCallback(async () => {
     if (!inputText.trim() || isTyping) return;
+
+    // Capture the pre-mutation snapshot. The bot placeholder added below
+    // must NOT end up in the request body — sending an empty assistant
+    // turn confuses the model. Using the ref also means `messages` no
+    // longer needs to be in the dependency array.
+    const priorMessages = messagesRef.current;
 
     let respondingCharacter = selectedCharacter;
     if (activeGroup) {
@@ -268,7 +284,7 @@ export const useChatGeneration = (
         abortCtrlRef.current?.abort();
         abortCtrlRef.current = new AbortController();
 
-        const chatMessages = buildChatMessagesForContext([...messages, userMsg]);
+        const chatMessages = buildChatMessagesForContext([...priorMessages, userMsg]);
 
         await generateTextStream(
           buildChatRequest(chatMessages, respondingCharacter),
@@ -369,12 +385,12 @@ export const useChatGeneration = (
     activeGroup,
     characters,
     config,
-    messages,
     setMessages,
     toast,
     t,
     buildChatOptions,
     buildChatRequest,
+    buildChatMessagesForContext,
   ]);
 
   const handleKeyDown = useCallback(

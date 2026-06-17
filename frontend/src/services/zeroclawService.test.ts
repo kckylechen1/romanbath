@@ -3,6 +3,7 @@ import {
   buildOptionsBody,
   formToCharacterData,
   mapDetailsToForm,
+  parseSseEvents,
   type CharacterFormData,
   type ChatOptions,
 } from './zeroclawService';
@@ -157,5 +158,99 @@ describe('zeroclawService chat request mapping', () => {
       prompt_template: 'chatml',
       negative_prompt: 'No summaries.',
     });
+  });
+});
+
+describe('parseSseEvents', () => {
+  const mockResponse = (chunks: Uint8Array[]): Response => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    return new Response(stream);
+  };
+
+  const encode = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+  const collect = async (chunks: Uint8Array[]): Promise<string[]> => {
+    const out: string[] = [];
+    for await (const evt of parseSseEvents(mockResponse(chunks))) {
+      out.push(evt);
+    }
+    return out;
+  };
+
+  it('parses simple newline-separated events', async () => {
+    const out = await collect([
+      encode('data: hello\n\ndata: world\n\n'),
+    ]);
+    expect(out).toEqual(['hello', 'world']);
+  });
+
+  it('handles CRLF line endings rewritten by proxies', async () => {
+    const out = await collect([
+      encode('data: hello\r\n\r\ndata: world\r\n\r\n'),
+    ]);
+    expect(out).toEqual(['hello', 'world']);
+  });
+
+  it('handles lone CR line endings (legacy but spec-legal)', async () => {
+    const out = await collect([
+      encode('data: hello\r\rdata: world\r\r'),
+    ]);
+    expect(out).toEqual(['hello', 'world']);
+  });
+
+  it('concatenates multi-line data: fields with newline per SSE spec', async () => {
+    const out = await collect([
+      encode('data: line1\ndata: line2\ndata: line3\n\n'),
+    ]);
+    expect(out).toEqual(['line1\nline2\nline3']);
+  });
+
+  it('strips a single leading space after the colon but preserves the rest', async () => {
+    const out = await collect([
+      encode('data:   padded\n\n'),
+    ]);
+    expect(out).toEqual(['  padded']); // only one leading space stripped
+  });
+
+  it('skips comment lines starting with colon (heartbeat)', async () => {
+    const out = await collect([
+      encode(': heartbeat comment\ndata: real\n\n'),
+    ]);
+    expect(out).toEqual(['real']);
+  });
+
+  it('ignores event:, id:, retry: fields but still yields empty string for non-data events', async () => {
+    const out = await collect([
+      encode('event: ping\nid: 42\nretry: 5000\n\ndata: actual\n\n'),
+    ]);
+    expect(out).toEqual(['', 'actual']);
+  });
+
+  it('handles event boundaries split across read() chunks', async () => {
+    const out = await collect([
+      encode('data: hel'),
+      encode('lo\n\nda'),
+      encode('ta: world\n\n'),
+    ]);
+    expect(out).toEqual(['hello', 'world']);
+  });
+
+  it('flushes a trailing event without a final blank line', async () => {
+    const out = await collect([
+      encode('data: trailing'),
+    ]);
+    expect(out).toEqual(['trailing']);
+  });
+
+  it('does not flush a trailing comment-only block', async () => {
+    const out = await collect([
+      encode(': just a comment'),
+    ]);
+    expect(out).toEqual([]);
   });
 });

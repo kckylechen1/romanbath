@@ -3,6 +3,7 @@ import { Message, Role, Character, ChatConfig, GroupChat } from "../types";
 import { generateText } from "../services/zeroclawService";
 import { useChatHelpers, characterNameForMessage } from "./useChatHelpers";
 import type { ToastAPI } from "../components/Toast";
+import { confirm as confirmDialog } from "../services/dialogService";
 
 export interface UseMessageActionsReturn {
   handleSwipeChange: (messageId: string, direction: "left" | "right") => void;
@@ -333,8 +334,14 @@ export const useMessageActions = (
   );
 
   const handleDeleteMessage = useCallback(
-    (messageId: string) => {
-      if (!window.confirm("Delete this message?")) return;
+    async (messageId: string) => {
+      const ok = await confirmDialog({
+        title: "Delete message?",
+        message: "This message will be removed from the conversation.",
+        confirmLabel: "Delete",
+        danger: true,
+      });
+      if (!ok) return;
       setMessages((prev) => prev.filter((msg) => msg.id !== messageId));
       toast.success("Message deleted");
     },

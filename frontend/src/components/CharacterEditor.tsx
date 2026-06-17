@@ -8,6 +8,7 @@ import {
   uploadCharacterAvatar,
 } from '../services/zeroclawService';
 import LorebookEditor from './LorebookEditor';
+import { alert as alertDialog, confirm as confirmDialog } from '../services/dialogService';
 
 interface CharacterEditorProps {
   characterId?: string; // undefined = new character, string = editing existing
@@ -147,8 +148,16 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleClose = () => {
-    if (isDirty && !window.confirm('You have unsaved changes. Discard them?')) return;
+  const handleClose = async () => {
+    if (isDirty) {
+      const ok = await confirmDialog({
+        title: 'Discard unsaved changes?',
+        message: 'Your edits to this character will be lost.',
+        confirmLabel: 'Discard',
+        danger: true,
+      });
+      if (!ok) return;
+    }
     onClose();
   };
 
@@ -166,7 +175,11 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
 
   const handleSubmit = async () => {
     if (!formData.name.trim()) {
-      alert('Character name is required');
+      await alertDialog({
+        title: 'Name required',
+        message: 'Characters need a name before they can be saved.',
+        okLabel: 'OK',
+      });
       return;
     }
 
@@ -179,12 +192,20 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
       if (formData.avatarFile) {
         const avatarResult = await uploadCharacterAvatar(formData.name, formData.avatarFile);
         if (!avatarResult.success) {
-          alert(`Character saved, but avatar upload failed: ${avatarResult.error ?? 'unknown'}`);
+          await alertDialog({
+            title: 'Avatar upload failed',
+            message: `Character saved, but the avatar could not be uploaded: ${avatarResult.error ?? 'unknown error'}`,
+            okLabel: 'OK',
+          });
         }
       } else if (formData.removeAvatar) {
         const avatarResult = await deleteCharacterAvatar(formData.name);
         if (!avatarResult.success) {
-          alert(`Character saved, but avatar removal failed: ${avatarResult.error ?? 'unknown'}`);
+          await alertDialog({
+            title: 'Avatar removal failed',
+            message: `Character saved, but the avatar could not be removed: ${avatarResult.error ?? 'unknown error'}`,
+            okLabel: 'OK',
+          });
         }
       }
       onClose();
@@ -197,7 +218,13 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
 
   const handleDelete = async () => {
     if (!onDelete) return;
-    if (!window.confirm('Are you sure you want to delete this character? This cannot be undone.')) return;
+    const ok = await confirmDialog({
+      title: 'Delete character?',
+      message: `"${formData.name}" and its avatar will be removed permanently. Chat history is kept.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
 
     setIsSaving(true);
     try {

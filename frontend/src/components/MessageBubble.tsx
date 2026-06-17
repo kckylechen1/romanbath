@@ -26,8 +26,6 @@ interface MessageBubbleProps {
   character: Character;
   userName?: string;
   ttsConfig?: TTSConfig;
-  apiKey?: string;
-  apiUrl?: string;
   // Action callbacks
   onSwipeChange?: (id: string, direction: "left" | "right") => void;
   onGenerateSwipe?: (id: string) => void;
@@ -40,101 +38,31 @@ interface MessageBubbleProps {
   isGenerating?: boolean;
 }
 
-// Format message content to style actions, dialogues, and add visual separation
-const formatMessageContent = (content: string): React.ReactNode => {
-  // Step 1: Remove citation markers like [1], [2][3], etc.
-  const cleanContent = content.replace(/\[\d+\]/g, "");
+// Custom memo comparator. Default React.memo would re-render every parent
+// pass because the callbacks (onSwipeChange, onEdit, ...) come from a hook
+// that may produce fresh refs. We compare only the data fields that actually
+// affect the bubble's rendered output, and trust callbacks to be stable
+// enough that identity changes between renders don't matter.
+const messageBubblePropsEqual = (
+  prev: MessageBubbleProps,
+  next: MessageBubbleProps,
+): boolean => {
+  if (prev.isLastMessage !== next.isLastMessage) return false;
+  if (prev.isGenerating !== next.isGenerating) return false;
+  if (prev.userName !== next.userName) return false;
+  if (prev.character.id !== next.character.id) return false;
+  if (prev.ttsConfig !== next.ttsConfig) return false;
 
-  // Step 2: Split content into segments (action, dialogue, or narrative)
-  // This regex matches complete action (*...*) or dialogue patterns
-  const segmentRegex =
-    /(\*[^*]+\*)|("[^"]+"|'[^']+'|“[^”]+”|‘[^’]+’|「[^」]+」|『[^』]+』|《[^》]+》)/g;
+  const pm = prev.message;
+  const nm = next.message;
+  if (pm.id !== nm.id) return false;
+  if (pm.content !== nm.content) return false;
+  if (pm.isThinking !== nm.isThinking) return false;
+  if (pm.swipeId !== nm.swipeId) return false;
+  if (pm.swipes !== nm.swipes) return false;
+  if (pm.toolCalls !== nm.toolCalls) return false;
 
-  const segments: { type: "action" | "dialogue" | "text"; content: string }[] =
-    [];
-  let lastIndex = 0;
-  let match;
-
-  while ((match = segmentRegex.exec(cleanContent)) !== null) {
-    // Add text before the match
-    if (match.index > lastIndex) {
-      const textBefore = cleanContent.slice(lastIndex, match.index).trim();
-      if (textBefore) {
-        segments.push({ type: "text", content: textBefore });
-      }
-    }
-
-    const matchedText = match[0];
-    if (matchedText.startsWith("*") && matchedText.endsWith("*")) {
-      segments.push({ type: "action", content: matchedText });
-    } else {
-      segments.push({ type: "dialogue", content: matchedText });
-    }
-
-    lastIndex = segmentRegex.lastIndex;
-  }
-
-  // Add remaining text
-  if (lastIndex < cleanContent.length) {
-    const remaining = cleanContent.slice(lastIndex).trim();
-    if (remaining) {
-      segments.push({ type: "text", content: remaining });
-    }
-  }
-
-  // Step 3: Render segments with visual separation between different types
-  const result: React.ReactNode[] = [];
-  let prevType: string | null = null;
-
-  segments.forEach((segment, index) => {
-    // Add spacing between different segment types (action <-> dialogue transitions)
-    const needsSpacing =
-      prevType !== null &&
-      ((prevType === "action" && segment.type === "dialogue") ||
-        (prevType === "dialogue" && segment.type === "action"));
-
-    const marginTop = needsSpacing ? "0.8em" : index > 0 ? "0.4em" : 0;
-
-    if (segment.type === "action") {
-      result.push(
-        <p
-          key={index}
-          className="italic text-bath-300/80"
-          style={{ marginTop, marginBottom: 0, lineHeight: 1.75 }}
-        >
-          {segment.content}
-        </p>,
-      );
-    } else if (segment.type === "dialogue") {
-      result.push(
-        <p
-          key={index}
-          className="text-bath-300/90 font-medium"
-          style={{ marginTop, marginBottom: 0, lineHeight: 1.75 }}
-        >
-          {segment.content}
-        </p>,
-      );
-    } else {
-      result.push(
-        <p
-          key={index}
-          className="text-stone-200"
-          style={{ marginTop, marginBottom: 0, lineHeight: 1.75 }}
-        >
-          {segment.content}
-        </p>,
-      );
-    }
-
-    prevType = segment.type;
-  });
-
-  return result.length > 0 ? (
-    result
-  ) : (
-    <span className="text-stone-200">{content}</span>
-  );
+  return true;
 };
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -142,8 +70,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   character,
   userName,
   ttsConfig,
-  apiKey,
-  apiUrl,
   onSwipeChange,
   onGenerateSwipe,
   onRegenerate,
@@ -284,15 +210,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                       <span className="w-1.5 h-1.5 bg-bath-400/60 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
                       <span className="w-1.5 h-1.5 bg-bath-400/60 rounded-full animate-bounce"></span>
                     </span>
-                  ) : // Check if content has markdown indicators (code blocks, headers, lists)
-                  message.content.includes("```") ||
-                    message.content.match(/^#{1,3}\s/m) ||
-                    message.content.match(/^\s*[-*]\s/m) ||
-                    message.content.match(/^\s*\d+\.\s/m) ? (
-                    <MarkdownRenderer content={message.content} />
                   ) : (
-                    // Use existing formatMessageContent for simple roleplay text
-                    formatMessageContent(message.content)
+                    <MarkdownRenderer content={message.content} />
                   )}
                 </div>
                 {/* Tool call media (images, audio, video) */}
@@ -379,7 +298,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                             if (isSpeaking()) {
                               stop();
                             } else {
-                              speak(message.content, ttsConfig, apiKey, apiUrl);
+                              speak(message.content, ttsConfig);
                             }
                           }}
                           className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
@@ -451,4 +370,4 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   );
 };
 
-export default MessageBubble;
+export default React.memo(MessageBubble, messageBubblePropsEqual);

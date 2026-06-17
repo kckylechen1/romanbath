@@ -22,6 +22,7 @@ import {
 } from '../services/groupChatService';
 import { useLanguage } from '../i18n';
 import { CharacterAvatar } from './CharacterAvatar';
+import { confirm as confirmDialog } from '../services/dialogService';
 
 interface GroupChatManagerProps {
   characters: Character[];
@@ -65,11 +66,16 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
     onSelectGroup(group);
   };
 
-  const handleDeleteGroup = (id: string) => {
-    if (window.confirm('Delete this group chat?')) {
-      deleteGroupChat(id);
-      setGroups(getGroupChats());
-    }
+  const handleDeleteGroup = async (id: string) => {
+    const ok = await confirmDialog({
+      title: 'Delete group chat?',
+      message: 'The group will be removed. Characters themselves are not affected and their individual chats are kept.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    deleteGroupChat(id);
+    setGroups(getGroupChats());
   };
 
   const toggleCharacterSelection = (charId: string) => {

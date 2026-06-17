@@ -64,19 +64,20 @@ export const useChatHelpers = (
     return request;
   }, [activeGroup, characters, config.scenario, config.userDescription, config.userName]);
 
-  const buildChatMessagesForContext = (
-    contextMessages: Message[],
-  ): ChatMessage[] => {
-    return contextMessages.map((msg) => {
-      const groupMsg = msg as GroupMessage;
-      const shouldPrefix =
-        activeGroup && msg.role === Role.Model && groupMsg.extra?.characterName;
-      return {
-        role: msg.role === Role.User ? "user" : "assistant",
-        content: shouldPrefix ? `[${groupMsg.extra?.characterName}]: ${msg.content}` : msg.content,
-      };
-    });
-  };
+  const buildChatMessagesForContext = useCallback(
+    (contextMessages: Message[]): ChatMessage[] => {
+      return contextMessages.map((msg) => {
+        const groupMsg = msg as GroupMessage;
+        const shouldPrefix =
+          activeGroup && msg.role === Role.Model && groupMsg.extra?.characterName;
+        return {
+          role: msg.role === Role.User ? "user" : "assistant",
+          content: shouldPrefix ? `[${groupMsg.extra?.characterName}]: ${msg.content}` : msg.content,
+        };
+      });
+    },
+    [activeGroup],
+  );
 
   return { buildChatOptions, buildChatRequest, buildChatMessagesForContext };
 };
