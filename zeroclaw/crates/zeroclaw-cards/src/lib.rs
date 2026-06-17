@@ -190,6 +190,8 @@ fn normalize_card(raw: &serde_json::Value) -> Result<CharacterCard, CardError> {
             source: Vec::new(),
             assets: Vec::new(),
             extensions: serde_json::Value::Object(serde_json::Map::new()),
+            creation_date: String::new(),
+            modification_date: String::new(),
         };
         return Ok(CharacterCard {
             spec: "chara_card_v2".to_string(),

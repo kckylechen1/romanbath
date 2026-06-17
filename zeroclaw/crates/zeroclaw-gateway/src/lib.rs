@@ -44,7 +44,7 @@ use axum::{
     extract::{ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -1357,6 +1357,19 @@ pub async fn run_gateway(
             get(api_characters::handle_character_avatar)
                 .post(api_characters::handle_upload_character_avatar)
                 .delete(api_characters::handle_delete_character_avatar),
+        )
+        .route(
+            "/api/characters/{name}/book",
+            get(api_characters::handle_get_book).put(api_characters::handle_put_book),
+        )
+        .route(
+            "/api/characters/{name}/book/entries",
+            post(api_characters::handle_create_entry),
+        )
+        .route(
+            "/api/characters/{name}/book/entries/{entry_id}",
+            put(api_characters::handle_update_entry)
+                .delete(api_characters::handle_delete_entry),
         )
         .route("/api/chat", post(api_chat::handle_chat))
         .route("/api/image-gen", post(api_image_gen::handle_image_gen))
@@ -3019,7 +3032,7 @@ async fn handle_pair_code(State(state): State<AppState>) -> impl IntoResponse {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use axum::http::HeaderValue;
+    use axum::http::{HeaderValue, Uri};
     use axum::response::IntoResponse;
     use http_body_util::BodyExt;
     use parking_lot::{Mutex, RwLock};
@@ -3082,6 +3095,65 @@ mod tests {
         );
     }
 
+    fn spa_fallback_state(tmp: &tempfile::TempDir) -> AppState {
+        let dist_dir = tmp.path().join("web").join("dist");
+        std::fs::create_dir_all(&dist_dir).unwrap();
+        std::fs::write(
+            dist_dir.join("index.html"),
+            r#"<!DOCTYPE html><html><head></head><body>dashboard shell</body></html>"#,
+        )
+        .unwrap();
+
+        let mut state = AppState {
+            config: Arc::new(RwLock::new(Config::default())),
+            model_provider: Arc::new(MockModelProvider::default()),
+            model: "test-model".into(),
+            temperature: None,
+            mem: Arc::new(MockMemory),
+            auto_save: false,
+            webhook_secret_hash: None,
+            pairing: Arc::new(PairingGuard::new(false, &[])),
+            trust_forwarded_headers: false,
+            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
+            auth_limiter: Arc::new(auth_rate_limit::AuthRateLimiter::new()),
+            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
+            whatsapp: None,
+            whatsapp_app_secret: None,
+            linq: None,
+            linq_signing_secret: None,
+            nextcloud_talk: None,
+            nextcloud_talk_webhook_secret: None,
+            wati: None,
+            gmail_push: None,
+            tools_registry: Arc::new(Vec::new()),
+            cost_tracker: None,
+            event_tx: tokio::sync::broadcast::channel(16).0,
+            event_buffer: Arc::new(sse::EventBuffer::new(16)),
+            shutdown_tx: tokio::sync::watch::channel(false).0,
+            reload_tx: None,
+            node_registry: Arc::new(nodes::NodeRegistry::new(16)),
+            path_prefix: String::new(),
+            web_dist_dir: None,
+            session_backend: None,
+            session_queue: std::sync::Arc::new(crate::session_queue::SessionActorQueue::new(
+                8, 30, 600,
+            )),
+            device_registry: None,
+            pending_pairings: None,
+            canvas_store: CanvasStore::new(),
+            cancel_tokens: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            pending_reload: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        state.web_dist_dir = Some(dist_dir);
+        state
+    }
+
+    async fn spa_fallback_response(
+        path: &'static str,
+        state: AppState,
+    ) -> axum::response::Response {
+        static_files::handle_spa_fallback(State(state), Uri::from_static(path)).await
+    }
     #[test]
     fn long_running_request_timeout_default_is_ten_minutes() {
         assert_eq!(LONG_RUNNING_REQUEST_TIMEOUT_SECS, 600);
@@ -3119,6 +3191,96 @@ mod tests {
     fn app_state_is_clone() {
         fn assert_clone<T: Clone>() {}
         assert_clone::<AppState>();
+    }
+
+    #[tokio::test]
+    async fn spa_fallback_returns_json_not_html_for_unknown_api_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = spa_fallback_state(&tmp);
+
+        let response = spa_fallback_response("/api/agents", state).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("application/json")),
+            "unknown API paths must not be served as HTML"
+        );
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "not_found");
+        assert_eq!(json["path"], "/api/agents");
+    }
+
+    #[tokio::test]
+    async fn spa_fallback_returns_json_for_api_root_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = spa_fallback_state(&tmp);
+
+        let response = spa_fallback_response("/api", state).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["path"], "/api");
+    }
+
+    #[tokio::test]
+    async fn spa_fallback_returns_json_for_path_prefixed_api_miss() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut state = spa_fallback_state(&tmp);
+        state.path_prefix = "/gw".to_string();
+
+        let response = spa_fallback_response("/gw/api/agents", state).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["path"], "/api/agents");
+    }
+
+    #[tokio::test]
+    async fn spa_fallback_still_serves_dashboard_routes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = spa_fallback_state(&tmp);
+
+        let response = spa_fallback_response("/config", state).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("text/html")),
+            "dashboard routes should still receive the SPA shell"
+        );
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("dashboard shell"));
+    }
+
+    #[tokio::test]
+    async fn spa_fallback_does_not_treat_api_like_spa_paths_as_api() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = spa_fallback_state(&tmp);
+
+        let response = spa_fallback_response("/apiary", state).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("text/html")),
+            "similarly named SPA routes should not be reserved as API paths"
+        );
     }
 
     /// Regression: the gateway must boot with zero configured agents so

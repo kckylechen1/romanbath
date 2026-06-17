@@ -1,6 +1,7 @@
-use crate::{CardError, CharacterCard, extract_from_json, extract_from_png_bytes};
+use crate::{CardError, CharacterCard, CharacterData, extract_from_json, extract_from_png_bytes};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Manages a local library of imported character cards.
 pub struct CardManager {
@@ -52,7 +53,7 @@ impl CardManager {
             .unwrap_or("")
             .to_lowercase();
 
-        let card = match ext.as_str() {
+        let mut card = match ext.as_str() {
             "json" => {
                 let json = String::from_utf8_lossy(bytes);
                 extract_from_json(&json)?
@@ -63,6 +64,14 @@ impl CardManager {
                 .map_err(|_| CardError::UnrecognizedFormat)?,
         };
 
+        // First-time back-fill: legacy cards may carry entries without
+        // stable ids. Assign once and persist; subsequent saves preserve
+        // them. Import does NOT touch creation_date — the source card is
+        // authoritative for "when was this made" — but does stamp
+        // modification_date to the import moment and rewrites the spec
+        // envelope so the canonical on-disk card matches detect_spec.
+        assign_stable_entry_ids(&mut card.data);
+        card.sync_spec();
         self.save_card(&card, bytes, &ext)
     }
 
@@ -91,8 +100,40 @@ impl CardManager {
     }
 
     /// Save an already-parsed card (create or update).
+    ///
+    /// Source of truth for `creation_date` / `modification_date` lives in
+    /// the card JSON on disk. On create (no existing file under this name),
+    /// we stamp `creation_date`. On every save we refresh `modification_date`.
+    /// Both fields use UTC seconds-since-epoch rendered as decimal seconds
+    /// (RFC 3339 profile: integer part is seconds, sub-second zero) — matches
+    /// what ST V3 records and round-trips cleanly through serde.
     pub fn save(&self, card: &CharacterCard) -> Result<String, CardError> {
-        self.save_card(card, &[], "json")
+        // Read existing card (if any) to preserve `creation_date`. The
+        // canonical timestamp lives on disk, never in a duplicated field.
+        let safe_name = sanitize_filename(&card.data.name);
+        let json_path = self.cards_dir.join(format!("{safe_name}.json"));
+        let preserved_creation = if json_path.exists() {
+            fs::read(&json_path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<CharacterCard>(&b).ok())
+                .map(|existing| existing.data.creation_date)
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+
+        let mut to_write = card.clone();
+        assign_stable_entry_ids(&mut to_write.data);
+        to_write.sync_spec();
+        let now = now_iso8601_utc();
+        if let Some(preserved) = preserved_creation {
+            to_write.data.creation_date = preserved;
+        } else if to_write.data.creation_date.is_empty() {
+            to_write.data.creation_date = now.clone();
+        }
+        // modification_date is always refreshed — every save is a real edit.
+        to_write.data.modification_date = now;
+        self.save_card(&to_write, &[], "json")
     }
 
     /// List all imported character names.
@@ -154,6 +195,55 @@ impl CardManager {
     }
 }
 
+/// Assign a UUID v4 to any lorebook entry whose `id` is empty. Existing ids
+/// are preserved untouched. Idempotent — running it twice on the same card
+/// leaves the second pass with nothing to do.
+fn assign_stable_entry_ids(data: &mut CharacterData) {
+    if let Some(book) = data.character_book.as_mut() {
+        for entry in &mut book.entries {
+            if entry.id.is_empty() {
+                entry.id = uuid::Uuid::new_v4().to_string();
+            }
+        }
+    }
+}
+
+/// Current UTC time rendered as RFC 3339 with second precision. We avoid
+/// pulling in `chrono` — the seconds-since-epoch representation is what ST
+/// V3 uses for its `creation_date` / `modification_date` and round-trips
+/// cleanly through serde.
+fn now_iso8601_utc() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Render as a UTC calendar timestamp from civil-from-days algorithm
+    // (Howard Hinnant's `civil_from_days`). Avoids the `time` crate dep.
+    civil_from_unix(secs)
+}
+
+/// Convert a Unix timestamp (seconds since 1970-01-01 UTC) to an RFC 3339
+/// string like `2026-06-17T12:34:56Z`. Howard Hinnant's date algorithm —
+/// no external dependency.
+fn civil_from_unix(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    let hour = rem / 3_600;
+    let minute = (rem % 3_600) / 60;
+    let second = rem % 60;
+    format!("{year:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
 /// Sanitize a string for use as a filename.
 fn sanitize_filename(name: &str) -> String {
     name.chars()
@@ -172,10 +262,92 @@ fn sanitize_filename(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CharacterBookEntry;
 
     #[test]
     fn test_sanitize_filename() {
         assert_eq!(sanitize_filename("Hello World"), "Hello_World");
         assert_eq!(sanitize_filename("test/name:1"), "test_name_1");
+    }
+
+    #[test]
+    fn civil_from_unix_matches_known_epoch() {
+        // 1970-01-01T00:00:00Z
+        assert_eq!(civil_from_unix(0), "1970-01-01T00:00:00Z");
+        // 2000-01-01T00:00:00Z = 946_684_800
+        assert_eq!(civil_from_unix(946_684_800), "2000-01-01T00:00:00Z");
+        // 2026-01-01T00:00:00Z = 1_767_225_600
+        assert_eq!(civil_from_unix(1_767_225_600), "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn assign_stable_entry_ids_is_idempotent() {
+        let mut data = crate::CharacterData {
+            name: "Test".into(),
+            description: "x".into(),
+            personality: String::new(),
+            scenario: String::new(),
+            first_mes: "hi".into(),
+            mes_example: String::new(),
+            system_prompt: String::new(),
+            post_history_instructions: String::new(),
+            alternate_greetings: Vec::new(),
+            tags: Vec::new(),
+            creator: String::new(),
+            creator_notes: String::new(),
+            character_version: String::new(),
+            character_book: Some(crate::CharacterBook {
+                name: String::new(),
+                description: String::new(),
+                entries: vec![
+                    CharacterBookEntry {
+                        id: String::new(),
+                        keys: vec!["a".into()],
+                        content: "A".into(),
+                        enabled: true,
+                        selective: false,
+                        secondary_keys: Vec::new(),
+                        constant: false,
+                        position: "before_char".into(),
+                        token_budget: None,
+                        priority: None,
+                        recursive: false,
+                    },
+                    CharacterBookEntry {
+                        id: "fixed-id".into(),
+                        keys: vec!["b".into()],
+                        content: "B".into(),
+                        enabled: true,
+                        selective: false,
+                        secondary_keys: Vec::new(),
+                        constant: false,
+                        position: "after_char".into(),
+                        token_budget: None,
+                        priority: None,
+                        recursive: false,
+                    },
+                ],
+            }),
+            nickname: String::new(),
+            group_only_greetings: Vec::new(),
+            source: Vec::new(),
+            assets: Vec::new(),
+            extensions: serde_json::Value::Object(serde_json::Map::new()),
+            creation_date: String::new(),
+            modification_date: String::new(),
+        };
+
+        assign_stable_entry_ids(&mut data);
+        let book = data.character_book.as_ref().unwrap();
+        assert!(!book.entries[0].id.is_empty(), "first entry gets an id");
+        assert_eq!(book.entries[1].id, "fixed-id", "existing id preserved");
+
+        let id_after_first = book.entries[0].id.clone();
+        assign_stable_entry_ids(&mut data);
+        let book = data.character_book.as_ref().unwrap();
+        assert_eq!(
+            book.entries[0].id, id_after_first,
+            "second pass does not reassign"
+        );
     }
 }

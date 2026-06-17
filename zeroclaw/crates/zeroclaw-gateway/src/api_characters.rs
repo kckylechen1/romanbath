@@ -7,13 +7,15 @@
 use axum::{
     Json,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use zeroclaw_cards::{CardManager, CharacterCard, CharacterData};
+use zeroclaw_cards::{
+    CardManager, CharacterBook, CharacterBookEntry, CharacterCard, CharacterData,
+};
 
 use super::AppState;
 use super::api::require_auth;
@@ -29,6 +31,27 @@ pub struct CharacterSummary {
     pub creator: String,
     pub character_version: String,
     pub has_avatar: bool,
+
+    // V3-aware summary fields. All `#[serde(default)]` so clients that
+    // haven't upgraded still parse the response without error.
+    #[serde(default)]
+    pub nickname: String,
+    #[serde(default)]
+    pub has_character_book: bool,
+    #[serde(default)]
+    pub has_assets: bool,
+    #[serde(default)]
+    pub alternate_greeting_count: u32,
+    #[serde(default)]
+    pub creator_notes_badge: Option<String>,
+    #[serde(default)]
+    pub modification_date: Option<String>,
+
+    /// Sort key for `CREATED` ordering. Not serialized — the public summary
+    /// only exposes `modification_date`; creation date is reserved for
+    /// server-side sort and is the source of truth from the card JSON.
+    #[serde(skip)]
+    pub creation_date: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -36,15 +59,33 @@ pub struct CharactersResponse {
     pub characters: Vec<CharacterSummary>,
 }
 
+/// Query parameters for `GET /api/characters`. Every field is optional and
+/// defaults to "no filter" / "name sort" so the unparameterized call keeps
+/// its old behavior.
+#[derive(Debug, Default, Deserialize)]
+pub struct ListQuery {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub creator: Option<String>,
+    /// Sort mode. Accepted values: `NAME` (default), `RECENT`, `CREATED`.
+    /// Unrecognized values fall back to `NAME` so a typo never breaks listing.
+    #[serde(default)]
+    pub sort: Option<String>,
+}
+
 pub async fn handle_list_characters(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<ListQuery>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_auth(&state, &headers) {
         return resp.into_response();
     }
 
-    match list_characters() {
+    match list_characters(&query) {
         Ok(chars) => (
             StatusCode::OK,
             Json(CharactersResponse { characters: chars }),
@@ -58,14 +99,30 @@ pub async fn handle_list_characters(
     }
 }
 
-fn list_characters() -> anyhow::Result<Vec<CharacterSummary>> {
+fn list_characters(query: &ListQuery) -> anyhow::Result<Vec<CharacterSummary>> {
     let mgr = CardManager::default()?;
     let dir = mgr.cards_dir();
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
-    let mut summaries = Vec::new();
+    // Resolve filters once per call — source of truth for "did the operator
+    // ask for filtering?" lives in the query string, not in a cached field.
+    let search = query.search.as_deref().map(str::to_lowercase);
+    let tag = query.tag.as_deref();
+    let creator_filter = query.creator.as_deref().map(str::to_lowercase);
+    let sort_mode = match query
+        .sort
+        .as_deref()
+        .map(str::to_ascii_uppercase)
+        .as_deref()
+    {
+        Some("RECENT") => SortMode::Recent,
+        Some("CREATED") => SortMode::Created,
+        _ => SortMode::Name,
+    };
+
+    let mut summaries: Vec<CharacterSummary> = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -80,14 +137,114 @@ fn list_characters() -> anyhow::Result<Vec<CharacterSummary>> {
             Ok(c) => c,
             Err(_) => continue,
         };
+
+        // Filter before materializing the summary so we skip the avatar
+        // stat-lookup work for cards the client will never see.
+        if let Some(search) = &search
+            && !card_matches_search(&card, search)
+        {
+            continue;
+        }
+        if let Some(tag) = tag
+            && !card.data.tags.iter().any(|t| t == tag)
+        {
+            continue;
+        }
+        if let Some(creator) = &creator_filter
+            && card.data.creator.to_lowercase() != *creator
+        {
+            continue;
+        }
+
         let has_avatar = mgr.avatar_path(&card.data.name).is_some();
         summaries.push(summary_from_card(&card, has_avatar));
     }
-    summaries.sort_by(|a, b| a.name.cmp(&b.name));
+
+    match sort_mode {
+        SortMode::Name => summaries.sort_by(|a, b| a.name.cmp(&b.name)),
+        SortMode::Recent => summaries.sort_by(|a, b| {
+            // modification_date desc; entries without a date sink to the
+            // bottom but retain NAME ordering as the secondary key.
+            b.modification_date
+                .as_deref()
+                .unwrap_or("")
+                .cmp(a.modification_date.as_deref().unwrap_or(""))
+                .then_with(|| a.name.cmp(&b.name))
+        }),
+        SortMode::Created => summaries.sort_by(|a, b| {
+            // creation_date asc; entries without a date fall back to NAME.
+            // The `creation_date` field on the summary is internal-only
+            // (not serialized) so older clients don't see it.
+            a.creation_date
+                .as_deref()
+                .unwrap_or("")
+                .cmp(b.creation_date.as_deref().unwrap_or(""))
+                .then_with(|| a.name.cmp(&b.name))
+        }),
+    }
     Ok(summaries)
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SortMode {
+    Name,
+    Recent,
+    Created,
+}
+
+/// Case-insensitive substring match across the operator-visible identity
+/// fields. Touches only the textual identity the search is meant to find
+/// — name, description, tags, creator — never prompt content or lorebook
+/// entries (those would surface spoilers in a search box).
+fn card_matches_search(card: &CharacterCard, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if card.data.name.to_lowercase().contains(needle) {
+        return true;
+    }
+    if card.data.description.to_lowercase().contains(needle) {
+        return true;
+    }
+    if card.data.creator.to_lowercase().contains(needle) {
+        return true;
+    }
+    if card
+        .data
+        .tags
+        .iter()
+        .any(|t| t.to_lowercase().contains(needle))
+    {
+        return true;
+    }
+    false
+}
+
 fn summary_from_card(card: &CharacterCard, has_avatar: bool) -> CharacterSummary {
+    let creator_notes_badge = {
+        let notes = card.data.creator_notes.trim();
+        if notes.is_empty() {
+            None
+        } else {
+            Some(notes.to_string())
+        }
+    };
+    let modification_date = {
+        let s = card.data.modification_date.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    };
+    let creation_date = {
+        let s = card.data.creation_date.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    };
     CharacterSummary {
         name: card.data.name.clone(),
         description: card.data.description.clone(),
@@ -98,6 +255,17 @@ fn summary_from_card(card: &CharacterCard, has_avatar: bool) -> CharacterSummary
         creator: card.data.creator.clone(),
         character_version: card.data.character_version.clone(),
         has_avatar,
+        nickname: card.data.nickname.clone(),
+        has_character_book: card
+            .data
+            .character_book
+            .as_ref()
+            .is_some_and(|b| !b.entries.is_empty()),
+        has_assets: !card.data.assets.is_empty(),
+        alternate_greeting_count: card.data.alternate_greetings.len() as u32,
+        creator_notes_badge,
+        modification_date,
+        creation_date,
     }
 }
 
@@ -144,7 +312,10 @@ fn import_character(body_path: &str) -> anyhow::Result<String> {
     let path = std::path::Path::new(body_path);
 
     // Security: reject path traversal and absolute paths
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         anyhow::bail!("Path traversal not allowed");
     }
     if path.is_absolute() {
@@ -294,7 +465,13 @@ pub async fn handle_export_character(
 
 fn export_character(name: &str) -> anyhow::Result<String> {
     let mgr = CardManager::default()?;
-    let card = mgr.load(name)?;
+    let mut card = mgr.load(name)?;
+    // The on-disk card is already canonical at save time, but legacy cards
+    // written before spec detection may carry a V2 envelope alongside V3
+    // fields. Re-detect on export so strict ST parsers receive the right
+    // envelope. Mutating only the in-memory clone — the file on disk is
+    // left untouched (we don't write on read).
+    card.sync_spec();
     Ok(serde_json::to_string_pretty(&card)?)
 }
 
@@ -335,11 +512,16 @@ fn duplicate_character(name: &str) -> anyhow::Result<String> {
 // ── Create / update ───────────────────────────────────────────────
 
 fn default_card(data: CharacterData) -> CharacterCard {
-    CharacterCard {
+    let mut card = CharacterCard {
         spec: "chara_card_v2".into(),
         spec_version: "2.0".into(),
         data,
-    }
+    };
+    // Source of truth for the envelope is the V3 fields the operator
+    // supplied in the request body. `sync_spec` rewrites the envelope to
+    // match — pure V2 cards stay V2, cards with any V3 field become V3.
+    card.sync_spec();
+    card
 }
 
 pub async fn handle_create_character(
@@ -644,6 +826,223 @@ fn sanitize_attachment_name(name: &str) -> String {
     }
 }
 
+// ── Lorebook independent CRUD ────────────────────────────────────
+//
+// The book is logically independent of the surrounding card data; editing
+// one entry should not require the client to round-trip the whole card.
+// These routes treat `data.character_book` as the single source of truth
+// for "what entries exist", and persist by saving the full card through
+// `CardManager::save` (which handles entry-id back-fill, timestamp
+// refresh, and spec detection in one place).
+
+#[derive(Debug, Serialize)]
+pub struct BookResponse {
+    pub book: Option<CharacterBook>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BookBody {
+    pub book: CharacterBook,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EntryBody {
+    pub entry: CharacterBookEntry,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EntryResponse {
+    pub entry: CharacterBookEntry,
+}
+
+pub async fn handle_get_book(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+    match load_book(&name) {
+        Ok(book) => (StatusCode::OK, Json(BookResponse { book })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn load_book(name: &str) -> anyhow::Result<Option<CharacterBook>> {
+    let mgr = CardManager::default()?;
+    let card = mgr.load(name)?;
+    Ok(card.data.character_book.clone())
+}
+
+pub async fn handle_put_book(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(body): Json<BookBody>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+    match put_book(&name, body.book) {
+        Ok(book) => (StatusCode::OK, Json(BookResponse { book: Some(book) })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn put_book(name: &str, mut book: CharacterBook) -> anyhow::Result<CharacterBook> {
+    let mgr = CardManager::default()?;
+    let mut card = mgr.load(name)?;
+    // Normalize incoming entries: any entry without a stable id gets one
+    // here so the returned book always carries canonical ids. The same
+    // back-fill runs again inside `mgr.save` against the embedded book;
+    // both paths are idempotent so running twice is safe.
+    normalize_entry_ids(&mut book);
+    card.data.character_book = Some(book.clone());
+    mgr.save(&card)?;
+    Ok(book)
+}
+
+pub async fn handle_create_entry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(body): Json<EntryBody>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+    match create_entry(&name, body.entry) {
+        Ok(entry) => (StatusCode::CREATED, Json(EntryResponse { entry })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn create_entry(name: &str, mut entry: CharacterBookEntry) -> anyhow::Result<CharacterBookEntry> {
+    let mgr = CardManager::default()?;
+    let mut card = mgr.load(name)?;
+    let book = card
+        .data
+        .character_book
+        .get_or_insert_with(CharacterBook::default);
+    if entry.id.is_empty() {
+        entry.id = uuid_v4_string();
+    }
+    book.entries.push(entry.clone());
+    mgr.save(&card)?;
+    Ok(entry)
+}
+
+pub async fn handle_update_entry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((name, entry_id)): Path<(String, String)>,
+    Json(body): Json<EntryBody>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+    match update_entry(&name, &entry_id, body.entry) {
+        Ok(entry) => (StatusCode::OK, Json(EntryResponse { entry })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn update_entry(
+    name: &str,
+    entry_id: &str,
+    mut incoming: CharacterBookEntry,
+) -> anyhow::Result<CharacterBookEntry> {
+    let mgr = CardManager::default()?;
+    let mut card = mgr.load(name)?;
+    let book = card
+        .data
+        .character_book
+        .as_mut()
+        .ok_or_else(|| anyhow::Error::msg("character has no lorebook"))?;
+    // Source of truth for the entry identity is the path parameter, not
+    // the request body. Forcing the body's `id` to match prevents an
+    // accidental rename that would orphan the entry from its history.
+    incoming.id = entry_id.to_string();
+    let target = book
+        .entries
+        .iter_mut()
+        .find(|e| e.id == entry_id)
+        .ok_or_else(|| anyhow::Error::msg(format!("lorebook entry not found: {entry_id}")))?;
+    *target = incoming.clone();
+    mgr.save(&card)?;
+    Ok(incoming)
+}
+
+pub async fn handle_delete_entry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((name, entry_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+    match delete_entry(&name, &entry_id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn delete_entry(name: &str, entry_id: &str) -> anyhow::Result<()> {
+    let mgr = CardManager::default()?;
+    let mut card = mgr.load(name)?;
+    let book = card
+        .data
+        .character_book
+        .as_mut()
+        .ok_or_else(|| anyhow::Error::msg("character has no lorebook"))?;
+    let before = book.entries.len();
+    book.entries.retain(|e| e.id != entry_id);
+    if book.entries.len() == before {
+        anyhow::bail!("lorebook entry not found: {entry_id}");
+    }
+    mgr.save(&card)?;
+    Ok(())
+}
+
+/// Back-fill UUID v4 for any entry lacking a stable id. Mirrors
+/// `CardManager`'s save-time normalization but lets us echo canonical
+/// ids back to the client from PUT /book before persistence finishes.
+fn normalize_entry_ids(book: &mut CharacterBook) {
+    for entry in &mut book.entries {
+        if entry.id.is_empty() {
+            entry.id = uuid_v4_string();
+        }
+    }
+}
+
+/// Generate a fresh UUID v4 string. Thin wrapper so the uuid crate is
+/// only touched in one place; if we ever switch id formats (e.g. ULID)
+/// this is the single call site to update.
+fn uuid_v4_string() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::sanitize_attachment_name;
@@ -683,5 +1082,14 @@ mod tests {
         assert_eq!(sanitize_attachment_name("Suwan Ning"), "Suwan Ning");
         assert_eq!(sanitize_attachment_name("character_v2"), "character_v2");
         assert_eq!(sanitize_attachment_name("テスト"), "unknown");
+    }
+
+    #[test]
+    fn uuid_v4_string_is_canonical_form() {
+        let id = super::uuid_v4_string();
+        // UUID v4 string is 36 chars including dashes; just sanity-check
+        // the shape so a future format swap is caught here.
+        assert_eq!(id.len(), 36);
+        assert_eq!(id.chars().filter(|c| *c == '-').count(), 4);
     }
 }

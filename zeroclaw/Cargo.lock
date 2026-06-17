@@ -11842,6 +11842,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tiktoken-rs",
+ "uuid",
  "zeroclaw-log",
 ]
 
@@ -12388,6 +12389,7 @@ dependencies = [
  "webpki-roots 1.0.7",
  "wiremock",
  "zeroclaw-api",
+ "zeroclaw-cards",
  "zeroclaw-channels",
  "zeroclaw-config",
  "zeroclaw-gateway",
