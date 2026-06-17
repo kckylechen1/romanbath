@@ -3,6 +3,7 @@ import { ChatConfig, Character, Message, Role, GroupMessage, GroupChat } from ".
 import { ChatOptions, ChatRequestPayload, ChatMessage } from "../services/zeroclawService";
 import { buildGroupSystemPrompt } from "../services/groupChatService";
 import { DEFAULT_CONFIG } from "../constants";
+import { expandMacros, type MacroContext } from "../services/macroService";
 
 export const characterNameForMessage = (msg: Message, fallback: Character): string => {
   const extra = (msg as GroupMessage).extra;
@@ -65,18 +66,32 @@ export const useChatHelpers = (
   }, [activeGroup, characters, config.scenario, config.userDescription, config.userName]);
 
   const buildChatMessagesForContext = useCallback(
-    (contextMessages: Message[]): ChatMessage[] => {
+    (contextMessages: Message[], respondingCharacterName?: string): ChatMessage[] => {
+      // ST macros expand on the client before the request goes out — that's
+      // how SillyTavern cards carry {{user}}, {{char}}, {{random:...}} etc.
+      // The character name is whatever character will respond; in group
+      // chats the caller already knows the next speaker and passes it.
+      // When omitted we fall back to a placeholder so history expansion of
+      // {{char}} inside non-group flows still works for legacy callers.
+      const macroCtx: MacroContext = {
+        userName: config.userName,
+        characterName: respondingCharacterName ?? "Assistant",
+        personaDescription: config.userDescription,
+      };
       return contextMessages.map((msg) => {
         const groupMsg = msg as GroupMessage;
         const shouldPrefix =
           activeGroup && msg.role === Role.Model && groupMsg.extra?.characterName;
+        const raw = shouldPrefix
+          ? `[${groupMsg.extra?.characterName}]: ${msg.content}`
+          : msg.content;
         return {
           role: msg.role === Role.User ? "user" : "assistant",
-          content: shouldPrefix ? `[${groupMsg.extra?.characterName}]: ${msg.content}` : msg.content,
+          content: expandMacros(raw, macroCtx),
         };
       });
     },
-    [activeGroup],
+    [activeGroup, config.userName, config.userDescription],
   );
 
   return { buildChatOptions, buildChatRequest, buildChatMessagesForContext };

@@ -25,6 +25,7 @@ import {
 import { useChatHelpers } from "./useChatHelpers";
 import { generateId } from "../utils/id";
 import type { ToastAPI } from "../components/Toast";
+import { expandMacros, type MacroContext } from "../services/macroService";
 
 export interface UseChatGenerationReturn {
   inputText: string;
@@ -120,10 +121,22 @@ export const useChatGeneration = (
       return;
     }
 
+    // Expand ST macros client-side before the message hits either stored
+    // history or the outgoing request body. Storing the expanded form is
+    // intentional: regenerates/swipes must see the same text the model saw
+    // on the original turn, and re-rolling {{random}} on every regenerate
+    // would otherwise produce inconsistent context.
+    const macroCtx: MacroContext = {
+      userName: config.userName,
+      characterName: respondingCharacter.name,
+      personaDescription: config.userDescription,
+    };
+    const expandedInput = expandMacros(inputText, macroCtx);
+
     const userMsg: Message = {
       id: generateId(),
       role: Role.User,
-      content: inputText,
+      content: expandedInput,
       timestamp: Date.now(),
       parentId: parentForUser,
       childrenIds: [],
@@ -159,7 +172,7 @@ export const useChatGeneration = (
     setActiveLeafId(botMsgId);
 
     try {
-      if (isPhotoRequest(inputText)) {
+      if (isPhotoRequest(expandedInput)) {
         const toolName = "xai_image_gen";
         setMessages((prev) =>
           prev.map((msg) =>
@@ -175,7 +188,7 @@ export const useChatGeneration = (
 
         const details = await getCharacterDetails(respondingCharacter.name);
         const prompt = buildCharacterPhotoPrompt(
-          inputText,
+          expandedInput,
           respondingCharacter,
           details,
         );
@@ -287,7 +300,7 @@ export const useChatGeneration = (
             );
             wsChatRef.current = ws;
           }
-          wsChatRef.current.send(inputText);
+          wsChatRef.current.send(expandedInput);
           usedWs = true;
         } catch (wsErr) {
           console.warn(
@@ -303,7 +316,10 @@ export const useChatGeneration = (
         abortCtrlRef.current?.abort();
         abortCtrlRef.current = new AbortController();
 
-        const chatMessages = buildChatMessagesForContext([...priorPath, userMsg]);
+        const chatMessages = buildChatMessagesForContext(
+          [...priorPath, userMsg],
+          respondingCharacter.name,
+        );
 
         await generateTextStream(
           buildChatRequest(chatMessages, respondingCharacter),
