@@ -491,10 +491,11 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                 <div className="space-y-4">
                   <p className="text-xs text-stone-500">
                     Lorebook entries inject context into the prompt when their keywords appear
-                    in the conversation. Changes here are sent back to the gateway as part of
-                    the character card on save.
+                    in the conversation. Edits save immediately through the lorebook API;
+                    the rest of the card is persisted on Save Changes.
                   </p>
                   <LorebookEditor
+                    characterName={formData.name}
                     value={formData.characterBook ?? null}
                     onChange={(book) => handleChange('characterBook', book)}
                   />

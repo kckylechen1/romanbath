@@ -130,6 +130,9 @@ export interface ChatOptions {
 }
 
 export interface CharacterBookEntry {
+  // Server-assigned entry id. New clients store it; old cards loaded
+  // without ids get backfilled via replaceCharacterBook on first edit.
+  id?: string;
   keys: string[];
   secondaryKeys?: string[];
   content: string;
@@ -178,7 +181,7 @@ export interface CharacterFormData {
   removeAvatar?: boolean;
 }
 
-interface CharacterSummary {
+export interface CharacterSummary {
   name: string;
   description: string;
   personality: string;
@@ -187,7 +190,14 @@ interface CharacterSummary {
   tags: string[];
   creator: string;
   character_version: string;
-  has_avatar?: boolean;
+  has_avatar: boolean;
+  // V3 fields — always present, may be defaults for legacy cards.
+  nickname: string;
+  has_character_book: boolean;
+  has_assets: boolean;
+  alternate_greeting_count: number;
+  creator_notes_badge: string | null;
+  modification_date: string | null;
 }
 
 interface CharacterAsset {
@@ -230,10 +240,12 @@ export const bumpAvatarVersion = (): void => {
 };
 
 interface CharacterBookEntryWire extends Omit<CharacterBookEntry, 'secondaryKeys' | 'tokenBudget'> {
+  // SillyTavern spec uses snake_case and `uid` as the legacy entry id.
   secondary_keys?: string[];
   token_budget?: number;
   secondaryKeys?: string[];
   tokenBudget?: number;
+  uid?: number | string;
 }
 
 interface CharacterBookWire extends Omit<CharacterBook, 'entries'> {
@@ -315,6 +327,16 @@ const mapSummaryToCharacter = (char: CharacterSummary): Character => {
     systemInstruction: systemInstruction.trim(),
     firstMessage: char.first_mes || '',
     backgroundImage: `https://picsum.photos/seed/${encodeURIComponent(char.name + '-bg')}/1920/1080?blur=2`,
+    // V3 summary fields. Older gateways omit them, so fall back to
+    // sensible defaults instead of surfacing `undefined` to the UI.
+    nickname: char.nickname ?? '',
+    tags: char.tags ?? [],
+    creator: char.creator ?? '',
+    hasCharacterBook: char.has_character_book ?? false,
+    hasAssets: char.has_assets ?? false,
+    alternateGreetingCount: char.alternate_greeting_count ?? 0,
+    creatorNotesBadge: char.creator_notes_badge ?? null,
+    modificationDate: char.modification_date ?? null,
   };
 };
 
@@ -415,9 +437,31 @@ export const buildOptionsBody = (options: ChatOptions): Record<string, unknown> 
 
 // ── Character API ──
 
-export const getCharacters = async (): Promise<Character[]> => {
+export type CharacterSort = 'name' | 'recent' | 'created';
+
+export interface GetCharactersOptions {
+  search?: string;
+  tag?: string;
+  creator?: string;
+  sort?: CharacterSort;
+}
+
+const buildCharactersQuery = (opts?: GetCharactersOptions): string => {
+  if (!opts) return '';
+  const params = new URLSearchParams();
+  if (opts.search && opts.search.trim()) params.set('search', opts.search.trim());
+  if (opts.tag && opts.tag.trim()) params.set('tag', opts.tag.trim());
+  if (opts.creator && opts.creator.trim()) params.set('creator', opts.creator.trim());
+  if (opts.sort) params.set('sort', opts.sort);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+};
+
+export const getCharacters = async (opts?: GetCharactersOptions): Promise<Character[]> => {
   const loadList = async (): Promise<Character[]> => {
-    const res = await fetch('/api/characters', { headers: jsonHeaders() });
+    const res = await fetch(`/api/characters${buildCharactersQuery(opts)}`, {
+      headers: jsonHeaders(),
+    });
     if (!res.ok) throw new Error(`Failed to fetch characters: ${res.status}`);
     const data = await res.json();
     const summaries: CharacterSummary[] = data.characters ?? [];
@@ -666,6 +710,140 @@ export const deleteCharacter = async (
       success: false,
       error: e instanceof Error ? e.message : 'Delete failed',
     };
+  }
+};
+
+// ── Character Book (Lorebook) API ──
+// These endpoints operate on the lorebook independently of the character
+// card. The frontend calls them per-entry so edits save immediately
+// instead of waiting for the whole-card PUT. Entry ids are server-assigned
+// and stable; callers must carry them between reads and writes.
+
+const mapBookEntryResponse = (entry: unknown): CharacterBookEntry => {
+  // The server may return either camelCase (our wire format) or snake_case
+  // (raw SillyTavern spec). Normalize defensively like the rest of the
+  // service does so the editor never sees an undefined field.
+  const e = entry as CharacterBookEntryWire;
+  const id = typeof e.id === 'string' && e.id
+    ? e.id
+    : e.uid != null
+      ? String(e.uid)
+      : '';
+  const secondaryKeys = e.secondaryKeys ?? e.secondary_keys ?? [];
+  const tokenBudget = e.tokenBudget ?? e.token_budget;
+  return {
+    id,
+    keys: e.keys ?? [],
+    secondaryKeys,
+    content: e.content ?? '',
+    enabled: e.enabled ?? true,
+    selective: e.selective ?? false,
+    constant: e.constant ?? false,
+    position: e.position ?? 'before_char',
+    tokenBudget,
+    priority: e.priority,
+    recursive: e.recursive ?? false,
+  };
+};
+
+const mapBookResponse = (book: unknown): CharacterBook => {
+  const b = book as CharacterBookWire;
+  return {
+    name: b.name ?? '',
+    description: b.description ?? '',
+    entries: (b.entries ?? []).map(mapBookEntryResponse),
+  };
+};
+
+export const getCharacterBook = async (name: string): Promise<CharacterBook | null> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(`/api/characters/${encodeURIComponent(name)}/book`, {
+      headers: jsonHeaders(),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { book: CharacterBook | null };
+    return data.book ? mapBookResponse(data.book) : null;
+  } catch (e) {
+    console.error('Error getting character book:', e);
+    return null;
+  }
+};
+
+export const replaceCharacterBook = async (
+  name: string,
+  book: CharacterBook,
+): Promise<CharacterBook> => {
+  await ensurePairing();
+  const res = await fetch(`/api/characters/${encodeURIComponent(name)}/book`, {
+    method: 'PUT',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ book: mapBookToWire(book) }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Replace book failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { book: CharacterBook };
+  return mapBookResponse(data.book);
+};
+
+export const addBookEntry = async (
+  name: string,
+  entry: Omit<CharacterBookEntry, 'id'>,
+): Promise<CharacterBookEntry> => {
+  await ensurePairing();
+  // Omit<..., 'id'> is structurally compatible with CharacterBookEntry
+  // (id is optional), but the server assigns fresh ids on POST — so we
+  // never send one. Casting keeps the call to mapBookEntryToWire clean.
+  const entryForWire = entry as CharacterBookEntry;
+  const res = await fetch(`/api/characters/${encodeURIComponent(name)}/book/entries`, {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ entry: mapBookEntryToWire({ ...entryForWire, id: undefined }) }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Add entry failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { entry: CharacterBookEntry };
+  return mapBookEntryResponse(data.entry);
+};
+
+export const updateBookEntry = async (
+  name: string,
+  entryId: string,
+  entry: CharacterBookEntry,
+): Promise<CharacterBookEntry> => {
+  await ensurePairing();
+  const res = await fetch(
+    `/api/characters/${encodeURIComponent(name)}/book/entries/${encodeURIComponent(entryId)}`,
+    {
+      method: 'PUT',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ entry: mapBookEntryToWire({ ...entry, id: entryId }) }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Update entry failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { entry: CharacterBookEntry };
+  return mapBookEntryResponse(data.entry);
+};
+
+export const deleteBookEntry = async (name: string, entryId: string): Promise<boolean> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(name)}/book/entries/${encodeURIComponent(entryId)}`,
+      { method: 'DELETE', headers: jsonHeaders() },
+    );
+    // 204 No Content on success.
+    return res.ok;
+  } catch (e) {
+    console.error('Error deleting book entry:', e);
+    return false;
   }
 };
 

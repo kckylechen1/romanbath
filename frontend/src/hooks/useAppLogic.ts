@@ -328,6 +328,8 @@ export const useAppLogic = () => {
     selectedCharacter: characterMgmt.selectedCharacter,
     setSelectedCharacter: characterMgmt.setSelectedCharacter,
     refreshCharacters: characterMgmt.refreshCharacters,
+    characterFilter: characterMgmt.characterFilter,
+    setCharacterFilter: characterMgmt.setCharacterFilter,
     handleEditCharacter: characterMgmt.handleEditCharacter,
     handleCreateCharacter: characterMgmt.handleCreateCharacter,
     handleSaveCharacter: characterMgmt.handleSaveCharacter,

@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from "react";
-import { Character, CharacterFormData } from "../types";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { Character } from "../types";
+import type { CharacterFormData, GetCharactersOptions } from "../services/zeroclawService";
 import {
   getCharacters,
   updateCharacter,
@@ -23,6 +24,8 @@ export interface UseCharacterManagementReturn {
   selectedCharacter: Character;
   setSelectedCharacter: React.Dispatch<React.SetStateAction<Character>>;
   refreshCharacters: () => Promise<void>;
+  characterFilter: GetCharactersOptions;
+  setCharacterFilter: (opts: GetCharactersOptions) => void;
   handleEditCharacter: (charId: string) => void;
   handleCreateCharacter: () => void;
   handleSaveCharacter: (data: CharacterFormData) => Promise<void>;
@@ -45,6 +48,13 @@ export const useCharacterManagement = (): UseCharacterManagementReturn => {
   });
   const [showCharacterEditor, setShowCharacterEditor] = useState(false);
   const [editingCharacterId, setEditingCharacterId] = useState<string | undefined>(undefined);
+  // Active server-side filter for the character list. The list component
+  // drives this through setCharacterFilter; we keep it here so other
+  // surfaces (e.g. save-then-refresh) re-apply the same filter.
+  const [characterFilter, setCharacterFilter] = useState<GetCharactersOptions>({});
+  // Used by the initial mount load — we don't want the filter-changed
+  // effect to clobber selection while the first load is still in flight.
+  const initializedRef = useRef(false);
 
   const pickCharacter = useCallback(
     (chars: Character[], prev: Character): Character => {
@@ -56,10 +66,29 @@ export const useCharacterManagement = (): UseCharacterManagementReturn => {
   );
 
   const refreshCharacters = useCallback(async () => {
-    const chars = await getCharacters();
+    const chars = await getCharacters(characterFilter);
     setCharacters(chars);
     setSelectedCharacter((prev) => pickCharacter(chars, prev));
-  }, [pickCharacter]);
+  }, [pickCharacter, characterFilter]);
+
+  // Re-fetch whenever the user types in the search box or toggles a tag.
+  // Skips the very first render — the mount initializer below owns that.
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const chars = await getCharacters(characterFilter);
+      if (cancelled) return;
+      setCharacters(chars);
+      setSelectedCharacter((prev) => pickCharacter(chars, prev));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [characterFilter, pickCharacter]);
 
   const handleEditCharacter = (charId: string) => {
     setEditingCharacterId(charId);
@@ -106,18 +135,23 @@ export const useCharacterManagement = (): UseCharacterManagementReturn => {
         console.warn("ZeroClaw pairing failed on init:", e);
       }
 
-      const chars = await getCharacters();
+      const chars = await getCharacters(characterFilter);
       setCharacters(chars);
       setSelectedCharacter((prev) => pickCharacter(chars, prev));
     };
     initBackend();
-  }, [pickCharacter]);
+    // We intentionally only run this once on mount — subsequent filter
+    // changes go through the dedicated effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return {
     characters,
     selectedCharacter,
     setSelectedCharacter,
     refreshCharacters,
+    characterFilter,
+    setCharacterFilter,
     handleEditCharacter,
     handleCreateCharacter,
     handleSaveCharacter,

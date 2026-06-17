@@ -187,6 +187,8 @@ const AppContent: React.FC = () => {
               onCharacterImported={logic.refreshCharacters}
               onEditCharacter={logic.handleEditCharacter}
               onCreateCharacter={logic.handleCreateCharacter}
+              filter={logic.characterFilter}
+              onFilterChange={logic.setCharacterFilter}
             />
           </div>
         )}

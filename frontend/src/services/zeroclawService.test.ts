@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildOptionsBody,
   formToCharacterData,
   mapDetailsToForm,
   parseSseEvents,
+  getCharacters,
+  getCharacterBook,
+  addBookEntry,
+  updateBookEntry,
+  deleteBookEntry,
+  invalidatePairingCache,
   type CharacterFormData,
   type ChatOptions,
 } from './zeroclawService';
@@ -252,5 +258,265 @@ describe('parseSseEvents', () => {
       encode(': just a comment'),
     ]);
     expect(out).toEqual([]);
+  });
+});
+
+// ── Network-level tests for character list + lorebook CRUD ──
+//
+// These tests mock globalThis.fetch so they exercise the URL building,
+// envelope parsing, and per-endpoint verb wiring without needing the
+// gateway. ensurePairing() short-circuits via a paired /health response
+// so we never hit the pairing-code flow.
+
+const json = (body: unknown, init?: ResponseInit): Response =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+    ...init,
+  });
+
+const noContent = (): Response => new Response(null, { status: 204 });
+
+const pairedHealth = (): Response =>
+  json({ paired: true });
+
+// jsdom under vitest doesn't seed localStorage unless --localstorage-file
+// is provided; zeroclawService.getToken() reads it on every call. Stub a
+// minimal in-memory store per test so the auth header path doesn't crash.
+// We pre-seed a fake token so ensurePairing() probes /health (which our
+// mocks answer with { paired: true }) instead of trying to negotiate a
+// pairing code.
+const stubLocalStorage = (): void => {
+  const store = new Map<string, string>([['zeroclaw_token', 'test-token']]);
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      store.set(k, String(v));
+    },
+    removeItem: (k: string) => {
+      store.delete(k);
+    },
+    clear: () => store.clear(),
+    key: (i: number) => [...store.keys()][i] ?? null,
+    length: 0,
+  });
+};
+
+describe('getCharacters query + summary mapping', () => {
+  beforeEach(() => {
+    stubLocalStorage();
+    invalidatePairingCache();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('builds the search/tag/creator/sort query string', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      // /health probe from ensurePairing()
+      if (url === '/health') return pairedHealth();
+      // The actual list call.
+      expect(url).toContain('search=whiskey');
+      expect(url).toContain('tag=fantasy');
+      expect(url).toContain('creator=Alice');
+      expect(url).toContain('sort=recent');
+      return json({
+        characters: [
+          {
+            name: 'Mara',
+            description: 'd',
+            personality: '',
+            scenario: '',
+            first_mes: '',
+            tags: ['fantasy'],
+            creator: 'Alice',
+            character_version: '1',
+            has_avatar: false,
+            nickname: 'M',
+            has_character_book: true,
+            has_assets: false,
+            alternate_greeting_count: 2,
+            creator_notes_badge: null,
+            modification_date: null,
+          },
+        ],
+      });
+    });
+
+    const chars = await getCharacters({
+      search: 'whiskey',
+      tag: 'fantasy',
+      creator: 'Alice',
+      sort: 'recent',
+    });
+    expect(chars).toHaveLength(1);
+    expect(chars[0].hasCharacterBook).toBe(true);
+    expect(chars[0].alternateGreetingCount).toBe(2);
+  });
+
+  it('omits the query string entirely when no options are given', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/health') return pairedHealth();
+      expect(url).not.toContain('?');
+      return json({ characters: [] });
+    });
+    const chars = await getCharacters();
+    expect(chars).toEqual([]);
+  });
+});
+
+describe('lorebook CRUD', () => {
+  beforeEach(() => {
+    stubLocalStorage();
+    invalidatePairingCache();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('parses the { book } envelope from getCharacterBook', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/health') return pairedHealth();
+      expect(url).toBe('/api/characters/Mara/book');
+      return json({
+        book: {
+          name: 'b',
+          description: '',
+          entries: [
+            {
+              id: 'entry-1',
+              keys: ['rain'],
+              content: 'Rain matters.',
+              enabled: true,
+              selective: false,
+              constant: false,
+              position: 'before_char',
+              recursive: false,
+            },
+          ],
+        },
+      });
+    });
+    const book = await getCharacterBook('Mara');
+    expect(book?.entries[0].id).toBe('entry-1');
+    expect(book?.entries[0].keys).toEqual(['rain']);
+  });
+
+  it('returns null when the book envelope is null', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/health') return pairedHealth();
+      return json({ book: null });
+    });
+    expect(await getCharacterBook('Mara')).toBeNull();
+  });
+
+  it('POSTs without id and surfaces the server-assigned id', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/health') return pairedHealth();
+      expect(url).toBe('/api/characters/Mara/book/entries');
+      expect(init?.method).toBe('POST');
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      // The outgoing payload must not include an id — server assigns.
+      expect(body.entry).not.toHaveProperty('id');
+      expect(body.entry.keys).toEqual(['whiskey']);
+      return json(
+        {
+          entry: {
+            id: 'server-1',
+            keys: ['whiskey'],
+            content: 'bar',
+            enabled: true,
+            selective: false,
+            constant: false,
+            position: 'before_char',
+            recursive: false,
+          },
+        },
+        { status: 201 },
+      );
+    });
+    const saved = await addBookEntry('Mara', {
+      keys: ['whiskey'],
+      secondaryKeys: [],
+      content: 'bar',
+      enabled: true,
+      selective: false,
+      constant: false,
+      position: 'before_char',
+      recursive: false,
+    });
+    expect(saved.id).toBe('server-1');
+  });
+
+  it('PUTs to the right per-entry URL on update', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/health') return pairedHealth();
+      expect(url).toBe('/api/characters/Mara/book/entries/entry-7');
+      expect(init?.method).toBe('PUT');
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      expect(body.entry.id).toBe('entry-7');
+      expect(body.entry.content).toBe('updated');
+      return json({
+        entry: {
+          id: 'entry-7',
+          keys: ['k'],
+          content: 'updated',
+          enabled: true,
+          selective: false,
+          constant: false,
+          position: 'before_char',
+          recursive: false,
+        },
+      });
+    });
+    const next = await updateBookEntry('Mara', 'entry-7', {
+      id: 'entry-7',
+      keys: ['k'],
+      content: 'updated',
+      enabled: true,
+      selective: false,
+      constant: false,
+      position: 'before_char',
+      recursive: false,
+    });
+    expect(next.content).toBe('updated');
+  });
+
+  it('returns true on 204 from deleteBookEntry', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/health') return pairedHealth();
+      expect(url).toBe('/api/characters/Mara/book/entries/entry-9');
+      expect(init?.method).toBe('DELETE');
+      return noContent();
+    });
+    expect(await deleteBookEntry('Mara', 'entry-9')).toBe(true);
+  });
+
+  it('returns false when delete fails', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/health') return pairedHealth();
+      return new Response(null, { status: 500 });
+    });
+    expect(await deleteBookEntry('Mara', 'entry-9')).toBe(false);
   });
 });

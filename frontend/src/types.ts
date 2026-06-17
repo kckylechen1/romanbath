@@ -54,6 +54,16 @@ export interface Character {
   firstMessage: string;
   exampleDialogue?: string;
   backgroundImage: string;
+  // V3 summary badges surfaced from GET /api/characters. Optional so
+  // legacy callers and tests that build Character by hand keep compiling.
+  nickname?: string;
+  tags?: string[];
+  creator?: string;
+  hasCharacterBook?: boolean;
+  hasAssets?: boolean;
+  alternateGreetingCount?: number;
+  creatorNotesBadge?: string | null;
+  modificationDate?: string | null;
 }
 
 export interface LorebookEntry {
