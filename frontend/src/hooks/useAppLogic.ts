@@ -30,6 +30,7 @@ import { useCharacterManagement } from "./useCharacterManagement";
 import { useChatPersistence } from "./useChatPersistence";
 import { useChatGeneration } from "./useChatGeneration";
 import { useMessageActions } from "./useMessageActions";
+import { useChatPush } from "./useChatPush";
 import { confirm as confirmDialog, prompt as promptDialog } from "../services/dialogService";
 import { indexMessages, pathToRoot } from "./useMessageTree";
 
@@ -147,6 +148,18 @@ export const useAppLogic = () => {
     generation.setIsTyping,
     toast,
   );
+
+  // ==================== CHAT PUSH (server-initiated messages) =====
+  useChatPush({
+    agentAlias: "default",
+    characterName:
+      characterMgmt.selectedCharacter.id !== "default"
+        ? characterMgmt.selectedCharacter.name
+        : undefined,
+    activeLeafId,
+    setMessages,
+    setActiveLeafId,
+  });
 
   // ==================== CONFIG ====================
   const handleConfigChange = async (newConfig: ChatConfig) => {

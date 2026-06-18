@@ -1266,3 +1266,111 @@ export class WsChatConnection {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 }
+
+// ── SSE Chat Subscribe (server-initiated pushes) ───────────────────
+// Connects to /api/chat/subscribe?agent=X&character=Y to receive
+// pushes from cron-fired "always-on" messages, dreaming milestones,
+// etc. Uses the native EventSource API — simpler than WS for the
+// one-way server→client push channel.
+
+export interface ChatPushEvent {
+  type: 'chat_push';
+  agent_alias: string;
+  character_name: string;
+  push_kind: string; // 'cron' | 'always_on' | 'dreaming' | 'sync' | ...
+  content: string;
+  ts: string; // ISO 8601
+  metadata?: Record<string, unknown>;
+}
+
+export interface ChatPushCallbacks {
+  onPush: (event: ChatPushEvent) => void;
+  onError?: (error: Event) => void;
+  onOpen?: () => void;
+}
+
+export class ChatPushSubscriber {
+  private source: EventSource | null = null;
+  private callbacks: ChatPushCallbacks;
+  private agentAlias: string;
+  private characterName?: string;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private shouldReconnect = true;
+  private static RECONNECT_DELAY_MS = 5000;
+
+  constructor(
+    agentAlias: string,
+    callbacks: ChatPushCallbacks,
+    characterName?: string,
+  ) {
+    this.agentAlias = agentAlias;
+    this.characterName = characterName;
+    this.callbacks = callbacks;
+  }
+
+  connect(): void {
+    if (this.source) return;
+    this.shouldReconnect = true;
+
+    const params = new URLSearchParams({ agent: this.agentAlias });
+    if (this.characterName) params.set('character', this.characterName);
+
+    // EventSource doesn't support custom headers. The token goes as
+    // a query param — the gateway accepts ?token= for SSE the same way
+    // it does for WS upgrades.
+    const token = getToken();
+    if (token) params.set('token', token);
+
+    this.source = new EventSource(`/api/chat/subscribe?${params.toString()}`);
+
+    this.source.onopen = () => {
+      this.callbacks.onOpen?.();
+    };
+
+    this.source.onmessage = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.data) as ChatPushEvent;
+        if (parsed.type === 'chat_push') {
+          this.callbacks.onPush(parsed);
+        }
+      } catch {
+        // Ignore malformed events (keep-alive comments, partial data)
+      }
+    };
+
+    this.source.onerror = (ev) => {
+      this.callbacks.onError?.(ev);
+      this.source?.close();
+      this.source = null;
+      if (this.shouldReconnect) {
+        this.reconnectTimer = setTimeout(
+          () => this.connect(),
+          ChatPushSubscriber.RECONNECT_DELAY_MS,
+        );
+      }
+    };
+  }
+
+  disconnect(): void {
+    this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.source?.close();
+    this.source = null;
+  }
+
+  updateCharacter(characterName?: string): void {
+    if (this.characterName === characterName) return;
+    this.characterName = characterName;
+    // Reconnect with the new character filter
+    this.disconnect();
+    this.shouldReconnect = true;
+    this.connect();
+  }
+
+  get isConnected(): boolean {
+    return this.source?.readyState === EventSource.OPEN;
+  }
+}
