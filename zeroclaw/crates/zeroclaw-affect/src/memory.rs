@@ -118,7 +118,6 @@ pub struct TimestampedAffect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::UserEmotion;
 
     fn affect(v: f32, a: f32) -> AffectState {
         AffectState {

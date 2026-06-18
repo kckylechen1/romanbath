@@ -3108,6 +3108,10 @@ async fn handle_pair_code(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 #[cfg(test)]
+// This module keeps a block of integration handlers (e.g. run_dreaming_sweep)
+// defined below it; relocating ~2k lines of handlers above the tests in this
+// 5k-line file is riskier than the stylistic lint it would silence.
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use async_trait::async_trait;

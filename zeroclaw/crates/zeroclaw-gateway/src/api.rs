@@ -1599,12 +1599,6 @@ pub async fn handle_api_session_abort(
     }
 }
 
-// ── Claude Code hook endpoint ────────────────────────────────────
-
-/// POST /hooks/claude-code — receives HTTP hook events from Claude Code
-/// sessions spawned by `ClaudeCodeRunnerTool`.
-// Claude Code hook handler removed (claude_code_runner tool deleted)
-
 #[cfg(test)]
 mod tests {
     use super::*;

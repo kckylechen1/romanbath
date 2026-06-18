@@ -326,6 +326,10 @@ mod tests {
     }
 
     #[tokio::test]
+    // ENV_LOCK must stay held across the await: it serializes tests that mutate
+    // process-global env, and the env has to remain set while resolve_credentials
+    // reads it.
+    #[allow(clippy::await_holding_lock)]
     async fn resolve_credentials_prefers_valid_grok_auth_over_fallback() {
         let _lock = ENV_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
