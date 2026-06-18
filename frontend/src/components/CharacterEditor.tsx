@@ -48,6 +48,7 @@ const emptyForm = (): CharacterFormData => ({
   source: [],
   characterBook: null,
   extensions: {},
+  companion: null,
   avatarFile: null,
   removeAvatar: false,
 });
@@ -548,6 +549,92 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                       rows={3}
                       className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50 resize-none"
                     />
+                  </div>
+
+                  {/* Companion Affect Persona */}
+                  <div className="border-t border-white/5 pt-4 mt-2">
+                    <label className="block text-sm font-medium text-stone-300 mb-1">
+                      Companion Persona
+                    </label>
+                    <p className="text-xs text-stone-500 mb-3">
+                      Controls how the affect module modulates this character's emotional
+                      responses. Default is Nurturing.
+                    </p>
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                      {([
+                        { val: 'nurturing', label: 'Nurturing', desc: 'High warmth, calm. Good listener.' },
+                        { val: 'playful', label: 'Playful', desc: 'High energy, lifts your mood.' },
+                        { val: 'steady', label: 'Steady', desc: 'Even keel, undramatic, reliable.' },
+                      ] as const).map(({ val, label, desc }) => (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => {
+                            const archetypes = {
+                              nurturing: { base_warmth: 0.7, base_energy: 0.4 },
+                              playful: { base_warmth: 0.6, base_energy: 0.8 },
+                              steady: { base_warmth: 0.5, base_energy: 0.3 },
+                            };
+                            const defaults = archetypes[val];
+                            handleChange('companion', {
+                              archetype: val,
+                              base_warmth: formData.companion?.base_warmth ?? defaults.base_warmth,
+                              base_energy: formData.companion?.base_energy ?? defaults.base_energy,
+                            });
+                          }}
+                          className={`p-3 rounded-xl border text-left transition-all ${
+                            formData.companion?.archetype === val
+                              ? 'border-bath-500/40 bg-bath-500/10 text-white'
+                              : 'border-white/5 bg-stone-800/30 text-stone-400 hover:border-white/10'
+                          }`}
+                        >
+                          <div className="text-sm font-medium">{label}</div>
+                          <div className="text-xs text-stone-500 mt-1">{desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                    {formData.companion && (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-xs text-stone-500 block mb-1">
+                            Base Warmth: {formData.companion.base_warmth.toFixed(2)}
+                          </label>
+                          <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={formData.companion.base_warmth}
+                            onChange={(e) =>
+                              handleChange('companion', {
+                                ...formData.companion!,
+                                base_warmth: parseFloat(e.target.value),
+                              })
+                            }
+                            className="w-full accent-bath-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-stone-500 block mb-1">
+                            Base Energy: {formData.companion.base_energy.toFixed(2)}
+                          </label>
+                          <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={formData.companion.base_energy}
+                            onChange={(e) =>
+                              handleChange('companion', {
+                                ...formData.companion!,
+                                base_energy: parseFloat(e.target.value),
+                              })
+                            }
+                            className="w-full accent-bath-500"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

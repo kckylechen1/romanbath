@@ -174,11 +174,23 @@ export interface CharacterFormData {
   source?: string[];
   characterBook?: CharacterBook | null;
   extensions?: Record<string, unknown>;
+  // Companion affect persona (XiaoIce eR analog). Stored in
+  // extensions.companion on the character card. Controls how the
+  // zeroclaw-affect module modulates warmth/energy around a baseline
+  // when this character responds.
+  companion?: CompanionPersonaConfig | null;
   // The pending avatar file is held in the editor and uploaded separately
   // after the character data is saved (so avatar errors don't block the
   // card update and rename semantics stay clean).
   avatarFile?: File | null;
   removeAvatar?: boolean;
+}
+
+/// Companion affect persona stored in extensions.companion.
+export interface CompanionPersonaConfig {
+  archetype: 'nurturing' | 'playful' | 'steady';
+  base_warmth: number; // 0.0..=1.0
+  base_energy: number; // 0.0..=1.0
 }
 
 export interface CharacterSummary {
@@ -340,51 +352,89 @@ const mapSummaryToCharacter = (char: CharacterSummary): Character => {
   };
 };
 
-export const formToCharacterData = (data: CharacterFormData): Record<string, unknown> => ({
-  name: data.name,
-  description: data.description || '',
-  personality: data.personality || '',
-  scenario: data.scenario || '',
-  first_mes: data.firstMessage || '',
-  mes_example: data.exampleDialogue || '',
-  system_prompt: data.systemPrompt || '',
-  post_history_instructions: data.postHistoryInstructions || '',
-  alternate_greetings: data.alternateGreetings ?? [],
-  creator_notes: data.creatorNotes || '',
-  tags: data.tags ?? [],
-  // Pass-through fields. The editor's form state always carries the loaded
-  // values for these, so sending them back preserves them verbatim. Empty
-  // strings / empty arrays / null are intentional clears, not defaults.
-  assets: data.assets ?? [],
-  creator: data.creator ?? '',
-  character_version: data.characterVersion ?? '',
-  nickname: data.nickname ?? '',
-  group_only_greetings: data.groupOnlyGreetings ?? [],
-  source: data.source ?? [],
-  character_book: mapBookToWire(data.characterBook),
-  extensions: data.extensions ?? {},
-});
+const parseCompanionConfig = (
+  extensions: Record<string, unknown>,
+): CompanionPersonaConfig | null => {
+  const raw = extensions.companion;
+  if (!raw || typeof raw !== 'object') return null;
+  const c = raw as Record<string, unknown>;
+  const archetype = c.archetype;
+  if (archetype !== 'nurturing' && archetype !== 'playful' && archetype !== 'steady') {
+    return null;
+  }
+  return {
+    archetype,
+    base_warmth: typeof c.base_warmth === 'number' ? c.base_warmth : 0.6,
+    base_energy: typeof c.base_energy === 'number' ? c.base_energy : 0.5,
+  };
+};
 
-export const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData => ({
-  name: char.name || '',
-  description: char.description || '',
-  personality: char.personality || '',
-  scenario: char.scenario || '',
-  firstMessage: char.first_mes || '',
-  alternateGreetings: char.alternate_greetings || [],
-  exampleDialogue: char.mes_example || '',
-  systemPrompt: char.system_prompt || '',
-  postHistoryInstructions: char.post_history_instructions || '',
-  creatorNotes: char.creator_notes || '',
-  tags: char.tags || [],
-  creator: char.creator || '',
-  characterVersion: char.character_version || '',
-  nickname: char.nickname || '',
-  groupOnlyGreetings: char.group_only_greetings || [],
-  source: char.source || [],
-  characterBook: mapBookToForm(char.character_book),
-  extensions: char.extensions || {},
-});
+const serializeCompanionConfig = (
+  companion: CompanionPersonaConfig | null | undefined,
+): Record<string, unknown> | null => {
+  if (!companion) return null;
+  return {
+    archetype: companion.archetype,
+    base_warmth: companion.base_warmth,
+    base_energy: companion.base_energy,
+  };
+};
+
+export const formToCharacterData = (data: CharacterFormData): Record<string, unknown> => {
+  const extensions = { ...(data.extensions ?? {}) };
+  const companionWire = serializeCompanionConfig(data.companion);
+  if (companionWire) {
+    extensions.companion = companionWire;
+  } else {
+    delete extensions.companion;
+  }
+  return {
+    name: data.name,
+    description: data.description || '',
+    personality: data.personality || '',
+    scenario: data.scenario || '',
+    first_mes: data.firstMessage || '',
+    mes_example: data.exampleDialogue || '',
+    system_prompt: data.systemPrompt || '',
+    post_history_instructions: data.postHistoryInstructions || '',
+    alternate_greetings: data.alternateGreetings ?? [],
+    creator_notes: data.creatorNotes || '',
+    tags: data.tags ?? [],
+    assets: data.assets ?? [],
+    creator: data.creator ?? '',
+    character_version: data.characterVersion ?? '',
+    nickname: data.nickname ?? '',
+    group_only_greetings: data.groupOnlyGreetings ?? [],
+    source: data.source ?? [],
+    character_book: mapBookToWire(data.characterBook),
+    extensions,
+  };
+};
+
+export const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData => {
+  const extensions = char.extensions || {};
+  return {
+    name: char.name || '',
+    description: char.description || '',
+    personality: char.personality || '',
+    scenario: char.scenario || '',
+    firstMessage: char.first_mes || '',
+    alternateGreetings: char.alternate_greetings || [],
+    exampleDialogue: char.mes_example || '',
+    systemPrompt: char.system_prompt || '',
+    postHistoryInstructions: char.post_history_instructions || '',
+    creatorNotes: char.creator_notes || '',
+    tags: char.tags || [],
+    creator: char.creator || '',
+    characterVersion: char.character_version || '',
+    nickname: char.nickname || '',
+    groupOnlyGreetings: char.group_only_greetings || [],
+    source: char.source || [],
+    characterBook: mapBookToForm(char.character_book),
+    extensions,
+    companion: parseCompanionConfig(extensions),
+  };
+};
 
 const fileToBase64 = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
