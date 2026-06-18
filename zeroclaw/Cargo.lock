@@ -11815,6 +11815,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeroclaw-affect"
+version = "0.8.0-beta-1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "zeroclaw-api"
 version = "0.8.0-beta-1"
 dependencies = [
@@ -12019,6 +12029,7 @@ dependencies = [
  "tower",
  "tower-http",
  "uuid",
+ "zeroclaw-affect",
  "zeroclaw-api",
  "zeroclaw-cards",
  "zeroclaw-channels",
