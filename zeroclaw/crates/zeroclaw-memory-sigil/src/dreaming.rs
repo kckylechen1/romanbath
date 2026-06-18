@@ -43,14 +43,9 @@ impl DreamingPipeline {
     }
 
     fn open(&self) -> Result<Connection, MemoryError> {
-        let conn = if Path::new(&self.db_path).exists() {
-            Connection::open(&self.db_path)?
-        } else {
-            let conn = Connection::open(&self.db_path)?;
-            crate::schema::init_schema(&conn)?;
-            conn
-        };
-        Ok(conn)
+        // Always route through `schema::open` so an existing DB still gets its
+        // per-connection PRAGMAs and any pending migrations.
+        crate::schema::open(Path::new(&self.db_path))
     }
 
     /// Light Sleep: every ~6 hours, extract short-term raw memories, dedup/merge.

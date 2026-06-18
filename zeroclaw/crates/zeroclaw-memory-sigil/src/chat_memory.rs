@@ -33,18 +33,10 @@ impl ChatMemoryStore {
     }
 
     fn open(&self, character_name: &str) -> Result<Connection, MemoryError> {
-        let path = self.db_path_for(character_name);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let conn = if path.exists() {
-            Connection::open(&path)?
-        } else {
-            let conn = Connection::open(&path)?;
-            crate::schema::init_schema(&conn)?;
-            conn
-        };
-        Ok(conn)
+        // Always route through `schema::open` so an existing DB still gets its
+        // per-connection PRAGMAs and any pending migrations — not just freshly
+        // created files.
+        crate::schema::open(&self.db_path_for(character_name))
     }
 
     fn open_mut(&self, character_name: &str) -> Result<Connection, MemoryError> {
