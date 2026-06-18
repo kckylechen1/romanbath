@@ -611,41 +611,48 @@ async fn handle_socket(
         String::new()
     };
 
-    if let Some(ref char_name) = character_name {
-        match inject_character_card(
-            &mut agent,
-            char_name,
-            character_mode.as_deref(),
-            user_name.as_deref(),
-            &memory_context,
-        ) {
-            Ok(Some(first_mes)) => {
-                // Send first_mes as initial assistant message
-                let chunk = serde_json::json!({
-                    "type": "chunk",
-                    "content": first_mes,
-                });
-                let _ = sender.send(Message::Text(chunk.to_string().into())).await;
-                let done = serde_json::json!({
-                    "type": "done",
-                    "full_response": first_mes,
-                });
-                let _ = sender.send(Message::Text(done.to_string().into())).await;
+    // Companion persona extracted from the character card's
+    // extensions.companion. Falls back to Default (Nurturing) when
+    // the card doesn't declare one — the affect module is always on.
+    let companion_persona: zeroclaw_affect::CompanionPersona =
+        if let Some(ref char_name) = character_name {
+            match inject_character_card(
+                &mut agent,
+                char_name,
+                character_mode.as_deref(),
+                user_name.as_deref(),
+                &memory_context,
+            ) {
+                Ok((Some(first_mes), companion)) => {
+                    let chunk = serde_json::json!({
+                        "type": "chunk",
+                        "content": first_mes,
+                    });
+                    let _ = sender.send(Message::Text(chunk.to_string().into())).await;
+                    let done = serde_json::json!({
+                        "type": "done",
+                        "full_response": first_mes,
+                    });
+                    let _ = sender.send(Message::Text(done.to_string().into())).await;
+                    companion.unwrap_or_default()
+                }
+                Ok((None, companion)) => companion.unwrap_or_default(),
+                Err(e) => {
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                            .with_attrs(::serde_json::json!({
+                                "character": char_name, "error": e.to_string()
+                            })),
+                        "Failed to load character card (continuing without persona)"
+                    );
+                    zeroclaw_affect::CompanionPersona::default()
+                }
             }
-            Ok(None) => {} // No first_mes, that's fine
-            Err(e) => {
-                ::zeroclaw_log::record!(
-                    WARN,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
-                        .with_attrs(
-                            ::serde_json::json!({"character": char_name, "error": e.to_string()})
-                        ),
-                    "Failed to load character card (continuing without persona)"
-                );
-            }
-        }
-    }
+        } else {
+            zeroclaw_affect::CompanionPersona::default()
+        };
 
     // ── Tool-approval back-channel ─────────────────────────────────
     // Connection-level event channel that the WsApprovalChannel shares
@@ -709,6 +716,7 @@ async fn handle_socket(
                         &pending_approvals,
                         &ws_memory,
                         &agent_alias,
+                        &companion_persona,
                         &content,
                         &session_key,
                         character_name.clone(),
@@ -857,6 +865,7 @@ async fn handle_socket(
                     &pending_approvals,
                     &ws_memory,
                     &agent_alias,
+                    &companion_persona,
                     &content,
                     &session_key,
                     character_name.clone(),
@@ -1003,18 +1012,22 @@ fn has_assistant_chat_message(messages: &[zeroclaw_providers::ConversationMessag
 
 /// Load a character card and inject it into the agent's system prompt.
 /// Also injects relevant memories from past conversations.
-/// Returns `Ok(Some(first_mes))` if the card has an opening message.
+/// Returns `Ok(Some(first_mes))` if the card has an opening message,
+/// plus the companion persona extracted from extensions.companion (if any).
 fn inject_character_card(
     agent: &mut zeroclaw_runtime::agent::Agent,
     character_name: &str,
     mode: Option<&str>,
     user_name: Option<&str>,
     memory_context: &str,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<(Option<String>, Option<zeroclaw_affect::CompanionPersona>)> {
     let mgr = zeroclaw_cards::CardManager::default()?;
     let card = mgr
         .load(character_name)
         .map_err(|e| anyhow::Error::msg(format!("{e}")))?;
+
+    // Extract companion persona from extensions.companion.
+    let companion = parse_companion_from_extensions(&card.data.extensions, &card.data.name);
 
     let uname = user_name.unwrap_or("User");
     let char_mode = mode.unwrap_or("play");
@@ -1062,7 +1075,38 @@ fn inject_character_card(
         Some(rendered)
     };
 
-    Ok(first_mes)
+    Ok((first_mes, companion))
+}
+
+/// Parse CompanionPersona from character card extensions.companion.
+/// Returns None when extensions.companion is absent or malformed —
+/// the affect module falls back to CompanionPersona::default().
+fn parse_companion_from_extensions(
+    extensions: &serde_json::Value,
+    character_name: &str,
+) -> Option<zeroclaw_affect::CompanionPersona> {
+    let companion = extensions.get("companion")?;
+    let archetype_str = companion.get("archetype").and_then(|v| v.as_str())?;
+    let archetype = match archetype_str {
+        "nurturing" => zeroclaw_affect::Archetype::Nurturing,
+        "playful" => zeroclaw_affect::Archetype::Playful,
+        "steady" => zeroclaw_affect::Archetype::Steady,
+        _ => return None,
+    };
+    let warmth = companion
+        .get("base_warmth")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.6) as f32;
+    let energy = companion
+        .get("base_energy")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5) as f32;
+    Some(zeroclaw_affect::CompanionPersona {
+        name: character_name.to_string(),
+        archetype,
+        base_warmth: warmth,
+        base_energy: energy,
+    })
 }
 
 fn image_consistency_instructions(extensions: &serde_json::Value) -> String {
@@ -1137,19 +1181,10 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
     }
 }
 
-/// Compute the affect prompt hint for a user message. Uses the
-/// HeuristicEstimator (keyword + sentiment based, no LLM call) to
-/// estimate valence/arousal/label, then appraises a strategy and
-/// produces a short `[affect]` block the agent will see alongside
-/// the user's message.
-///
-/// Returns empty string when the affect is neutral with low confidence
-/// (don't clutter the prompt for unremarkable turns).
-fn compute_affect_hint(user_message: &str) -> String {
+fn compute_affect_hint(user_message: &str, persona: &zeroclaw_affect::CompanionPersona) -> String {
     use chrono::Timelike;
     use zeroclaw_affect::{
-        CompanionPersona, ConversationContext, HeuristicEstimator, UserSignals,
-        perceive_and_appraise,
+        ConversationContext, HeuristicEstimator, UserSignals, perceive_and_appraise,
     };
 
     let ctx = ConversationContext {
@@ -1160,8 +1195,7 @@ fn compute_affect_hint(user_message: &str) -> String {
         message_text: user_message.to_string(),
         ..Default::default()
     };
-    let persona = CompanionPersona::default();
-    let (affect, stance) = perceive_and_appraise(&HeuristicEstimator, &ctx, &signals, &persona);
+    let (affect, stance) = perceive_and_appraise(&HeuristicEstimator, &ctx, &signals, persona);
 
     // Skip the hint when confidence is very low and the affect is
     // neutral — adding "[affect] warmth=0.60 energy=0.50
@@ -1187,6 +1221,7 @@ async fn process_chat_message(
     pending_approvals: &PendingApprovals,
     ws_memory: &Option<Arc<dyn zeroclaw_memory::Memory>>,
     agent_alias: &str,
+    companion_persona: &zeroclaw_affect::CompanionPersona,
     content: &str,
     session_key: &str,
     character_name: Option<String>,
@@ -1242,7 +1277,7 @@ async fn process_chat_message(
     // the agent sees. The hint is NOT stored in memory or consolidation
     // — those use the original `content` argument. Only the agent turn
     // sees the hint.
-    let affect_hint = compute_affect_hint(content);
+    let affect_hint = compute_affect_hint(content, companion_persona);
     let content_owned = if affect_hint.is_empty() {
         content.to_string()
     } else {

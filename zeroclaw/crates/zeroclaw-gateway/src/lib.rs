@@ -774,6 +774,57 @@ pub async fn run_gateway(
             },
         ));
     }
+
+    // ── Sigil dreaming periodic sweep ─────────────────────────────
+    // Deep sleep every 6h, REM sleep every 7d. Pure-Rust heuristics
+    // (no enricher — the sweep doesn't have per-agent enricher config).
+    // The enricher-enhanced version runs per-WS-turn via
+    // resolve_ws_dreaming_pipeline in ws.rs.
+    {
+        let data_dir = config.data_dir.clone();
+        tokio::spawn(async move {
+            let deep_interval = std::time::Duration::from_secs(6 * 3600);
+            let rem_interval = std::time::Duration::from_secs(7 * 24 * 3600);
+            let mut deep_tick = tokio::time::interval(deep_interval);
+            let mut rem_tick = tokio::time::interval(rem_interval);
+            // First tick fires immediately — skip it so we don't deep-sleep
+            // all characters at gateway startup.
+            deep_tick.tick().await;
+            rem_tick.tick().await;
+
+            loop {
+                tokio::select! {
+                    _ = deep_tick.tick() => {
+                        if let Some(report) = run_dreaming_sweep(&data_dir, "deep").await {
+                            ::zeroclaw_log::record!(
+                                INFO,
+                                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                                    .with_attrs(::serde_json::json!({
+                                        "stage": "deep_sleep_sweep",
+                                        "characters": report.len(),
+                                    })),
+                                "Deep sleep sweep completed"
+                            );
+                        }
+                    }
+                    _ = rem_tick.tick() => {
+                        if let Some(report) = run_dreaming_sweep(&data_dir, "rem").await {
+                            ::zeroclaw_log::record!(
+                                INFO,
+                                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                                    .with_attrs(::serde_json::json!({
+                                        "stage": "rem_sleep_sweep",
+                                        "characters": report.len(),
+                                    })),
+                                "REM sleep sweep completed"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // Extract webhook secret for authentication
     let webhook_secret_hash: Option<Arc<str>> =
         config.channels.webhook.values().next().and_then(|webhook| {
@@ -5064,4 +5115,43 @@ mod tests {
             "channel reply must mention onboarding so users know what's missing: {reply:?}"
         );
     }
+}
+
+/// Sweep all character cards and run the given dreaming stage on each.
+/// Returns Some(vec) of (character_name, report) pairs; None when the
+/// card manager can't be initialized (no cards dir).
+async fn run_dreaming_sweep(
+    data_dir: &std::path::Path,
+    stage: &str,
+) -> Option<Vec<(String, zeroclaw_memory_sigil::DreamingReport)>> {
+    let mgr = zeroclaw_cards::CardManager::default().ok()?;
+    let names = mgr.list().ok()?;
+
+    let db_path = data_dir.join("chat_memory");
+    let pipeline = zeroclaw_memory_sigil::DreamingPipeline::new(&db_path.to_string_lossy());
+
+    let mut results = Vec::new();
+    for name in names {
+        let report = match stage {
+            "deep" => pipeline.run_deep_sleep(&name).await,
+            "rem" => pipeline.run_rem_sleep(&name).await,
+            _ => continue,
+        };
+        ::zeroclaw_log::record!(
+            DEBUG,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(
+                ::serde_json::json!({
+                    "character": &name,
+                    "stage": report.stage,
+                    "processed": report.memories_processed,
+                    "created": report.memories_created,
+                    "merged": report.memories_merged,
+                    "duration_ms": report.duration_ms,
+                })
+            ),
+            "Dreaming sweep stage completed"
+        );
+        results.push((name, report));
+    }
+    Some(results)
 }

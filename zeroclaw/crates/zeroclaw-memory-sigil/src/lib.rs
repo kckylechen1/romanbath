@@ -16,3 +16,4 @@ pub mod types;
 pub use chat_memory::ChatMemoryStore;
 pub use dreaming::DreamingPipeline;
 pub use enrichment::MemoryEnricher;
+pub use types::DreamingReport;
