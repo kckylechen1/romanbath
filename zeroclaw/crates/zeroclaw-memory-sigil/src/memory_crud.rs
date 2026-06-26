@@ -401,6 +401,34 @@ pub fn record_access(
     Ok(())
 }
 
+/// Returns access ages in seconds-since-now per memory ID (feeds decay_score_actr).
+pub fn get_access_times(
+    conn: &Connection,
+    ids: &[String],
+) -> Result<HashMap<String, Vec<f64>>, MemoryError> {
+    let mut out: HashMap<String, Vec<f64>> = HashMap::new();
+    if ids.is_empty() {
+        return Ok(out);
+    }
+    let now = Utc::now();
+    for id in ids {
+        let mut stmt =
+            conn.prepare("SELECT accessed_at FROM access_history WHERE memory_id = ?1")?;
+        let ages: Vec<f64> = stmt
+            .query_map(params![id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .filter_map(|accessed_at| {
+                accessed_at
+                    .parse::<chrono::DateTime<Utc>>()
+                    .ok()
+                    .map(|dt| (now - dt).num_seconds().max(0) as f64)
+            })
+            .collect();
+        out.insert(id.clone(), ages);
+    }
+    Ok(out)
+}
+
 // ─── DELETE ───────────────────────────────────────────────────────────────────
 
 /// Delete a memory entry by ID. Returns true if found and deleted.

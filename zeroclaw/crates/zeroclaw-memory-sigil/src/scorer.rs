@@ -21,6 +21,14 @@ pub fn tier_half_life(tier: &str) -> f64 {
     }
 }
 
+fn tier_actr_d(tier: &str) -> f64 {
+    match tier {
+        "pattern" => 0.01,
+        "consolidated" => 0.25,
+        _ => 0.5,
+    }
+}
+
 /// Normalize an f64 to [0, 1].
 #[inline]
 pub fn normalize(v: f64) -> f64 {
@@ -67,6 +75,33 @@ pub fn decay_score(entry: &MemoryEntry) -> f64 {
     let importance_floor = entry.importance * 0.3;
 
     (recency * (1.0 + 0.2 * frequency)).max(importance_floor)
+}
+
+/// ACT-R Base-Level Activation: B_i = ln(Σ t_j^(-d)), t_j = access age in days.
+fn base_level_activation(access_ages_secs: &[f64], d: f64) -> f64 {
+    if access_ages_secs.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = access_ages_secs
+        .iter()
+        .map(|t| (t / 86_400.0).max(1.0 / 24.0).powf(-d))
+        .sum();
+    if sum > 0.0 { sum.ln() } else { 0.0 }
+}
+
+pub fn decay_score_actr(entry: &MemoryEntry, access_ages: Option<&[f64]>) -> f64 {
+    let d = tier_actr_d(&entry.tier);
+    match access_ages {
+        Some(ages) if !ages.is_empty() => {
+            let bla = base_level_activation(ages, d);
+            let normalized = (bla + 5.0) / 10.0;
+            normalized
+                .clamp(0.0, 1.0)
+                .max(decay_score(entry))
+                .max(entry.importance * 0.3)
+        }
+        _ => decay_score(entry),
+    }
 }
 
 // ─── Symbolic Scoring ───────────────────────────────────────────────────────
@@ -135,6 +170,7 @@ pub struct HybridWeights {
     pub fts: f64,
     pub symbolic: f64,
     pub decay: f64,
+    pub use_rrf: bool,
 }
 
 impl Default for HybridWeights {
@@ -144,35 +180,105 @@ impl Default for HybridWeights {
             fts: 0.25,
             symbolic: 0.20,
             decay: 0.20,
+            use_rrf: true,
         }
     }
 }
 
-/// Compute hybrid scores for a set of entries.
+fn rank_map(scores: &HashMap<String, f64>) -> HashMap<String, usize> {
+    let mut ranked = scores.iter().collect::<Vec<_>>();
+    ranked.sort_by(|a, b| b.1.total_cmp(a.1));
+    ranked
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (id, _))| (id.clone(), idx + 1))
+        .collect()
+}
+
+fn blend_rrf_with_vector_signal(
+    id: &str,
+    rrf_score: f64,
+    vec_scores: &HashMap<String, f64>,
+    vec_weight: f64,
+) -> f64 {
+    let Some(cosine) = vec_scores.get(id).copied().map(normalize) else {
+        return rrf_score;
+    };
+    rrf_score * (1.0 + 0.15 * vec_weight.clamp(0.0, 1.0) * cosine)
+}
+
+fn retrieval_rrf_weight(weight: f64, total: f64) -> f64 {
+    if !weight.is_finite() || weight <= 0.0 || total <= 0.0 {
+        0.0
+    } else {
+        weight / total
+    }
+}
+
 pub fn hybrid_score(
     entries: &HashMap<String, &MemoryEntry>,
+    vec_scores: &HashMap<String, f64>,
     fts_scores: &HashMap<String, f64>,
     symbolic_scores: &HashMap<String, f64>,
     weights: &HybridWeights,
+    access_times: &HashMap<String, Vec<f64>>,
 ) -> HashMap<String, HybridScore> {
-    let all_ids: HashSet<&String> = fts_scores.keys().chain(symbolic_scores.keys()).collect();
+    let all_ids: HashSet<&String> = vec_scores
+        .keys()
+        .chain(fts_scores.keys())
+        .chain(symbolic_scores.keys())
+        .collect();
 
     let mut out: HashMap<String, HybridScore> = HashMap::new();
+    let vec_ranks = weights.use_rrf.then(|| rank_map(vec_scores));
+    let fts_ranks = weights.use_rrf.then(|| rank_map(fts_scores));
+    let symbolic_ranks = weights.use_rrf.then(|| rank_map(symbolic_scores));
 
     for id in all_ids {
+        let vs = normalize(*vec_scores.get(id).unwrap_or(&0.0));
         let fs = normalize(*fts_scores.get(id).unwrap_or(&0.0));
         let ss = normalize(*symbolic_scores.get(id).unwrap_or(&0.0));
         let ds = entries
             .get(id.as_str())
-            .map(|e| decay_score(e))
+            .map(|e| {
+                let ages = access_times.get(id).map(|v| v.as_slice());
+                decay_score_actr(e, ages)
+            })
             .unwrap_or(0.0);
 
-        let final_score = weights.fts * fs + weights.symbolic * ss + weights.decay * ds;
+        let final_score = if weights.use_rrf {
+            let rrf_k = 60.0;
+            let retrieval_weight_total =
+                (weights.semantic + weights.fts + weights.symbolic).max(0.0);
+            let vec_weight = retrieval_rrf_weight(weights.semantic, retrieval_weight_total);
+            let fts_weight = retrieval_rrf_weight(weights.fts, retrieval_weight_total);
+            let symbolic_weight = retrieval_rrf_weight(weights.symbolic, retrieval_weight_total);
+            let vec_part = vec_ranks
+                .as_ref()
+                .and_then(|ranks| ranks.get(id))
+                .map(|rank| vec_weight / (rrf_k + *rank as f64))
+                .unwrap_or(0.0);
+            let fts_part = fts_ranks
+                .as_ref()
+                .and_then(|ranks| ranks.get(id))
+                .map(|rank| fts_weight / (rrf_k + *rank as f64))
+                .unwrap_or(0.0);
+            let symbolic_part = symbolic_ranks
+                .as_ref()
+                .and_then(|ranks| ranks.get(id))
+                .map(|rank| symbolic_weight / (rrf_k + *rank as f64))
+                .unwrap_or(0.0);
+            let rrf_score = vec_part + fts_part + symbolic_part;
+            let blended = blend_rrf_with_vector_signal(id, rrf_score, vec_scores, vec_weight);
+            blended + weights.decay * ds / rrf_k
+        } else {
+            weights.semantic * vs + weights.fts * fs + weights.symbolic * ss + weights.decay * ds
+        };
 
         out.insert(
             id.clone(),
             HybridScore {
-                vector: 0.0, // no vector search in this crate
+                vector: vs,
                 fts: fs,
                 symbolic: ss,
                 decay: ds,
@@ -237,5 +343,90 @@ mod tests {
         let entry = test_entry("recent");
         let s = decay_score(&entry);
         assert!(s > 0.5, "recent entry should have high decay score: {s}");
+    }
+
+    #[test]
+    fn rrf_respects_channel_weights() {
+        let a = test_entry("a");
+        let b = test_entry("b");
+        let entries = HashMap::from([("a".to_string(), &a), ("b".to_string(), &b)]);
+        let vec_scores = HashMap::from([("a".to_string(), 0.9), ("b".to_string(), 0.8)]);
+        let fts_scores = HashMap::from([("a".to_string(), 0.1), ("b".to_string(), 0.9)]);
+        let symbolic_scores = HashMap::new();
+        let access_times = HashMap::new();
+
+        let vector_heavy = HybridWeights {
+            semantic: 0.9,
+            fts: 0.1,
+            symbolic: 0.0,
+            decay: 0.0,
+            use_rrf: true,
+        };
+        let vector_ranked = hybrid_score(
+            &entries,
+            &vec_scores,
+            &fts_scores,
+            &symbolic_scores,
+            &vector_heavy,
+            &access_times,
+        );
+        assert!(
+            vector_ranked["a"].final_score > vector_ranked["b"].final_score,
+            "vector-heavy RRF should prefer vector rank: a={} b={}",
+            vector_ranked["a"].final_score,
+            vector_ranked["b"].final_score
+        );
+
+        let fts_heavy = HybridWeights {
+            semantic: 0.1,
+            fts: 0.9,
+            symbolic: 0.0,
+            decay: 0.0,
+            use_rrf: true,
+        };
+        let fts_ranked = hybrid_score(
+            &entries,
+            &vec_scores,
+            &fts_scores,
+            &symbolic_scores,
+            &fts_heavy,
+            &access_times,
+        );
+        assert!(
+            fts_ranked["b"].final_score > fts_ranked["a"].final_score,
+            "fts-heavy RRF should prefer FTS rank: a={} b={}",
+            fts_ranked["a"].final_score,
+            fts_ranked["b"].final_score
+        );
+    }
+
+    #[test]
+    fn actr_access_history_boosts_frequently_accessed() {
+        let mut entry = test_entry("old");
+        entry.timestamp = (Utc::now() - chrono::Duration::days(60)).to_rfc3339();
+
+        let never = decay_score_actr(&entry, None);
+        let accessed_once_old = decay_score_actr(&entry, Some(&[60.0 * 86_400.0]));
+        let accessed_recently = decay_score_actr(&entry, Some(&[3_600.0, 7_200.0]));
+
+        assert!(
+            accessed_once_old >= never,
+            "old single access should not beat no-history baseline: old={accessed_once_old} never={never}"
+        );
+        assert!(
+            accessed_recently > accessed_once_old,
+            "recent accesses should beat old: recent={accessed_recently} old={accessed_once_old}"
+        );
+    }
+
+    #[test]
+    fn rrf_blends_vector_signal_without_penalizing_missing_vector() {
+        let vec_scores = HashMap::from([("a".to_string(), 0.99)]);
+
+        let with_vec = blend_rrf_with_vector_signal("a", 0.02, &vec_scores, 1.0);
+        assert!(with_vec > 0.02, "blended should exceed base: {with_vec}");
+
+        let missing = blend_rrf_with_vector_signal("x", 0.02, &vec_scores, 1.0);
+        assert_eq!(missing, 0.02);
     }
 }
