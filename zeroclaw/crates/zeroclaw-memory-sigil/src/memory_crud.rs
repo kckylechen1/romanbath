@@ -4,7 +4,7 @@
 // Uses FTS5 for full-text search and path-based partitioning by character.
 
 use chrono::Utc;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, params_from_iter};
 use std::collections::HashMap;
 
 use crate::types::{MemoryCategory, MemoryEntry, MemoryScope, MemorySource};
@@ -401,7 +401,26 @@ pub fn record_access(
     Ok(())
 }
 
+/// Max ids per `IN (...)` batch — stays under SQLite's 999 host-parameter limit.
+/// Ported from the upstream prototype's `IN_BATCH_SIZE`.
+const ACCESS_TIMES_IN_BATCH: usize = 900;
+
+/// Default retention for [`prune_access_history`] — latest N accesses kept per
+/// memory. Mirrors the upstream `GcConfig::access_history_keep_per_memory`.
+pub const ACCESS_HISTORY_KEEP_PER_MEMORY: usize = 256;
+
 /// Returns access ages in seconds-since-now per memory ID (feeds decay_score_actr).
+///
+/// Ported shape from the upstream prototype: one batched `WHERE memory_id IN (...)`
+/// query per 900-id chunk instead of an N-prepare loop. Row errors now propagate
+/// (`?`) rather than being silently dropped; unparseable timestamps are still
+/// skipped. Two notes vs the previous loop version, both behavior-neutral for the
+/// only consumer (`hybrid_score` → `decay_score_actr`):
+/// - ids with no access history are omitted from the map (previously present
+///   with an empty `Vec`); `decay_score_actr` falls back to plain `decay_score`
+///   either way.
+/// - ages within each memory's `Vec` are a multiset ordered by recency; order is
+///   not semantically meaningful because `base_level_activation` sums them.
 pub fn get_access_times(
     conn: &Connection,
     ids: &[String],
@@ -411,22 +430,65 @@ pub fn get_access_times(
         return Ok(out);
     }
     let now = Utc::now();
-    for id in ids {
-        let mut stmt =
-            conn.prepare("SELECT accessed_at FROM access_history WHERE memory_id = ?1")?;
-        let ages: Vec<f64> = stmt
-            .query_map(params![id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .filter_map(|accessed_at| {
-                accessed_at
-                    .parse::<chrono::DateTime<Utc>>()
-                    .ok()
-                    .map(|dt| (now - dt).num_seconds().max(0) as f64)
-            })
-            .collect();
-        out.insert(id.clone(), ages);
+    for batch in ids.chunks(ACCESS_TIMES_IN_BATCH) {
+        let placeholders = batch.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT memory_id, accessed_at FROM access_history
+             WHERE memory_id IN ({placeholders})
+             ORDER BY accessed_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            params_from_iter(batch.iter().map(String::as_str)),
+            |row| {
+                let memory_id: String = row.get(0)?;
+                let accessed_at: String = row.get(1)?;
+                Ok((memory_id, accessed_at))
+            },
+        )?;
+        for row in rows {
+            let (memory_id, accessed_at) = row?;
+            if let Ok(dt) = accessed_at.parse::<chrono::DateTime<Utc>>() {
+                let age_secs = (now - dt).num_seconds().max(0) as f64;
+                out.entry(memory_id).or_default().push(age_secs);
+            }
+        }
     }
     Ok(out)
+}
+
+/// Retain only the latest `keep_per_memory` access-history rows per memory,
+/// deleting the rest. Returns the number of rows deleted.
+///
+/// Explicit/opt-in — nothing in the recall path calls this; it belongs in a
+/// maintenance lane (wired into dreaming `run_light_sleep`). Without it,
+/// `record_access` grows `access_history` without bound and `get_access_times`
+/// re-reads all of it every recall. Mirrors upstream `stats_gc::gc_tables`.
+pub fn prune_access_history(
+    conn: &mut Connection,
+    keep_per_memory: usize,
+) -> Result<usize, MemoryError> {
+    let tx = conn.transaction()?;
+    // keep_per_memory is a trusted usize (digits only), safe to interpolate.
+    let deleted = tx.execute(
+        &format!(
+            "DELETE FROM access_history
+             WHERE rowid IN (
+                 SELECT rowid FROM (
+                     SELECT rowid,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY memory_id
+                                ORDER BY accessed_at DESC
+                            ) AS rn
+                     FROM access_history
+                 ) ranked
+                 WHERE rn > {keep_per_memory}
+             )"
+        ),
+        [],
+    )?;
+    tx.commit()?;
+    Ok(deleted)
 }
 
 // ─── DELETE ───────────────────────────────────────────────────────────────────
@@ -520,5 +582,84 @@ mod crud_tests {
             !results.is_empty(),
             "FTS search should find 'dark' in entry"
         );
+    }
+
+    #[test]
+    fn get_access_times_batches_and_returns_ages() {
+        let conn = setup();
+        let iso = |secs_ago: i64| {
+            Utc::now()
+                .checked_sub_signed(chrono::Duration::seconds(secs_ago))
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        };
+        for secs_ago in [60, 3600, 86400] {
+            conn.execute(
+                "INSERT INTO access_history (memory_id, accessed_at, query_hash) VALUES (?1, ?2, '')",
+                params!["m1", iso(secs_ago)],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO access_history (memory_id, accessed_at, query_hash) VALUES (?1, ?2, '')",
+            params!["m2", iso(120)],
+        )
+        .unwrap();
+
+        let times =
+            get_access_times(&conn, &["m1".to_string(), "m2".to_string(), "m3".to_string()])
+                .unwrap();
+        assert_eq!(times["m1"].len(), 3, "m1 has 3 accesses");
+        assert_eq!(times["m2"].len(), 1, "m2 has 1 access");
+        assert!(
+            !times.contains_key("m3"),
+            "ids with no history are omitted (was present-with-empty in the loop version)"
+        );
+        let mut m1 = times["m1"].clone();
+        m1.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(
+            (m1[0] - 60.0).abs() < 5.0,
+            "youngest age ~= 60s (got {})",
+            m1[0]
+        );
+    }
+
+    #[test]
+    fn prune_access_history_keeps_latest_per_memory() {
+        let mut conn = setup();
+        let iso = |secs_ago: i64| {
+            Utc::now()
+                .checked_sub_signed(chrono::Duration::seconds(secs_ago))
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        };
+        for secs_ago in [10, 20, 30, 40, 50] {
+            conn.execute(
+                "INSERT INTO access_history (memory_id, accessed_at, query_hash) VALUES (?1, ?2, '')",
+                params!["m1", iso(secs_ago)],
+            )
+            .unwrap();
+        }
+        for secs_ago in [15, 25] {
+            conn.execute(
+                "INSERT INTO access_history (memory_id, accessed_at, query_hash) VALUES (?1, ?2, '')",
+                params!["m2", iso(secs_ago)],
+            )
+            .unwrap();
+        }
+
+        let deleted = prune_access_history(&mut conn, 2).unwrap();
+        assert_eq!(deleted, 3, "m1 5->2 (3 deleted), m2 2->2 (0 deleted)");
+
+        let count = |mid: &str| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM access_history WHERE memory_id = ?1",
+                params![mid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(count("m1"), 2);
+        assert_eq!(count("m2"), 2);
     }
 }

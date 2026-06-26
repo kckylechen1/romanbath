@@ -91,6 +91,13 @@ impl DreamingPipeline {
                 let _ = memory_crud::delete(&mut conn, id);
             }
 
+            // Cap access_history growth (upstream stats_gc prune). Best-effort
+            // and off the recall hot path — only runs when light_sleep does.
+            let _ = memory_crud::prune_access_history(
+                &mut conn,
+                memory_crud::ACCESS_HISTORY_KEEP_PER_MEMORY,
+            );
+
             Ok((processed, merged))
         })();
 
