@@ -7,6 +7,7 @@
 pub mod chat_memory;
 pub mod dreaming;
 pub mod enrichment;
+pub mod event_ledger;
 pub mod memory_crud;
 pub mod noise;
 pub mod schema;
