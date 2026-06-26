@@ -144,7 +144,16 @@ impl ChatMemoryStore {
         let entries_ref: HashMap<String, &MemoryEntry> =
             entries.iter().map(|(k, v)| (k.clone(), v)).collect();
         let weights = scorer::HybridWeights::default();
-        let scores = scorer::hybrid_score(&entries_ref, &fts_scores, &symbolic_scores, &weights);
+        let access_times = memory_crud::get_access_times(&conn, &ids).unwrap_or_default();
+        let empty_vec_scores: HashMap<String, f64> = HashMap::new();
+        let scores = scorer::hybrid_score(
+            &entries_ref,
+            &empty_vec_scores,
+            &fts_scores,
+            &symbolic_scores,
+            &weights,
+            &access_times,
+        );
 
         // Record access for ACT-R tracking
         let fts_hit_ids: Vec<String> = fts_scores.keys().cloned().collect();
@@ -170,10 +179,32 @@ impl ChatMemoryStore {
     }
 
     /// Inject relevant memories into a prompt. Returns formatted text block.
+    ///
+    /// Default path is byte-identical to pre-continuity behavior: learned
+    /// patterns are NOT appended unless `ROMANBATH_PATTERN_INJECTION` is set
+    /// (Slice 3c, off by default — the over-fit surface stays closed until the
+    /// projection/labeler substrate has proven itself). See
+    /// [`inject_memories_into_prompt_with`](Self::inject_memories_into_prompt_with)
+    /// for the explicit-flag variant used by tests.
     pub fn inject_memories_into_prompt(
         &self,
         character_name: &str,
         conversation_text: &str,
+    ) -> String {
+        self.inject_memories_into_prompt_with(
+            character_name,
+            conversation_text,
+            pattern_injection_enabled(),
+        )
+    }
+
+    /// Same as `inject_memories_into_prompt` with an explicit pattern-injection
+    /// flag, so tests can exercise both paths without mutating the process env.
+    pub fn inject_memories_into_prompt_with(
+        &self,
+        character_name: &str,
+        conversation_text: &str,
+        inject_patterns: bool,
     ) -> String {
         // Use the last user message as the recall query
         let query = extract_last_user_message(conversation_text);
@@ -182,13 +213,67 @@ impl ChatMemoryStore {
             None => return String::new(),
         };
 
-        match self.recall_memories(character_name, &query, 5) {
+        let memories_block = match self.recall_memories(character_name, &query, 5) {
             Ok(results) if results.is_empty() => String::new(),
             Ok(results) => {
                 let mut lines = vec!["[Relevant memories from past conversations]".to_string()];
                 for r in &results {
                     let ts = &r.entry.timestamp[..10.min(r.entry.timestamp.len())];
                     lines.push(format!("- ({}, {}) {}", ts, r.entry.category, r.entry.text));
+                }
+                lines.join("\n")
+            }
+            Err(_) => String::new(),
+        };
+
+        // Slice 3c: learned patterns are an OPTIONAL appendix, off by default.
+        // When off, `pattern_block` is empty and the return value is
+        // byte-identical to the pre-continuity `inject_memories_into_prompt`.
+        let pattern_block = if inject_patterns {
+            self.pattern_context_block(character_name, 5)
+        } else {
+            String::new()
+        };
+
+        match (memories_block.is_empty(), pattern_block.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => memories_block,
+            (true, false) => pattern_block,
+            (false, false) => format!("{memories_block}\n{pattern_block}"),
+        }
+    }
+
+    /// Read projected pattern memories for this character (under
+    /// `/user/patterns/`), most-mature first. Continuity read-model (Slice 3b).
+    /// Additive — nothing injects it until pattern injection is enabled.
+    ///
+    /// Per-character scope follows the existing ChatMemoryStore partition; the
+    /// "global vs per-character pattern memory" question is left open (design
+    /// doc open-question #4).
+    pub fn pattern_context(
+        &self,
+        character_name: &str,
+        top_k: usize,
+    ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        let conn = self.open(character_name)?;
+        let mut entries = memory_crud::list_by_path(&conn, "/user/patterns", top_k.max(1))?;
+        entries.sort_by(|a, b| pattern_priority(b).cmp(&pattern_priority(a)));
+        Ok(entries)
+    }
+
+    fn pattern_context_block(&self, character_name: &str, top_k: usize) -> String {
+        match self.pattern_context(character_name, top_k) {
+            Ok(patterns) if patterns.is_empty() => String::new(),
+            Ok(patterns) => {
+                let mut lines =
+                    vec!["[Learned patterns — observed judgment structures]".to_string()];
+                for p in &patterns {
+                    let seen = counter_i64_metadata(&p.metadata, "seen");
+                    let hit = counter_i64_metadata(&p.metadata, "hit");
+                    lines.push(format!(
+                        "- ({}, seen={}, hit={}) {}",
+                        p.tier, seen, hit, p.summary
+                    ));
                 }
                 lines.join("\n")
             }
@@ -247,6 +332,38 @@ fn extract_last_user_message(conversation_text: &str) -> Option<String> {
         }
     }
     last_user
+}
+
+// ─── Continuity projection helpers (Slice 3) ────────────────────────────────
+
+/// Read a `counters.<key>` i64 from a memory's metadata, defaulting to 0.
+fn counter_i64_metadata(metadata: &serde_json::Value, key: &str) -> i64 {
+    metadata
+        .get("counters")
+        .and_then(|c| c.get(key))
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_default()
+}
+
+/// Maturity ranking for pattern surfacing: tier first (pattern > consolidated
+/// > raw), then sighting count. Higher = surfaced earlier.
+fn pattern_priority(entry: &MemoryEntry) -> (i64, i64) {
+    let tier_rank = match entry.tier.as_str() {
+        "pattern" => 3,
+        "consolidated" => 2,
+        _ => 1,
+    };
+    (tier_rank, counter_i64_metadata(&entry.metadata, "seen"))
+}
+
+/// Whether learned patterns may be appended to injected prompt context.
+/// Off by default; enable with `ROMANBATH_PATTERN_INJECTION=1|true|on|yes`.
+fn pattern_injection_enabled() -> bool {
+    let value = std::env::var("ROMANBATH_PATTERN_INJECTION").unwrap_or_default();
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "on" | "yes"
+    )
 }
 
 #[cfg(test)]
@@ -335,5 +452,145 @@ mod tests {
         let entry = &memories[0].entry;
         assert_eq!(entry.text, "I like using Rust for coding");
         assert!(!entry.text.contains("<think>"));
+    }
+
+    // ── Slice 3: continuity projection integration ──────────────────────────
+
+    /// Seed a projection memory under /user/patterns/ directly (as `project`
+    /// would), so tests don't depend on the event-ledger → projector pipeline.
+    fn seed_pattern(store: &ChatMemoryStore, character: &str, id: &str, tier: &str, seen: i64) {
+        let mut conn = crate::schema::open(&store.db_path_for(character)).unwrap();
+        memory_crud::upsert(
+            &mut conn,
+            &MemoryEntry {
+                id: id.to_string(),
+                path: format!("/user/patterns/general/{id}"),
+                summary: format!("pattern summary {id}"),
+                text: format!("pattern text {id}"),
+                importance: 0.72,
+                timestamp: memory_crud::now_utc_iso(),
+                category: "preference".to_string(),
+                keywords: vec![],
+                entities: vec![],
+                source: "external:tachi_event_projection".to_string(),
+                scope: "user".to_string(),
+                archived: false,
+                access_count: 0,
+                last_access: None,
+                retention_policy: None,
+                metadata: serde_json::json!({
+                    "projection_kind": "pattern",
+                    "counters": {"seen": seen, "hit": 1},
+                }),
+                recall_count: 0,
+                query_diversity: 0,
+                tier: tier.to_string(),
+            },
+        )
+        .unwrap();
+    }
+
+    /// 3a — recall is path-scoped to /chat/, so a projection whose text WOULD
+    /// match the query must still be excluded. Regression-locks the isolation.
+    #[test]
+    fn recall_excludes_projection_paths() {
+        let (_dir, store) = temp_store();
+        store
+            .save_chat_memory("iso", "Alice", "user", "I prefer dark mode for everything always")
+            .unwrap();
+        // A projection whose text matches the recall query — must be excluded
+        // by the /chat/ path_prefix filter, not by FTS non-match.
+        let mut conn = crate::schema::open(&store.db_path_for("iso")).unwrap();
+        memory_crud::upsert(
+            &mut conn,
+            &MemoryEntry {
+                id: "pat-leak".to_string(),
+                path: "/user/patterns/general/pat-leak".to_string(),
+                summary: "prefer dark mode everything".to_string(),
+                text: "prefer dark mode everything".to_string(),
+                importance: 0.9,
+                timestamp: memory_crud::now_utc_iso(),
+                category: "preference".to_string(),
+                keywords: vec![],
+                entities: vec![],
+                source: "external:tachi_event_projection".to_string(),
+                scope: "user".to_string(),
+                archived: false,
+                access_count: 0,
+                last_access: None,
+                retention_policy: None,
+                metadata: serde_json::json!({"projection_kind": "pattern"}),
+                recall_count: 0,
+                query_diversity: 0,
+                tier: "pattern".to_string(),
+            },
+        )
+        .unwrap();
+
+        let recalled = store
+            .recall_memories("iso", "prefer dark mode everything", 5)
+            .unwrap();
+        assert!(
+            !recalled.iter().any(|r| r.entry.id == "pat-leak"),
+            "projection under /user/patterns/ must not leak into /chat/-scoped recall"
+        );
+        assert!(
+            recalled.iter().all(|r| r.entry.path.starts_with("/chat/")),
+            "recall must stay within the /chat/ path_prefix"
+        );
+    }
+
+    /// 3b — pattern_context reads /user/patterns/ rows, most-mature first.
+    #[test]
+    fn pattern_context_returns_projections_mature_first() {
+        let (_dir, store) = temp_store();
+        seed_pattern(&store, "pc", "p-mature", "pattern", 5);
+        seed_pattern(&store, "pc", "p-raw", "raw", 1);
+
+        let patterns = store.pattern_context("pc", 10).unwrap();
+        assert_eq!(patterns.len(), 2);
+        assert_eq!(
+            patterns[0].id, "p-mature",
+            "mature (pattern-tier) projection surfaces first"
+        );
+        assert!(patterns[0].path.starts_with("/user/patterns/"));
+    }
+
+    /// 3c — default-off injection must be byte-identical: patterns in the DB
+    /// do NOT appear when the flag is false (CLAUDE.md: keep the off/default
+    /// path byte-identical).
+    #[test]
+    fn injection_off_excludes_patterns() {
+        let (_dir, store) = temp_store();
+        store
+            .save_chat_memory("inj", "Alice", "user", "I prefer dark mode everywhere always")
+            .unwrap();
+        seed_pattern(&store, "inj", "pat-secret", "pattern", 9);
+
+        let out = store.inject_memories_into_prompt_with("inj", "User: dark mode everywhere", false);
+        assert!(out.contains("dark mode"), "chat memory still injected");
+        assert!(
+            !out.contains("pat-secret"),
+            "patterns must NOT appear when injection is off"
+        );
+        assert!(
+            !out.contains("Learned patterns"),
+            "pattern block header must not appear when off"
+        );
+    }
+
+    /// 3c — when the flag is on, the learned-pattern block is appended.
+    #[test]
+    fn injection_on_appends_pattern_block() {
+        let (_dir, store) = temp_store();
+        store
+            .save_chat_memory("inj2", "Alice", "user", "I prefer dark mode everywhere always")
+            .unwrap();
+        seed_pattern(&store, "inj2", "pat-on", "pattern", 9);
+
+        let out = store.inject_memories_into_prompt_with("inj2", "User: dark mode everywhere", true);
+        assert!(out.contains("Relevant memories"), "chat block still present");
+        assert!(out.contains("Learned patterns"), "pattern block appended when on");
+        assert!(out.contains("pat-on"), "pattern content present when on");
     }
 }
