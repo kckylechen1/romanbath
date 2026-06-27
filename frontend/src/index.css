@@ -18,35 +18,37 @@
   --color-bath-900: #2e2318;
   --color-bath-950: #1a140e;
 
-  --color-glass: rgba(14, 18, 23, 0.7);
+  --color-glass: rgba(26, 20, 14, 0.75);
   --color-glass-border: rgba(212, 165, 116, 0.12);
   --color-primary: #d4a574;
   --color-secondary: #8c6d4a;
-  --color-accent: #5cebe9;
+  --color-accent: #7a9e94;
 
   --blur-xs: 2px;
 }
 
 body {
-  /* Gradient mesh: warm light entering from the left like a bathhouse window */
+  /* Deep brown-black with warm radial glow — candlelit chamber */
   background:
-    radial-gradient(ellipse at 15% 50%, rgba(196, 154, 108, 0.16) 0%, transparent 55%),
-    radial-gradient(ellipse at 85% 20%, rgba(14, 18, 23, 0.4) 0%, transparent 50%),
-    linear-gradient(160deg, #17120d 0%, #1d1813 35%, #161a20 65%, #1a1e24 100%);
-  color: #e2e8f0;
+    radial-gradient(ellipse at 30% 40%, rgba(212, 165, 116, 0.10) 0%, transparent 60%),
+    radial-gradient(ellipse at 70% 60%, rgba(74, 56, 40, 0.18) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 50%, rgba(46, 35, 24, 0.6) 0%, transparent 80%),
+    linear-gradient(160deg, #1a140e 0%, #211a12 35%, #1e1610 65%, #161010 100%);
+  color: #f0e6d8;
 }
 
-/* Film grain overlay */
+/* Film grain overlay — warm-tinted */
 body::after {
   content: '';
   position: fixed;
   inset: 0;
   pointer-events: none;
-  opacity: 0.035;
+  opacity: 0.03;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   background-size: 128px 128px;
   z-index: 9999;
+  mix-blend-mode: multiply;
 }
 
 /* Custom Scrollbar */
@@ -60,22 +62,22 @@ body::after {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(212, 165, 116, 0.25);
+  background: rgba(212, 165, 116, 0.35);
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 165, 116, 0.45);
+  background: rgba(212, 165, 116, 0.55);
 }
 
 .glass-panel {
-  background: linear-gradient(135deg, rgba(28, 23, 19, 0.72) 0%, rgba(20, 24, 30, 0.58) 100%);
+  background: linear-gradient(135deg, rgba(36, 28, 20, 0.78) 0%, rgba(26, 20, 14, 0.62) 100%);
   backdrop-filter: blur(32px) saturate(1.2);
   -webkit-backdrop-filter: blur(32px) saturate(1.2);
   border: 1px solid rgba(212, 165, 116, 0.14);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 8px 32px rgba(0, 0, 0, 0.4);
+    inset 0 1px 0 rgba(255, 245, 230, 0.04),
+    0 8px 32px rgba(0, 0, 0, 0.45);
 }
 
 /* Page load staggered reveal */
@@ -112,7 +114,7 @@ body::after {
   animation-delay: 0.58s;
 }
 
-/* Message entrance animation */
+/* Message entrance animation — soft and unhurried */
 @keyframes messageIn {
   from {
     opacity: 0;
@@ -125,7 +127,7 @@ body::after {
 }
 
 .animate-message-in {
-  animation: messageIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: messageIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* Subtle glow for focused inputs — warm amber tone */
@@ -143,12 +145,12 @@ body::after {
   }
 }
 
-/* Typing cursor blink — kept as cool teal accent */
+/* Typing cursor blink — warm amber */
 @keyframes cursorBlink {
   0%,
   100% {
     opacity: 1;
-    text-shadow: 0 0 8px rgba(92, 235, 233, 0.5);
+    text-shadow: 0 0 8px rgba(212, 165, 116, 0.5);
   }
   50% {
     opacity: 0.3;
@@ -159,7 +161,7 @@ body::after {
 .typing-cursor::after {
   content: '|';
   animation: cursorBlink 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  color: #5cebe9;
+  color: #d4a574;
   margin-left: 2px;
 }
 
@@ -182,4 +184,53 @@ body::after {
   );
   background-size: 200% 100%;
   animation: neonShimmer 2.5s infinite linear;
+}
+
+/* Breathing pulse — subtle presence animation */
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.02);
+  }
+}
+
+/* Affect ring glow pulse */
+@keyframes glowPulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+/* Affect glow ring — uses --affect-color for dynamic mood tinting */
+.affect-glow {
+  --affect-color: rgba(212, 165, 116, 0.4);
+  box-shadow:
+    0 0 12px var(--affect-color),
+    0 0 24px var(--affect-color);
+  animation: glowPulse 3s ease-in-out infinite;
+}
+
+/* Avatar breathing animation */
+.avatar-breathe {
+  animation: breathe 4s ease-in-out infinite;
+}
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .avatar-breathe,
+  .affect-glow,
+  .animate-message-in,
+  .bath-reveal {
+    animation: none;
+  }
+  .bath-reveal {
+    opacity: 1;
+  }
 }

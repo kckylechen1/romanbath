@@ -98,6 +98,18 @@ export const ensurePairing = async (): Promise<void> => {
 
 // ── Types ──
 
+export interface MemoryEntry {
+  id: string;
+  text: string;
+  summary?: string;
+  category: string;
+  importance: number;
+  timestamp: string;
+  tier: string;
+  keywords: string[];
+  entities: string[];
+}
+
 export interface ChatMessage {
   role: string;
   content: string;
@@ -886,6 +898,24 @@ export const deleteBookEntry = async (name: string, entryId: string): Promise<bo
   } catch (e) {
     console.error('Error deleting book entry:', e);
     return false;
+  }
+};
+
+// ── Memory API ──
+
+export const getCharacterMemories = async (characterName: string): Promise<MemoryEntry[]> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(
+      `/api/memory?path=/chat/${encodeURIComponent(characterName)}/memories`,
+      { headers: jsonHeaders() }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.entries ?? data.memories ?? []);
+  } catch (e) {
+    console.error('Error fetching character memories:', e);
+    return [];
   }
 };
 

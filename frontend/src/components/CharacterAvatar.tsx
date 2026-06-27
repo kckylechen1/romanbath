@@ -2,18 +2,19 @@ import React, { useState } from 'react';
 import { Bot, User } from 'lucide-react';
 
 const GRADIENTS = [
-  'from-rose-700/90 to-orange-600/80',
-  'from-violet-700/90 to-indigo-600/80',
-  'from-emerald-700/90 to-teal-600/80',
-  'from-amber-700/90 to-yellow-600/80',
-  'from-fuchsia-700/90 to-pink-600/80',
-  'from-sky-700/90 to-cyan-600/80',
+  'from-amber-700/90 to-orange-600/80',
+  'from-rose-700/90 to-pink-600/80',
+  'from-amber-800/90 to-yellow-700/80',
+  'from-stone-600/90 to-stone-500/80',
+  'from-red-800/90 to-rose-700/80',
+  'from-orange-700/90 to-amber-600/80',
 ] as const;
 
 const SIZE_CLASSES = {
   sm: 'w-8 h-8 text-xs',
   md: 'w-10 h-10 text-sm',
   lg: 'w-12 h-12 text-base',
+  xl: 'w-24 h-24 text-2xl',
 } as const;
 
 const hashName = (name: string): number => {
@@ -61,7 +62,7 @@ export const CharacterAvatar: React.FC<CharacterAvatarProps> = ({
         src={avatar}
         alt=""
         onError={() => setImgFailed(true)}
-        className={`${sizeClass} ${roundedClass} object-cover ring-1 ${ringClassName} ${className}`}
+        className={`${sizeClass} ${roundedClass} object-cover ring-1 ${ringClassName}${size === 'xl' ? ' shadow-lg shadow-bath-900/50' : ''} ${className}`}
       />
     );
   }
@@ -71,7 +72,7 @@ export const CharacterAvatar: React.FC<CharacterAvatarProps> = ({
       <div
         className={`${sizeClass} ${roundedClass} flex items-center justify-center bg-stone-700/80 ring-1 ${ringClassName} ${className}`}
       >
-        <User size={size === 'lg' ? 20 : size === 'md' ? 18 : 16} className="text-stone-200" />
+        <User size={size === 'xl' ? 40 : size === 'lg' ? 20 : size === 'md' ? 18 : 16} className="text-stone-200" />
       </div>
     );
   }
@@ -81,7 +82,7 @@ export const CharacterAvatar: React.FC<CharacterAvatarProps> = ({
       className={`${sizeClass} ${roundedClass} flex items-center justify-center font-semibold text-white bg-gradient-to-br ${gradient} ring-1 ${ringClassName} shadow-inner ${className}`}
       aria-hidden="true"
     >
-      {displayInitial(name) || <Bot size={16} className="text-white/80" />}
+      {displayInitial(name) || <Bot size={size === 'xl' ? 32 : 16} className="text-white/80" />}
     </div>
   );
 };

@@ -12,6 +12,7 @@ import { useCharacterImportDrop } from './hooks/useCharacterImportDrop';
 import { LeftSidebar } from './components/layout/LeftSidebar';
 import { ChatHeader } from './components/chat/ChatHeader';
 import { ChatInput } from './components/chat/ChatInput';
+import { CharacterAvatar } from './components/CharacterAvatar';
 import CharacterList from './components/CharacterList';
 import MessageBubble from './components/MessageBubble';
 import SettingsPanel from './components/SettingsPanel';
@@ -22,6 +23,7 @@ import CommandPalette from './components/CommandPalette';
 import { useToast } from './components/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import DialogHost from './components/DialogHost';
+import { MemoryPanel } from './components/MemoryPanel';
 
 // Command palette
 import { buildCommands } from './commands/buildCommands';
@@ -30,6 +32,7 @@ const AppContent: React.FC = () => {
   const logic = useAppLogic();
   const toast = useToast();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
 
   const commands = useMemo(() => buildCommands(logic), [logic]);
 
@@ -77,7 +80,7 @@ const AppContent: React.FC = () => {
 
   return (
     <div
-      className="relative w-full h-screen overflow-hidden font-sans text-stone-200 bg-bath-950 selection:bg-bath-500/20 selection:text-white"
+      className="relative w-full h-screen overflow-hidden font-sans text-bath-100 bg-bath-950 selection:bg-bath-500/20 selection:text-white"
       style={{ fontSize: `${logic.config.fontSize}px` }}
       onDragOver={dropHandlers.onDragOver}
       onDragLeave={dropHandlers.onDragLeave}
@@ -94,7 +97,7 @@ const AppContent: React.FC = () => {
           filter: `blur(${logic.config.backgroundBlur}px)`,
         }}
       />
-      <div className="absolute inset-0 z-0 bg-gradient-to-b from-[#0e0b08]/50 via-[#14110d]/65 to-[#0e0b08] pointer-events-none" />
+      <div className="absolute inset-0 z-0 bg-gradient-to-b from-bath-950/60 via-bath-950/75 to-bath-950/95 pointer-events-none" />
       <div className="absolute inset-0 z-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay"></div>
 
       {/* Restore Chat Modal */}
@@ -103,19 +106,19 @@ const AppContent: React.FC = () => {
           <div
             role="dialog"
             aria-modal="true"
-            className="bg-[#0e1217]/95 backdrop-blur-2xl border border-white/10 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-4 duration-300"
+            className="bg-bath-950/95 backdrop-blur-2xl border border-bath-800/30 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-4 duration-300"
           >
             <div className="flex items-center gap-4 mb-6">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-bath-500/20 to-bath-600/20 flex items-center justify-center border border-bath-500/30">
-                <MessageCircle className="text-stone-400" size={28} />
+                <MessageCircle className="text-bath-400" size={28} />
               </div>
               <div>
                 <h2 className="text-xl font-bold text-white">{logic.t('chat.restore')}</h2>
-                <p className="text-sm text-stone-400 mt-0.5">{logic.t('chat.restorePrompt')}</p>
+                <p className="text-sm text-bath-400 mt-0.5">{logic.t('chat.restorePrompt')}</p>
               </div>
             </div>
 
-            <div className="bg-black/30 rounded-xl p-4 mb-6 border border-white/5">
+            <div className="bg-black/30 rounded-xl p-4 mb-6 border border-bath-700/15">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-bath-500/20 to-bath-600/20 flex items-center justify-center">
                   <Sparkles className="text-bath-400" size={18} />
@@ -124,7 +127,7 @@ const AppContent: React.FC = () => {
                   <p className="text-sm text-white font-medium">
                     {logic.t('chat.restoreWith')} {logic.savedChatCharacterName}
                   </p>
-                  <p className="text-xs text-stone-500 flex items-center gap-1 mt-0.5">
+                  <p className="text-xs text-bath-500 flex items-center gap-1 mt-0.5">
                     <Clock size={12} />
                     {logic.t('chat.lastActive')} {getTimeSinceLastChat()}
                   </p>
@@ -135,7 +138,7 @@ const AppContent: React.FC = () => {
             <div className="flex gap-3">
               <button
                 onClick={logic.handleStartFresh}
-                className="flex-1 px-4 py-3 rounded-xl text-sm font-medium text-stone-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10 transition-all"
+                className="flex-1 px-4 py-3 rounded-xl text-sm font-medium text-bath-400 hover:text-bath-100 bg-white/5 hover:bg-bath-800/30 border border-bath-700/15 hover:border-bath-600/20 transition-all"
               >
                 {logic.t('chat.startFresh')}
               </button>
@@ -167,11 +170,11 @@ const AppContent: React.FC = () => {
         {/* Mobile Sidebar */}
         {logic.mobileMenuOpen && (
           <div className="absolute inset-0 z-50 bg-[#090b0e]/98 backdrop-blur-2xl md:hidden flex flex-col animate-in fade-in slide-in-from-left-10 duration-200">
-            <div className="p-4 flex justify-between items-center border-b border-white/5">
-              <span className="font-bold text-lg text-stone-100">Select Persona</span>
+            <div className="p-4 flex justify-between items-center border-b border-bath-700/15">
+              <span className="font-bold text-lg text-bath-100">Select Persona</span>
               <button
                 onClick={() => logic.setMobileMenuOpen(false)}
-                className="text-stone-400"
+                className="text-bath-400"
                 aria-label="Close menu"
               >
                 <X />
@@ -232,11 +235,47 @@ const AppContent: React.FC = () => {
           {/* Messages */}
           <div
             className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar bath-reveal bath-reveal-delay-3"
-            style={{ contain: 'layout' }}
           >
-            <div
-              className={`max-w-4xl mx-auto transition-transform ${logic.leftSidebarOpen ? '' : 'md:-translate-x-10'}`}
-            >
+            {/* Character Presence */}
+            {logic.selectedCharacter.id !== 'default' && (
+              <>
+                <div className="flex flex-col items-center pt-8 pb-4 bath-reveal bath-reveal-delay-2">
+                  <button
+                    className="relative cursor-pointer group"
+                    onClick={() => setMemoryPanelOpen((v) => !v)}
+                    aria-label="Toggle memories"
+                  >
+                    <div
+                      className="affect-glow avatar-breathe rounded-full"
+                      style={{ '--affect-color': 'rgba(212, 165, 116, 0.4)' } as React.CSSProperties}
+                    >
+                      <CharacterAvatar
+                        name={logic.selectedCharacter.name}
+                        avatar={logic.selectedCharacter.avatar}
+                        size="xl"
+                        rounded="full"
+                        ringClassName="ring-bath-500/30"
+                      />
+                    </div>
+                  </button>
+                  <h2 className="mt-3 text-lg font-display text-bath-100 tracking-wide">
+                    {logic.selectedCharacter.name}
+                  </h2>
+                  <p className="text-xs text-bath-500/70 mt-1 font-sans">
+                    {logic.selectedCharacter.description?.slice(0, 80)}
+                    {(logic.selectedCharacter.description?.length ?? 0) > 80 ? '…' : ''}
+                  </p>
+                </div>
+
+                <MemoryPanel
+                  characterName={logic.selectedCharacter.name}
+                  isOpen={memoryPanelOpen}
+                  onClose={() => setMemoryPanelOpen(false)}
+                />
+              </>
+            )}
+
+            <div className="max-w-2xl mx-auto">
               {logic.activePath.map((msg, idx) => {
                 const siblings = (
                   logic.messageTree.childrenOf.get(msg.parentId ?? null) ?? []
@@ -366,13 +405,13 @@ const AppContent: React.FC = () => {
       {/* Drag-and-drop character import overlay */}
       {isDragging && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm pointer-events-none">
-          <div className="flex flex-col items-center gap-4 p-10 rounded-3xl border-2 border-dashed border-bath-500/60 bg-stone-900/60">
+          <div className="flex flex-col items-center gap-4 p-10 rounded-3xl border-2 border-dashed border-bath-500/60 bg-bath-900/60">
             <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-bath-500/20 to-bath-600/20 flex items-center justify-center border border-bath-500/40">
               <Upload className="text-bath-300" size={36} />
             </div>
             <div className="text-center">
               <p className="text-lg font-semibold text-white">Drop character card to import</p>
-              <p className="text-sm text-stone-400 mt-1">Supports PNG, JSON, WebP</p>
+              <p className="text-sm text-bath-400 mt-1">Supports PNG, JSON, WebP</p>
             </div>
           </div>
         </div>
