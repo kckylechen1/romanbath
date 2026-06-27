@@ -665,6 +665,10 @@ async fn handle_socket(
     // Companion persona extracted from the character card's
     // extensions.companion. Falls back to Default (Nurturing) when
     // the card doesn't declare one — the affect module is always on.
+    // Resolved system prompt (card + tools + injected lorebook + memory) for
+    // the context inspector. Captured here (assembled once per session) and
+    // pushed to the client as a context_meta frame below.
+    let mut resolved_system_prompt: Option<String> = None;
     let companion_persona: zeroclaw_affect::CompanionPersona =
         if let Some(ref char_name) = character_name {
             match inject_character_card(
@@ -675,7 +679,8 @@ async fn handle_socket(
                 user_description.as_deref(),
                 &memory_context,
             ) {
-                Ok((Some(first_mes), companion)) => {
+                Ok((Some(first_mes), companion, full_prompt)) => {
+                    resolved_system_prompt = Some(full_prompt);
                     // Only greet on a brand-new session. On a resumed session
                     // (stable client session_id) re-sending first_mes would
                     // replay the opening line as a fresh bot turn on every
@@ -694,7 +699,10 @@ async fn handle_socket(
                     }
                     companion.unwrap_or_default()
                 }
-                Ok((None, companion)) => companion.unwrap_or_default(),
+                Ok((None, companion, full_prompt)) => {
+                    resolved_system_prompt = Some(full_prompt);
+                    companion.unwrap_or_default()
+                }
                 Err(e) => {
                     ::zeroclaw_log::record!(
                         WARN,
@@ -711,6 +719,18 @@ async fn handle_socket(
         } else {
             zeroclaw_affect::CompanionPersona::default()
         };
+
+    // ── Context inspector: push the resolved system prompt once ─────
+    // Additive frame (pre-inspector clients ignore unknown types). The prompt
+    // is assembled per session; per-turn context (recalled memories, tokens)
+    // rides the done frame instead.
+    if let Some(system_prompt) = resolved_system_prompt {
+        let context_meta = serde_json::json!({
+            "type": "context_meta",
+            "system_prompt": system_prompt,
+        });
+        let _ = sender.send(Message::Text(context_meta.to_string().into())).await;
+    }
 
     // ── Tool-approval back-channel ─────────────────────────────────
     // Connection-level event channel that the WsApprovalChannel shares
@@ -1438,7 +1458,7 @@ fn inject_character_card(
     user_name: Option<&str>,
     user_description: Option<&str>,
     memory_context: &str,
-) -> anyhow::Result<(Option<String>, Option<zeroclaw_affect::CompanionPersona>)> {
+) -> anyhow::Result<(Option<String>, Option<zeroclaw_affect::CompanionPersona>, String)> {
     let mgr = zeroclaw_cards::CardManager::default()?;
     let card = mgr
         .load(character_name)
@@ -1483,7 +1503,7 @@ fn inject_character_card(
         full_prompt = format!("{full_prompt}\n\n{memory_context}");
     }
 
-    agent.add_custom_system_section("character_card", full_prompt);
+    agent.add_custom_system_section("character_card", full_prompt.clone());
 
     let first_mes = if card.data.first_mes.is_empty() {
         None
@@ -1497,7 +1517,7 @@ fn inject_character_card(
         Some(rendered)
     };
 
-    Ok((first_mes, companion))
+    Ok((first_mes, companion, full_prompt))
 }
 
 /// Parse CompanionPersona from character card extensions.companion.
@@ -1728,6 +1748,9 @@ async fn process_chat_message(
     } else {
         String::new()
     };
+    // Snapshot the per-turn injected memories for the context inspector before
+    // recall_block is moved into the prompt prefix below.
+    let recalled_memories = recall_block.clone();
 
     let (affect_hint, affect_state) = compute_affect(content, companion_persona);
     let prefix_parts: Vec<String> = [recall_block, affect_hint]
@@ -2164,6 +2187,10 @@ async fn process_chat_message(
                 // The active leaf after this turn. Equal to node_id today, but
                 // sent explicitly so the frozen contract holds if they diverge.
                 "active_leaf": persisted_leaf,
+                // Context inspector: the memories recalled + injected for THIS
+                // turn (empty string when none). Session-level prompt rides the
+                // context_meta frame at connect.
+                "recalled_memories": recalled_memories,
             });
             let _ = sender.send(Message::Text(done.to_string().into())).await;
 
