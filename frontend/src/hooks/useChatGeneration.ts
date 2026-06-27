@@ -5,6 +5,7 @@ import {
   generateTextStream,
   WsChatConnection,
   getCharacterDetails,
+  type AffectState,
 } from '../services/zeroclawService';
 import {
   buildCharacterPhotoPrompt,
@@ -27,6 +28,8 @@ export interface UseChatGenerationReturn {
   chatEndRef: React.RefObject<HTMLDivElement | null>;
   isComposingRef: React.MutableRefObject<boolean>;
   wsChatRef: React.MutableRefObject<WsChatConnection | null>;
+  /** Latest perceived affect (drives the avatar mood glow); null = neutral. */
+  currentAffect: AffectState | null;
 }
 
 export const useChatGeneration = (
@@ -45,6 +48,7 @@ export const useChatGeneration = (
 ): UseChatGenerationReturn => {
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [currentAffect, setCurrentAffect] = useState<AffectState | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const wsChatRef = useRef<WsChatConnection | null>(null);
@@ -59,6 +63,12 @@ export const useChatGeneration = (
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // Affect is per-conversation; drop it when switching character so a new
+  // companion doesn't inherit the previous one's mood glow.
+  useEffect(() => {
+    setCurrentAffect(null);
+  }, [selectedCharacter.id]);
 
   // Same trick for activePath — used both for the outgoing context body
   // (only the rendered branch should go to the model, not sibling
@@ -318,6 +328,7 @@ export const useChatGeneration = (
               );
               setIsTyping(false);
             },
+            onAffect: (affect) => setCurrentAffect(affect),
           });
           // Stable session id per (character, chat thread) so the gateway
           // resumes this conversation's server-side session instead of
@@ -465,5 +476,6 @@ export const useChatGeneration = (
     chatEndRef,
     isComposingRef,
     wsChatRef,
+    currentAffect,
   };
 };

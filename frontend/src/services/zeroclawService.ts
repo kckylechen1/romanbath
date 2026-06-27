@@ -1156,6 +1156,20 @@ export const generateSpeech = async (
 
 // ── WebSocket Chat (for tool-enabled character chat) ──
 
+/** The user's perceived emotional state for a turn, as inferred server-side by
+ *  zeroclaw-affect. Dimensional model (valence + arousal) is the source of
+ *  truth; `label` is a derived discrete emotion. Drives the avatar mood glow. */
+export interface AffectState {
+  /** -1.0 (negative) … 1.0 (positive) */
+  valence: number;
+  /** 0.0 (calm) … 1.0 (activated) */
+  arousal: number;
+  /** Discrete label, e.g. "Excitement" | "Sadness" | "Calm" | null */
+  label: string | null;
+  /** 0.0 … 1.0 */
+  confidence: number;
+}
+
 export interface WsChatCallbacks {
   onChunk: (chunk: string, fullText: string) => void;
   onToolCall: (toolName: string) => void;
@@ -1168,6 +1182,8 @@ export interface WsChatCallbacks {
   onDone: (fullText: string) => void;
   onError: (error: string) => void;
   onFirstMessage?: (text: string) => void;
+  /** Fired when a done frame carries a perceived affect state (may be null). */
+  onAffect?: (affect: AffectState | null) => void;
 }
 
 const WS_URL = (agentAlias: string = 'default', token?: string, sessionId?: string) => {
@@ -1366,6 +1382,9 @@ export class WsChatConnection {
             }
             case 'done':
               this.turnSettled = true;
+              if (this.callbacks.onAffect && 'affect' in frame) {
+                this.callbacks.onAffect((frame.affect as AffectState | null) ?? null);
+              }
               this.callbacks.onDone(this.fullText || frame.full_response || '');
               break;
             case 'error':

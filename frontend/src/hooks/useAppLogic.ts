@@ -338,6 +338,7 @@ export const useAppLogic = () => {
     inputText: generation.inputText,
     setInputText: generation.setInputText,
     isTyping: generation.isTyping,
+    currentAffect: generation.currentAffect,
     config,
 
     // Voice

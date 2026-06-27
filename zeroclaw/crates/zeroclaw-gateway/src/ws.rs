@@ -1192,7 +1192,16 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
     }
 }
 
-fn compute_affect_hint(user_message: &str, persona: &zeroclaw_affect::CompanionPersona) -> String {
+/// Perceive the user's affect this turn, returning both the prompt hint the
+/// agent sees and the structured state the client renders (avatar mood glow).
+///
+/// Both are gated on the same confidence floor: below it we return neither,
+/// so a flat "ok" neither injects an affect hint nor jitters the glow — the
+/// avatar stays at its warm default.
+fn compute_affect(
+    user_message: &str,
+    persona: &zeroclaw_affect::CompanionPersona,
+) -> (String, Option<zeroclaw_affect::AffectState>) {
     use chrono::Timelike;
     use zeroclaw_affect::{
         ConversationContext, HeuristicEstimator, UserSignals, perceive_and_appraise,
@@ -1208,14 +1217,11 @@ fn compute_affect_hint(user_message: &str, persona: &zeroclaw_affect::CompanionP
     };
     let (affect, stance) = perceive_and_appraise(&HeuristicEstimator, &ctx, &signals, persona);
 
-    // Skip the hint when confidence is very low and the affect is
-    // neutral — adding "[affect] warmth=0.60 energy=0.50
-    // strategy=Mirror" to every "ok" message is noise.
     if affect.confidence < 0.35 {
-        return String::new();
+        return (String::new(), None);
     }
 
-    stance.to_prompt_hint()
+    (stance.to_prompt_hint(), Some(affect))
 }
 
 /// Process a single chat message through the agent and send the response.
@@ -1310,7 +1316,7 @@ async fn process_chat_message(
         String::new()
     };
 
-    let affect_hint = compute_affect_hint(content, companion_persona);
+    let (affect_hint, affect_state) = compute_affect(content, companion_persona);
     let prefix_parts: Vec<String> = [recall_block, affect_hint]
         .into_iter()
         .filter(|s| !s.is_empty())
@@ -1726,6 +1732,9 @@ async fn process_chat_message(
                 "cost_usd": cost_usd,
                 "model": state.model,
                 "provider": provider_label,
+                // The user's perceived affect this turn (null when confidence is
+                // below the floor). The client tints the avatar's mood glow.
+                "affect": affect_state,
             });
             let _ = sender.send(Message::Text(done.to_string().into())).await;
 

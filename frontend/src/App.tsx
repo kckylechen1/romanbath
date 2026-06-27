@@ -28,6 +28,22 @@ import { MemoryPanel } from './components/MemoryPanel';
 // Command palette
 import { buildCommands } from './commands/buildCommands';
 
+// Map a perceived affect state to the avatar's mood-glow color. Valence sets
+// the hue (warm amber when positive → cool verdigris when negative), arousal
+// sets how vivid it is. Null/neutral keeps the resting warm gold so the glow
+// only departs from baseline when there's a real, confident signal.
+const DEFAULT_GLOW = 'rgba(212, 165, 116, 0.4)';
+const affectToGlowColor = (
+  affect: { valence: number; arousal: number; confidence: number } | null
+): string => {
+  if (!affect || affect.confidence < 0.35) return DEFAULT_GLOW;
+  const v = Math.max(-1, Math.min(1, affect.valence));
+  // Hue: ~40° (warm amber) at v=+1 → ~165° (verdigris) at v=-1.
+  const hue = 40 + ((1 - (v + 1) / 2) * (165 - 40));
+  const alpha = 0.3 + Math.max(0, Math.min(1, affect.arousal)) * 0.4;
+  return `hsla(${Math.round(hue)}, 55%, 60%, ${alpha.toFixed(2)})`;
+};
+
 const AppContent: React.FC = () => {
   const logic = useAppLogic();
   const toast = useToast();
@@ -246,8 +262,12 @@ const AppContent: React.FC = () => {
                     aria-label="Toggle memories"
                   >
                     <div
-                      className="affect-glow avatar-breathe rounded-full"
-                      style={{ '--affect-color': 'rgba(212, 165, 116, 0.4)' } as React.CSSProperties}
+                      className="affect-glow avatar-breathe rounded-full transition-all duration-1000"
+                      style={
+                        {
+                          '--affect-color': affectToGlowColor(logic.currentAffect),
+                        } as React.CSSProperties
+                      }
                     >
                       <CharacterAvatar
                         name={logic.selectedCharacter.name}
