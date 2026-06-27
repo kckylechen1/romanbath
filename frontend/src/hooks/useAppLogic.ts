@@ -112,7 +112,8 @@ export const useAppLogic = () => {
     setActiveLeafId,
     toast,
     t,
-    chatPersistence.currentChatFileName
+    chatPersistence.currentChatFileName,
+    setActiveGroup
   );
 
   // Voice Input

@@ -305,11 +305,12 @@ async fn handle_streaming_chat(state: &AppState, req: ChatRequest) -> axum::resp
     let memory_dir = state.config.read().data_dir.clone();
 
     // Per-request max_tokens override (ephemeral — applies to this call only).
-    if req.max_tokens.is_some() {
-        state
-            .model_provider
-            .set_per_request_max_tokens(req.max_tokens);
-    }
+    // Set unconditionally: the provider holds this in shared state, so guarding
+    // on `is_some()` would leave a previous request's override in place for any
+    // later request that omits the field. Passing None clears it.
+    state
+        .model_provider
+        .set_per_request_max_tokens(req.max_tokens);
     let request_temperature = req.temperature;
 
     let messages = match build_messages(state, req).await {
@@ -564,11 +565,12 @@ async fn process_chat(state: &AppState, req: ChatRequest) -> anyhow::Result<Stri
     let uname = req.user_name.clone().unwrap_or_else(|| "User".to_string());
 
     // Per-request max_tokens override (ephemeral — applies to this call only).
-    if req.max_tokens.is_some() {
-        state
-            .model_provider
-            .set_per_request_max_tokens(req.max_tokens);
-    }
+    // Set unconditionally: the provider holds this in shared state, so guarding
+    // on `is_some()` would leave a previous request's override in place for any
+    // later request that omits the field. Passing None clears it.
+    state
+        .model_provider
+        .set_per_request_max_tokens(req.max_tokens);
     let request_temperature = req.temperature;
 
     let messages = build_messages(state, req).await?;

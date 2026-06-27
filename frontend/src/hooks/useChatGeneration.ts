@@ -40,7 +40,8 @@ export const useChatGeneration = (
   setActiveLeafId: React.Dispatch<React.SetStateAction<string | null>>,
   toast: ToastAPI,
   t: (key: string) => string,
-  currentChatFileName: string | null
+  currentChatFileName: string | null,
+  setActiveGroup: React.Dispatch<React.SetStateAction<GroupChat | null>>
 ): UseChatGenerationReturn => {
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -101,7 +102,13 @@ export const useChatGeneration = (
       const nextChar = selectNextCharacter(activeGroup, characters, inputText);
       if (nextChar) {
         respondingCharacter = nextChar;
-        updateGroupChat(activeGroup.id, { lastActiveCharacterId: nextChar.id });
+        // Persist AND sync the in-memory group, or selectNextCharacter keeps
+        // reading the stale lastActiveCharacterId next turn and round-robin
+        // returns the same speaker forever.
+        const updated = updateGroupChat(activeGroup.id, {
+          lastActiveCharacterId: nextChar.id,
+        });
+        if (updated) setActiveGroup(updated);
       }
     }
 
@@ -433,6 +440,7 @@ export const useChatGeneration = (
     buildChatRequest,
     buildChatMessagesForContext,
     currentChatFileName,
+    setActiveGroup,
   ]);
 
   const handleKeyDown = useCallback(

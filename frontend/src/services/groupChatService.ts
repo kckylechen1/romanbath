@@ -161,12 +161,13 @@ export const selectNextCharacter = (
     }
 
     case 'natural': {
-      // Natural conversation flow - AI decides based on context
-      // For now, use weighted random based on how long since they spoke
-      // In future, could use AI to determine most relevant speaker
+      // NOTE: 'natural' is currently identical to 'random' — a uniform pick
+      // excluding the last speaker. The intended behavior (weight by how long
+      // since each character spoke, or let the model choose the next speaker)
+      // is NOT implemented yet. Kept as a distinct mode so the wiring is ready;
+      // until it diverges, treat it as an alias of 'random'.
       if (groupCharacters.length === 1) return groupCharacters[0];
 
-      // Prefer someone who hasn't spoken recently
       const available = groupCharacters.filter((c) => c.id !== group.lastActiveCharacterId);
       if (available.length === 0) return groupCharacters[0];
 
