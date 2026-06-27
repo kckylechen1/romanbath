@@ -104,6 +104,10 @@ export const useChatGeneration = (
     wsChatRef.current = null;
     abortCtrlRef.current?.abort();
     abortCtrlRef.current = null;
+    // Re-hydrate from the server on (re)entry: clear the once-per-chat gate so
+    // switching away and back — or reconnecting — reconciles with the server
+    // tree again instead of trusting a possibly-stale local snapshot.
+    hydratedChatsRef.current.clear();
   }, [selectedCharacter.id, currentChatFileName]);
 
   // Connect-on-load: open the persistent socket when a chat WITH HISTORY is
@@ -128,13 +132,15 @@ export const useChatGeneration = (
       onDone: () => {},
       onError: () => {},
       onAffect: (affect) => setCurrentAffect(affect),
-      onHistory: (nodes, activeLeaf) => {
+      onHistory: (nodes) => {
         if (hydratedChatsRef.current.has(chatKey)) return;
         hydratedChatsRef.current.add(chatKey);
         setMessages((prev) => mergeServerNodes(prev, nodes));
-        // X3: on load (no in-flight turn) adopt the server's active branch so a
-        // fresh client / another device lands where the conversation left off.
-        if (activeLeaf) setActiveLeafId(activeLeaf);
+        // NOTE: adopting the server's active_leaf here (X3) is DEFERRED to
+        // increment 3. Local regenerate/swipe branches aren't server-synced yet
+        // (they go via REST), so the server's active_leaf is stale relative to
+        // them — adopting it would yank the user back to a pre-regenerate branch
+        // on every reload. Safe to adopt only once local branches selectLeaf.
       },
     });
     ws.connect(
@@ -146,7 +152,9 @@ export const useChatGeneration = (
       config.userDescription || undefined
     )
       .then(() => {
-        if (cancelled) ws.close();
+        // If a fast first send already opened a socket for this session, don't
+        // leak a second one — keep the send's socket, drop the load socket.
+        if (cancelled || wsChatRef.current?.isConnected) ws.close();
         else wsChatRef.current = ws;
       })
       .catch(() => ws.close());

@@ -935,6 +935,25 @@ async fn handle_socket(
                     let _ = sender.send(Message::Text(err.to_string().into())).await;
                     continue;
                 }
+                // Cap content + client-minted ids before they become persisted
+                // tree nodes (replayed in every history_snapshot). The REST path
+                // is bounded by RequestBodyLimitLayer(MAX_BODY_SIZE); WS frames
+                // bypass it, so enforce the same ceiling here. Ids are short
+                // (client uuids) — a generous 256-char cap rejects abuse.
+                const MAX_NODE_ID_LEN: usize = 256;
+                let ws_ids = parse_turn_node_ids(&parsed);
+                let id_too_long = [&ws_ids.parent_id, &ws_ids.user_msg_id, &ws_ids.assistant_msg_id]
+                    .iter()
+                    .any(|o| o.as_deref().is_some_and(|s| s.len() > MAX_NODE_ID_LEN));
+                if content.len() > crate::MAX_BODY_SIZE || id_too_long {
+                    let err = serde_json::json!({
+                        "type": "error",
+                        "message": "Message exceeds the maximum size",
+                        "code": "CONTENT_TOO_LARGE"
+                    });
+                    let _ = sender.send(Message::Text(err.to_string().into())).await;
+                    continue;
+                }
 
                 // Acquire session lock to serialize concurrent turns
                 let _session_guard = match state.session_queue.acquire(&session_key).await {
@@ -1173,6 +1192,14 @@ fn persist_turn_as_nodes(
     };
     if let Err(e) = backend.append_node(session_key, &user_node) {
         log_err("user", &user_id, e);
+        // Distinguish a benign UNIQUE conflict (the node already exists — a
+        // client id reuse, fine to chain the assistant under it) from a REAL
+        // write failure. If the user row genuinely isn't there, attaching the
+        // assistant to it would dangle the parent and orphan ALL prior history
+        // on resume (flatten_active_path breaks at the missing node). Bail.
+        if !backend.node_exists(session_key, &user_id) {
+            return None;
+        }
     }
 
     // Assistant node, chained under the user node.

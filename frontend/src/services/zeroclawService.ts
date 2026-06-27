@@ -1440,6 +1440,14 @@ export class WsChatConnection {
               this.callbacks.onDone(this.fullText || frame.full_response || '');
               break;
             case 'error':
+              // A select_leaf rejection (unknown leaf on a local-only branch the
+              // server hasn't seen) is best-effort connection-level feedback —
+              // it must NOT route to the turn's onError, or a swipe after a turn
+              // would clobber the last assistant message with an error banner.
+              if (frame.code === 'INVALID_SELECT_LEAF') {
+                console.warn('select_leaf rejected (leaf not on server):', frame.message);
+                break;
+              }
               this.turnSettled = true;
               this.callbacks.onError(frame.message || frame.error || 'Unknown error');
               break;
