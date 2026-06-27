@@ -14,6 +14,7 @@ import {
 } from '../services/imageGenService';
 import { selectNextCharacter, updateGroupChat } from '../services/groupChatService';
 import { useChatHelpers } from './useChatHelpers';
+import { mergeServerNodes } from './useMessageTree';
 import { generateId } from '../utils/id';
 import type { ToastAPI } from '../components/Toast';
 import { expandMacros, type MacroContext } from '../services/macroService';
@@ -329,6 +330,12 @@ export const useChatGeneration = (
               setIsTyping(false);
             },
             onAffect: (affect) => setCurrentAffect(affect),
+            onHistory: (nodes) => {
+              // Reconcile with the server-authoritative tree (cross-device /
+              // replaceable frontend). Union by id — local nodes are kept, so
+              // an in-flight turn isn't disturbed; same-device this is a no-op.
+              setMessages((prev) => mergeServerNodes(prev, nodes));
+            },
           });
           // Stable session id per (character, chat thread) so the gateway
           // resumes this conversation's server-side session instead of
@@ -344,7 +351,14 @@ export const useChatGeneration = (
             config.userDescription || undefined
           );
           wsChatRef.current = ws;
-          wsChatRef.current.send(expandedInput);
+          // Send the client-minted node ids so the server stores the same tree
+          // the client renders: this user turn (userMsg.id under parentForUser)
+          // and the assistant placeholder (botMsgId).
+          wsChatRef.current.send(expandedInput, {
+            msgId: userMsg.id,
+            parentId: parentForUser,
+            assistantMsgId: botMsgId,
+          });
           usedWs = true;
         } catch (wsErr) {
           console.warn('WebSocket chat unavailable for character, falling back to REST:', wsErr);

@@ -12,7 +12,43 @@
 // until the user switches to them.
 
 import { useMemo } from 'react';
-import type { Message } from '../types';
+import { type Message, Role } from '../types';
+
+/** A node from the server's authoritative conversation tree (Solution B). */
+export interface ServerHistoryNode {
+  id: string;
+  parent_id: string | null;
+  role: string; // "user" | "assistant"
+  content: string;
+  timestamp?: string | null;
+}
+
+/**
+ * Reconcile the local message tree with the server's authoritative snapshot by
+ * UNION ON ID. Nodes the client already has are left untouched (so an in-flight
+ * or locally-edited node isn't clobbered); nodes only the server has — e.g. a
+ * turn from another device — are added. Because the client now sends its minted
+ * ids, same-device snapshots are a subset of the local tree and this is a no-op;
+ * the merge only does work for genuine cross-device / fresh-client reconciliation.
+ * The snapshot is a self-contained tree, so added nodes' parents are present too.
+ */
+export const mergeServerNodes = (local: Message[], nodes: ServerHistoryNode[]): Message[] => {
+  if (nodes.length === 0) return local;
+  const have = new Set(local.map((m) => m.id));
+  const additions: Message[] = [];
+  for (const n of nodes) {
+    if (have.has(n.id)) continue;
+    additions.push({
+      id: n.id,
+      role: n.role === 'user' ? Role.User : Role.Model,
+      content: n.content,
+      timestamp: n.timestamp ? Date.parse(n.timestamp) || Date.now() : Date.now(),
+      parentId: n.parent_id ?? null,
+      childrenIds: [],
+    });
+  }
+  return additions.length === 0 ? local : [...local, ...additions];
+};
 
 export interface MessageTree {
   byId: Map<string, Message>;

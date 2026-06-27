@@ -1170,6 +1170,19 @@ export interface AffectState {
   confidence: number;
 }
 
+/** One node from a server history_snapshot — the server-authoritative
+ *  conversation tree (Solution B). Shape mirrors ws.rs's snapshot frame. */
+export interface WsHistoryNode {
+  id: string;
+  parent_id: string | null;
+  role: string; // "user" | "assistant"
+  content: string;
+  author_id?: string | null;
+  status?: string | null;
+  meta?: unknown;
+  timestamp?: string | null;
+}
+
 export interface WsChatCallbacks {
   onChunk: (chunk: string, fullText: string) => void;
   onToolCall: (toolName: string) => void;
@@ -1184,6 +1197,17 @@ export interface WsChatCallbacks {
   onFirstMessage?: (text: string) => void;
   /** Fired when a done frame carries a perceived affect state (may be null). */
   onAffect?: (affect: AffectState | null) => void;
+  /** Fired on connect with the server-authoritative conversation tree, so the
+   *  client can reconcile its local view (cross-device / replaceable frontend). */
+  onHistory?: (nodes: WsHistoryNode[], activeLeaf: string | null) => void;
+}
+
+/** Client-minted node ids for a turn, sent on the message frame so the server
+ *  stores the same tree the client renders (Solution B Phase 2). */
+export interface WsSendIds {
+  msgId?: string;
+  parentId?: string | null;
+  assistantMsgId?: string;
 }
 
 const WS_URL = (agentAlias: string = 'default', token?: string, sessionId?: string) => {
@@ -1384,6 +1408,12 @@ export class WsChatConnection {
               );
               break;
             }
+            case 'history_snapshot':
+              this.callbacks.onHistory?.(
+                (frame.nodes as WsHistoryNode[]) ?? [],
+                (frame.active_leaf as string | null) ?? null
+              );
+              break;
             case 'done':
               this.turnSettled = true;
               if (this.callbacks.onAffect && 'affect' in frame) {
@@ -1426,13 +1456,25 @@ export class WsChatConnection {
     });
   }
 
-  send(content: string): void {
+  send(content: string, ids?: WsSendIds): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not connected');
     }
     this.turnSettled = false;
-    this.ws.send(JSON.stringify({ type: 'message', content }));
+    const frame: Record<string, unknown> = { type: 'message', content };
+    // Send the client-minted node ids so the server stores the same tree the
+    // client renders (so optimistic UI + cross-device reconcile by id).
+    if (ids?.msgId) frame.msg_id = ids.msgId;
+    if (ids?.parentId) frame.parent_id = ids.parentId;
+    if (ids?.assistantMsgId) frame.assistant_msg_id = ids.assistantMsgId;
+    this.ws.send(JSON.stringify(frame));
     this.fullText = '';
+  }
+
+  /** Tell the server which leaf is the active branch (zero-generation). */
+  selectLeaf(leafId: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'select_leaf', leaf_id: leafId }));
   }
 
   close(): void {
