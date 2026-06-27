@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { MessageCircle, Sparkles, Clock, X, Upload } from 'lucide-react';
 import { LanguageProvider } from './i18n';
 import { getTimeSinceLastChat } from './services/chatPersistenceService';
+import { Role } from './types';
+import { AFFECT_CONFIDENCE_FLOOR } from './utils/affect';
 
 // Hooks
 import { useAppLogic } from './hooks/useAppLogic';
@@ -24,6 +26,8 @@ import { useToast } from './components/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import DialogHost from './components/DialogHost';
 import MemoryControls from './components/studio/MemoryControls';
+import AffectReadout from './components/AffectReadout';
+import GreetingPicker from './components/chat/GreetingPicker';
 import StudioRail from './components/StudioRail';
 import { ContextInspector } from './components/studio/ContextInspector';
 import { ConversationTree } from './components/studio/ConversationTree';
@@ -39,7 +43,7 @@ const DEFAULT_GLOW = 'rgba(212, 165, 116, 0.4)';
 const affectToGlowColor = (
   affect: { valence: number; arousal: number; confidence: number } | null
 ): string => {
-  if (!affect || affect.confidence < 0.35) return DEFAULT_GLOW;
+  if (!affect || affect.confidence < AFFECT_CONFIDENCE_FLOOR) return DEFAULT_GLOW;
   const v = Math.max(-1, Math.min(1, affect.valence));
   // Hue: ~40° (warm amber) at v=+1 → ~165° (verdigris) at v=-1.
   const hue = 40 + ((1 - (v + 1) / 2) * (165 - 40));
@@ -60,6 +64,33 @@ const AppContent: React.FC = () => {
   };
 
   const commands = useMemo(() => buildCommands(logic), [logic]);
+
+  // UX-6: the conversation is "still at its opening greeting" when there is a
+  // single Model message and no user turns yet. Alternate greetings are a
+  // single-character (companion) affordance — never surface them in group chat.
+  const atOpeningGreeting =
+    !logic.activeGroup &&
+    logic.selectedCharacter.id !== 'default' &&
+    logic.activePath.length === 1 &&
+    logic.activePath[0]?.role === Role.Model;
+
+  // Swap the displayed opening greeting client-side. Guarded so it only ever
+  // touches a lone Model greeting (never an in-progress conversation). Mirrors
+  // useChatPersistence, which stores firstMessage raw (no macro expansion), so
+  // alternates render identically to the default greeting.
+  const setMessages = logic.setMessages;
+  const replaceOpeningGreeting = useCallback(
+    (content: string) => {
+      setMessages((prev) => {
+        if (prev.length !== 1) return prev;
+        const only = prev[0];
+        if (only.role !== Role.Model) return prev;
+        if (only.content === content) return prev;
+        return [{ ...only, content }];
+      });
+    },
+    [setMessages]
+  );
 
   // Studio and Settings share the right edge — opening one closes the other so
   // they never stack awkwardly (mirrors the app's single-right-panel layout).
@@ -314,6 +345,7 @@ const AppContent: React.FC = () => {
                     {logic.selectedCharacter.description?.slice(0, 80)}
                     {(logic.selectedCharacter.description?.length ?? 0) > 80 ? '…' : ''}
                   </p>
+                  <AffectReadout affect={logic.currentAffect} />
                 </div>
               </>
             )}
@@ -345,6 +377,13 @@ const AppContent: React.FC = () => {
                   />
                 );
               })}
+              {atOpeningGreeting && logic.activePath[0] && (
+                <GreetingPicker
+                  character={logic.selectedCharacter}
+                  currentContent={logic.activePath[0].content}
+                  onSelect={replaceOpeningGreeting}
+                />
+              )}
               <div ref={logic.chatEndRef} className="h-4" />
             </div>
           </div>

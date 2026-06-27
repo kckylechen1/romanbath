@@ -14,6 +14,7 @@ import {
   Volume2,
   VolumeX,
   Image,
+  MoreVertical,
 } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 
@@ -84,7 +85,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   isGenerating = false,
 }) => {
   const isUser = message.role === Role.User;
-  const [showActions, setShowActions] = useState(false);
+  // Hover (desktop) and an explicit tap-toggle (touch) both reveal the toolbar.
+  // The last assistant message keeps its actions always visible so the primary
+  // affordances are reachable without any interaction.
+  const [hovered, setHovered] = useState(false);
+  const [toggled, setToggled] = useState(false);
+  const alwaysShow = isLastMessage && !isUser && !message.isThinking;
+  const showActions = hovered || toggled || alwaysShow;
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -129,8 +136,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     <div
       className={`flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'} animate-message-in`}
       style={{ contain: 'layout' }}
-      onMouseEnter={() => setShowActions(true)}
-      onMouseLeave={() => setShowActions(false)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <div
         className={`flex max-w-[90%] md:max-w-[80%] ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
@@ -177,6 +184,24 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   }
                 `}
               >
+                {/* Persistent toggle affordance so the toolbar is reachable on
+                    touch (where hover never fires). Subtle at rest, full on
+                    interaction; sits in a stable corner of the bubble. Skipped
+                    on the last assistant message, whose toolbar is always shown
+                    (the toggle would be inert there). */}
+                {!message.isThinking && !alwaysShow && (
+                  <button
+                    type="button"
+                    onClick={() => setToggled((v) => !v)}
+                    aria-label={showActions ? 'Hide message actions' : 'Show message actions'}
+                    aria-expanded={showActions}
+                    className={`absolute -top-2.5 ${isUser ? '-left-2.5' : '-right-2.5'} z-10 flex items-center justify-center w-9 h-9 rounded-full bg-bath-900/80 border border-bath-700/20 text-bath-500 hover:text-bath-200 transition-all ${
+                      toggled ? 'opacity-100' : 'opacity-40 hover:opacity-100 focus:opacity-100'
+                    }`}
+                  >
+                    <MoreVertical size={15} />
+                  </button>
+                )}
                 <div className="whitespace-pre-wrap font-sans">
                   {isUser ? (
                     message.content
@@ -230,7 +255,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
               {/* Action Toolbar - appears on hover */}
               {showActions && !message.isThinking && (
                 <div
-                  className={`flex gap-1 mt-2 bg-bath-900/90 rounded-lg p-1 shadow-lg border border-bath-700/20 animate-in fade-in slide-in-from-bottom-2 duration-150`}
+                  className={`flex gap-1 mt-2 bg-bath-900/90 rounded-lg p-1 shadow-lg border border-bath-700/20 animate-message-in`}
                 >
                   {/* Edit */}
                   <button
