@@ -421,10 +421,10 @@ impl SessionBackend for SqliteSessionBackend {
         )
         .map_err(std::io::Error::other)?;
 
-        // NOTE: FTS index becomes stale here (no UPDATE trigger, only
-        // INSERT/DELETE triggers). This is acceptable — update_last is
-        // used for transient streaming snapshots. The final content will
-        // be correct in the sessions table for load().
+        // FTS stays in sync: the `sessions_au` AFTER UPDATE trigger re-indexes
+        // the row on every UPDATE (not just INSERT/DELETE). update_last is used
+        // for transient streaming snapshots; the final content is correct both
+        // in the sessions table (load()) and in the FTS index (search()).
 
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
@@ -958,9 +958,9 @@ impl SessionBackend for SqliteSessionBackend {
     fn update_node(&self, session_key: &str, node: &ConversationNode) -> std::io::Result<bool> {
         let conn = self.conn.lock();
         let meta_str = node.meta.as_ref().map(std::string::ToString::to_string);
-        // Unlike `update_last` (which UPDATEs and leaves the FTS index stale),
-        // this also targets by msg_id and fires the sessions_au trigger, so
-        // search stays correct even for streamed-then-finalized nodes.
+        // Targets the specific node by msg_id (not the tail like update_last),
+        // so streaming updates land on the right tree node. The UPDATE fires
+        // sessions_au, keeping FTS in sync (same as update_last).
         conn.execute(
             "UPDATE sessions SET role = ?1, content = ?2, node_status = ?3, node_meta = ?4
              WHERE session_key = ?5 AND msg_id = ?6",
@@ -1068,12 +1068,18 @@ impl SessionBackend for SqliteSessionBackend {
     }
 
     fn conversation_tip(&self, session_key: &str) -> Option<String> {
-        if let Some(leaf) = self.get_active_leaf(session_key) {
-            return Some(leaf);
-        }
         let tree = self.load_tree(session_key);
         let by_id: HashMap<&str, &ConversationNode> =
             tree.iter().map(|n| (n.msg_id.as_str(), n)).collect();
+        // Trust the stored active leaf ONLY if it still exists in the tree —
+        // mirror flatten_active_path's read-side guard. A dangling active_leaf
+        // (deleted node, client desync) must fall back to the deepest leaf, or
+        // the next turn would attach under a dangling parent and orphan history.
+        if let Some(leaf) = self.get_active_leaf(session_key)
+            && by_id.contains_key(leaf.as_str())
+        {
+            return Some(leaf);
+        }
         deepest_leaf(&tree, &by_id)
     }
 
@@ -1177,7 +1183,15 @@ fn deepest_leaf(nodes: &[ConversationNode], by_id: &HashMap<&str, &ConversationN
             _ => roots.push(n.msg_id.as_str()),
         }
     }
-    let mut cur = *roots.last()?;
+    // No root means every node's parent is itself in the tree — a cycle (only
+    // reachable via a malformed/hostile client; current ops can't create one
+    // now that parent refs are validated). Degrade gracefully to the most
+    // recent node by input order rather than returning None (which would make
+    // flatten_active_path read the whole session as empty, permanently).
+    let mut cur = match roots.last() {
+        Some(r) => *r,
+        None => return nodes.last().map(|n| n.msg_id.clone()),
+    };
     loop {
         match children.get(cur).and_then(|c| c.last().copied()) {
             Some(child) => cur = child,
@@ -1849,8 +1863,8 @@ mod tests {
         assert_eq!(a1.content, "polished final answer");
         assert_eq!(a1.status.as_deref(), Some("complete"));
 
-        // FTS reflects the update (the new word matches, the old does not) —
-        // update_node fires sessions_au, unlike the FTS-stale update_last.
+        // FTS reflects the update (the new word matches, the old does not):
+        // the UPDATE fires sessions_au, re-indexing the row.
         let hit = backend.search(&SessionQuery { keyword: Some("polished".into()), limit: Some(10) });
         assert_eq!(hit.len(), 1);
         let stale = backend.search(&SessionQuery { keyword: Some("draft".into()), limit: Some(10) });
@@ -1877,6 +1891,52 @@ mod tests {
 
         // Deleting a non-existent node is a no-op.
         assert!(backend.delete_subtree("c", "ghost").unwrap().is_empty());
+    }
+
+    #[test]
+    fn conversation_tip_ignores_dangling_active_leaf() {
+        // The data-loss guard: a stale/dangling active_leaf (e.g. a deleted node
+        // or client desync) must NOT be trusted as the attach point — it would
+        // orphan history. conversation_tip falls back to the real deepest leaf,
+        // and node_exists reports the dangling ref as absent.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend.append_node("c", &node("u1", None, "user", "hi")).unwrap();
+        backend.append_node("c", &node("a1", Some("u1"), "assistant", "hello")).unwrap();
+
+        // Point active_leaf at a node that doesn't exist.
+        backend.set_active_leaf("c", "ghost").unwrap();
+        assert!(!backend.node_exists("c", "ghost"));
+        // Tip ignores the dangling leaf and returns the real deepest leaf.
+        assert_eq!(backend.conversation_tip("c").as_deref(), Some("a1"));
+        // So a new turn still attaches to real history (no orphaning).
+        backend.append_node("c", &node("u2", backend.conversation_tip("c").as_deref(), "user", "again")).unwrap();
+        let path = backend.load_active_path("c");
+        assert_eq!(path.len(), 3, "full history preserved despite the dangling leaf");
+    }
+
+    #[test]
+    fn deepest_leaf_degrades_gracefully_on_cycle() {
+        // A poisoned tree (every node's parent in-tree → no root → a cycle) must
+        // not read as a permanently-empty session. We can't create a cycle via
+        // the validated ops, so construct one directly in the table.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        {
+            let conn = backend.conn.lock();
+            let now = Utc::now().to_rfc3339();
+            // a→b and b→a: both parents resolve in-tree, leaving zero roots.
+            conn.execute(
+                "INSERT INTO sessions (session_key, role, content, created_at, msg_id, parent_id) VALUES ('c','user','x',?1,'a','b')",
+                params![now],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (session_key, role, content, created_at, msg_id, parent_id) VALUES ('c','assistant','y',?1,'b','a')",
+                params![now],
+            ).unwrap();
+        }
+        // Degrades to the most-recent node rather than returning None/empty.
+        assert!(backend.conversation_tip("c").is_some());
     }
 
     #[test]

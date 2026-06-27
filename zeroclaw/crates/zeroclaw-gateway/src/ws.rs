@@ -894,6 +894,18 @@ async fn handle_socket(
                         continue;
                     }
                     if let Some(ref backend) = state.session_backend {
+                        // Validate membership before recording — set_active_leaf
+                        // is a blind UPSERT, and a dangling active_leaf would
+                        // orphan history on the next turn (see conversation_tip).
+                        if !backend.node_exists(&session_key, leaf_id) {
+                            let err = serde_json::json!({
+                                "type": "error",
+                                "message": "select_leaf: unknown leaf_id (not a node in this conversation)",
+                                "code": "INVALID_SELECT_LEAF"
+                            });
+                            let _ = sender.send(Message::Text(err.to_string().into())).await;
+                            continue;
+                        }
                         let _ = backend.set_active_leaf(&session_key, leaf_id);
                     }
                     let ack = serde_json::json!({ "type": "active_leaf", "active_leaf": leaf_id });
@@ -1123,11 +1135,13 @@ fn persist_turn_as_nodes(
 
     let first_user = chats.iter().position(|c| c.role == "user");
     let last_assistant = chats.iter().rposition(|c| c.role == "assistant");
-    // Attach under the client-chosen parent, else the current tip.
-    let mut parent = ids
-        .parent_id
-        .clone()
-        .or_else(|| backend.conversation_tip(session_key));
+    // Attach under the client-chosen parent ONLY if it actually exists in the
+    // tree; a bogus/dangling client parent_id would orphan history on resume,
+    // so fall back to the validated tip. (Mirrors conversation_tip's guard.)
+    let mut parent = match ids.parent_id.as_deref() {
+        Some(p) if backend.node_exists(session_key, p) => Some(p.to_string()),
+        _ => backend.conversation_tip(session_key),
+    };
     let mut last_id: Option<String> = None;
 
     for (i, c) in chats.iter().enumerate() {
@@ -1151,7 +1165,22 @@ fn persist_turn_as_nodes(
             meta: None,
             created_at: None,
         };
-        let _ = backend.append_node(session_key, &node);
+        // Don't swallow the insert error: a UNIQUE(session_key,msg_id) conflict
+        // (a client reusing an id on retry) must not silently drop content and
+        // leave the chain advancing onto a node we didn't write. Stop the chain
+        // and keep the active leaf at the last node we actually persisted.
+        if let Err(e) = backend.append_node(session_key, &node) {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "session_key": session_key, "msg_id": msg_id, "error": e.to_string(),
+                    })),
+                "append_node failed while persisting turn (chain truncated at last good node)"
+            );
+            break;
+        }
         parent = Some(msg_id.clone());
         last_id = Some(msg_id);
     }
@@ -1912,6 +1941,9 @@ async fn process_chat_message(
                 // The server-side conversation node this turn landed on, so the
                 // client can bind its streamed placeholder to the tree.
                 "node_id": persisted_leaf,
+                // The active leaf after this turn. Equal to node_id today, but
+                // sent explicitly so the frozen contract holds if they diverge.
+                "active_leaf": persisted_leaf,
             });
             let _ = sender.send(Message::Text(done.to_string().into())).await;
 

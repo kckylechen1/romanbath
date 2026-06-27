@@ -383,6 +383,17 @@ pub trait SessionBackend: Send + Sync {
     fn conversation_tip(&self, session_key: &str) -> Option<String> {
         self.get_active_leaf(session_key)
     }
+
+    /// Whether a node with `msg_id` exists in the session's tree. Used to
+    /// validate client-supplied tree references (parent_id, leaf_id) on the
+    /// WRITE side, mirroring the read side's membership guard — an unvalidated
+    /// dangling reference would otherwise orphan history on resume. Default
+    /// checks `load_tree` membership (so synthesized linear ids count too).
+    fn node_exists(&self, session_key: &str, msg_id: &str) -> bool {
+        self.load_tree(session_key)
+            .iter()
+            .any(|n| n.msg_id == msg_id)
+    }
 }
 
 /// Session state information.
