@@ -1165,10 +1165,16 @@ export interface WsChatCallbacks {
   onFirstMessage?: (text: string) => void;
 }
 
-const WS_URL = (agentAlias: string = 'default', token?: string) => {
+const WS_URL = (agentAlias: string = 'default', token?: string, sessionId?: string) => {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const params = new URLSearchParams({ agent: agentAlias });
   if (token) params.set('token', token);
+  // The query-param session_id is what the gateway turns into its session_key
+  // (ws.rs builds session_key from the query param *before* reading the connect
+  // frame). Sending a stable id per (character, chat thread) lets the backend
+  // resume the session — seed_history + recall — instead of spinning up a fresh
+  // amnesiac session on every message.
+  if (sessionId) params.set('session_id', sessionId);
   return `${proto}//${window.location.host}/ws/chat?${params.toString()}`;
 };
 
@@ -1276,6 +1282,10 @@ export class WsChatConnection {
   private callbacks: WsChatCallbacks;
   private fullText = '';
   private token: string;
+  // False while a turn is streaming (between send() and its done/error frame).
+  // Lets onclose tell "closed mid-reply" (surface an error so the UI unsticks)
+  // apart from "closed at rest" (silent, expected).
+  private turnSettled = true;
 
   constructor(callbacks: WsChatCallbacks) {
     this.callbacks = callbacks;
@@ -1286,11 +1296,13 @@ export class WsChatConnection {
     characterName: string,
     mode?: string,
     userName?: string,
-    agentAlias?: string
+    agentAlias?: string,
+    sessionId?: string
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(WS_URL(agentAlias, this.token));
+      this.ws = new WebSocket(WS_URL(agentAlias, this.token, sessionId));
       this.fullText = '';
+      let opened = false;
 
       const timer = setTimeout(() => {
         if (this.ws?.readyState !== WebSocket.OPEN) {
@@ -1300,12 +1312,17 @@ export class WsChatConnection {
       }, 10000);
 
       this.ws.onopen = () => {
+        opened = true;
         const connectFrame: Record<string, unknown> = {
           type: 'connect',
           character_name: characterName,
           character_mode: mode || 'play',
           user_name: userName || 'User',
         };
+        // Mirror the session id into the connect frame too: the query param
+        // drives the gateway's session_key (history resume), the connect-frame
+        // id drives memory_session_id (sigil). Same value keeps them aligned.
+        if (sessionId) connectFrame.session_id = sessionId;
         this.ws!.send(JSON.stringify(connectFrame));
       };
 
@@ -1343,9 +1360,11 @@ export class WsChatConnection {
               break;
             }
             case 'done':
+              this.turnSettled = true;
               this.callbacks.onDone(this.fullText || frame.full_response || '');
               break;
             case 'error':
+              this.turnSettled = true;
               this.callbacks.onError(frame.message || frame.error || 'Unknown error');
               break;
             default:
@@ -1363,6 +1382,18 @@ export class WsChatConnection {
       };
       this.ws.onclose = () => {
         clearTimeout(timer);
+        if (!opened) {
+          // Closed before the socket ever opened — connect() never resolved.
+          reject(new Error('WebSocket closed before connect'));
+          return;
+        }
+        // Opened, but the socket dropped while a reply was still streaming.
+        // Without this the turn's done/error frame never arrives and the UI
+        // hangs with isTyping stuck on forever.
+        if (!this.turnSettled) {
+          this.turnSettled = true;
+          this.callbacks.onError('Connection closed before the reply finished');
+        }
       };
     });
   }
@@ -1371,6 +1402,7 @@ export class WsChatConnection {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not connected');
     }
+    this.turnSettled = false;
     this.ws.send(JSON.stringify({ type: 'message', content }));
     this.fullText = '';
   }

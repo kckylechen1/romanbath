@@ -39,7 +39,8 @@ export const useChatGeneration = (
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>,
   setActiveLeafId: React.Dispatch<React.SetStateAction<string | null>>,
   toast: ToastAPI,
-  t: (key: string) => string
+  t: (key: string) => string,
+  currentChatFileName: string | null
 ): UseChatGenerationReturn => {
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -311,7 +312,18 @@ export const useChatGeneration = (
               setIsTyping(false);
             },
           });
-          await ws.connect(respondingCharacter.name, 'play', config.userName || undefined);
+          // Stable session id per (character, chat thread) so the gateway
+          // resumes this conversation's server-side session instead of
+          // starting amnesiac each message. Different threads / characters
+          // get different ids, so context never bleeds across them.
+          const sessionId = `companion:${respondingCharacter.id}:${currentChatFileName ?? 'default'}`;
+          await ws.connect(
+            respondingCharacter.name,
+            'play',
+            config.userName || undefined,
+            undefined,
+            sessionId
+          );
           wsChatRef.current = ws;
           wsChatRef.current.send(expandedInput);
           usedWs = true;
@@ -420,6 +432,7 @@ export const useChatGeneration = (
     buildChatOptions,
     buildChatRequest,
     buildChatMessagesForContext,
+    currentChatFileName,
   ]);
 
   const handleKeyDown = useCallback(

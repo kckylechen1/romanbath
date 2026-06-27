@@ -629,16 +629,22 @@ async fn handle_socket(
                 &memory_context,
             ) {
                 Ok((Some(first_mes), companion)) => {
-                    let chunk = serde_json::json!({
-                        "type": "chunk",
-                        "content": first_mes,
-                    });
-                    let _ = sender.send(Message::Text(chunk.to_string().into())).await;
-                    let done = serde_json::json!({
-                        "type": "done",
-                        "full_response": first_mes,
-                    });
-                    let _ = sender.send(Message::Text(done.to_string().into())).await;
+                    // Only greet on a brand-new session. On a resumed session
+                    // (stable client session_id) re-sending first_mes would
+                    // replay the opening line as a fresh bot turn on every
+                    // reconnect — noise once the conversation is underway.
+                    if !resumed {
+                        let chunk = serde_json::json!({
+                            "type": "chunk",
+                            "content": first_mes,
+                        });
+                        let _ = sender.send(Message::Text(chunk.to_string().into())).await;
+                        let done = serde_json::json!({
+                            "type": "done",
+                            "full_response": first_mes,
+                        });
+                        let _ = sender.send(Message::Text(done.to_string().into())).await;
+                    }
                     companion.unwrap_or_default()
                 }
                 Ok((None, companion)) => companion.unwrap_or_default(),
