@@ -456,6 +456,105 @@ pub async fn handle_character_memories(
     }
 }
 
+// ── Per-character companion settings ──────────────────────────────────
+//
+// Server-owned store so a thin client (web today, native later) persists its
+// generation / prompt-shaping settings server-side instead of re-sending them
+// every request. Settings are an opaque JSON object (the frontend's persistable
+// ChatConfig subset). The gateway does NOT interpret the fields here — later
+// phases read specific keys when applying them to the prompt; storing a blob
+// lets the client add fields without a backend change. Keyed by the same
+// sanitized name as the avatar/card so rename and delete move both together.
+
+fn companion_settings_path(data_dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    data_dir
+        .join("companion_settings")
+        .join(format!("{}.json", sanitize_filename_safe(name)))
+}
+
+/// Read a character's settings blob, or `{}` if none saved yet.
+fn read_companion_settings(data_dir: &std::path::Path, name: &str) -> serde_json::Value {
+    let path = companion_settings_path(data_dir, name);
+    std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Persist a character's settings blob (must be a JSON object).
+fn write_companion_settings(
+    data_dir: &std::path::Path,
+    name: &str,
+    settings: &serde_json::Value,
+) -> std::io::Result<()> {
+    let path = companion_settings_path(data_dir, name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, serde_json::to_vec_pretty(settings).unwrap_or_default())
+}
+
+/// Move a character's settings sidecar on rename (best-effort; no-op if absent).
+fn rename_companion_settings(data_dir: &std::path::Path, old_name: &str, new_name: &str) {
+    let from = companion_settings_path(data_dir, old_name);
+    let to = companion_settings_path(data_dir, new_name);
+    if from != to && from.exists() {
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::rename(&from, &to);
+    }
+}
+
+/// Remove a character's settings sidecar on delete (best-effort).
+fn delete_companion_settings(data_dir: &std::path::Path, name: &str) {
+    let _ = std::fs::remove_file(companion_settings_path(data_dir, name));
+}
+
+/// GET /api/characters/{name}/settings — the character's saved companion
+/// settings (generation params, prompt-shaping). Returns `{}` if none saved.
+pub async fn handle_get_character_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+    let data_dir = state.config.read().data_dir.clone();
+    let settings = read_companion_settings(&data_dir, &name);
+    (StatusCode::OK, Json(settings)).into_response()
+}
+
+/// PUT /api/characters/{name}/settings — persist the character's companion
+/// settings. Body must be a JSON object.
+pub async fn handle_put_character_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+    if !body.is_object() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "settings body must be a JSON object" })),
+        )
+            .into_response();
+    }
+    let data_dir = state.config.read().data_dir.clone();
+    match write_companion_settings(&data_dir, &name, &body) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn handle_delete_character(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -466,7 +565,12 @@ pub async fn handle_delete_character(
     }
 
     match delete_character(&name) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
+        Ok(()) => {
+            // Clean up the settings sidecar alongside the card (best-effort).
+            let data_dir = state.config.read().data_dir.clone();
+            delete_companion_settings(&data_dir, &name);
+            (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response()
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -679,6 +783,8 @@ fn update_character_data(
                 "character rename: memory DB migration failed (card renamed anyway)"
             );
         }
+        // Settings sidecar follows the rename too, like the avatar and memory.
+        rename_companion_settings(data_dir, previous_name, &data.name);
         let _ = mgr.delete(previous_name);
     }
     let card = default_card(data);
@@ -1172,5 +1278,41 @@ mod tests {
         // the shape so a future format swap is caught here.
         assert_eq!(id.len(), 36);
         assert_eq!(id.chars().filter(|c| *c == '-').count(), 4);
+    }
+
+    #[test]
+    fn companion_settings_round_trip_rename_and_delete() {
+        use super::{
+            delete_companion_settings, read_companion_settings, rename_companion_settings,
+            write_companion_settings,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path();
+
+        // Unsaved → empty object, never an error.
+        assert_eq!(
+            read_companion_settings(data_dir, "Aria"),
+            serde_json::json!({})
+        );
+
+        // Round-trip.
+        let settings = serde_json::json!({ "temperature": 0.8, "promptOrder": "scenario_last" });
+        write_companion_settings(data_dir, "Aria", &settings).unwrap();
+        assert_eq!(read_companion_settings(data_dir, "Aria"), settings);
+
+        // Rename moves the sidecar; the old name reads empty again.
+        rename_companion_settings(data_dir, "Aria", "Aria Prime");
+        assert_eq!(read_companion_settings(data_dir, "Aria Prime"), settings);
+        assert_eq!(
+            read_companion_settings(data_dir, "Aria"),
+            serde_json::json!({})
+        );
+
+        // Delete removes it.
+        delete_companion_settings(data_dir, "Aria Prime");
+        assert_eq!(
+            read_companion_settings(data_dir, "Aria Prime"),
+            serde_json::json!({})
+        );
     }
 }

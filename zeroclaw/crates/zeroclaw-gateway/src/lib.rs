@@ -1432,6 +1432,11 @@ pub async fn run_gateway(
         .route("/api/characters/{name}/duplicate", post(api_characters::handle_duplicate_character))
         .route("/api/characters/{name}/memories", get(api_characters::handle_character_memories))
         .route(
+            "/api/characters/{name}/settings",
+            get(api_characters::handle_get_character_settings)
+                .put(api_characters::handle_put_character_settings),
+        )
+        .route(
             "/api/characters/{name}/avatar",
             get(api_characters::handle_character_avatar)
                 .post(api_characters::handle_upload_character_avatar)
