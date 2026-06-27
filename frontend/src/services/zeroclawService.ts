@@ -1318,7 +1318,8 @@ export class WsChatConnection {
     mode?: string,
     userName?: string,
     agentAlias?: string,
-    sessionId?: string
+    sessionId?: string,
+    userDescription?: string
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(WS_URL(agentAlias, this.token, sessionId));
@@ -1340,6 +1341,9 @@ export class WsChatConnection {
           character_mode: mode || 'play',
           user_name: userName || 'User',
         };
+        // User persona ("who the user is") so the card prompt addresses them
+        // correctly — the WS counterpart of the SSE path's user_description.
+        if (userDescription) connectFrame.user_description = userDescription;
         // Mirror the session id into the connect frame too: the query param
         // drives the gateway's session_key (history resume), the connect-frame
         // id drives memory_session_id (sigil). Same value keeps them aligned.

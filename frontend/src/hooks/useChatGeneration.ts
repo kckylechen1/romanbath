@@ -340,7 +340,8 @@ export const useChatGeneration = (
             'play',
             config.userName || undefined,
             undefined,
-            sessionId
+            sessionId,
+            config.userDescription || undefined
           );
           wsChatRef.current = ws;
           wsChatRef.current.send(expandedInput);

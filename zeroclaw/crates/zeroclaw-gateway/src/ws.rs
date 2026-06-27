@@ -108,6 +108,12 @@ struct ConnectParams {
     /// User display name for character card prompt building
     #[serde(default)]
     user_name: Option<String>,
+    /// User persona / self-description ("who the user is"), injected into the
+    /// card prompt so the character knows who it's talking to. Per-connection
+    /// identity supplied by the client — the SSE path takes the same value as
+    /// `user_description`. Any thin client (web, native) sends it here.
+    #[serde(default)]
+    user_description: Option<String>,
 }
 
 /// The sub-protocol we support for the chat WebSocket.
@@ -468,6 +474,7 @@ async fn handle_socket(
     let mut character_name: Option<String> = None;
     let mut character_mode: Option<String> = None;
     let mut user_name: Option<String> = None;
+    let mut user_description: Option<String> = None;
 
     if let Some(first) = receiver.next().await {
         match first {
@@ -495,6 +502,7 @@ async fn handle_socket(
                             character_name = cp.character_name;
                             character_mode = cp.character_mode;
                             user_name = cp.user_name;
+                            user_description = cp.user_description;
                         }
                         let ack = serde_json::json!({
                             "type": "connected",
@@ -626,6 +634,7 @@ async fn handle_socket(
                 char_name,
                 character_mode.as_deref(),
                 user_name.as_deref(),
+                user_description.as_deref(),
                 &memory_context,
             ) {
                 Ok((Some(first_mes), companion)) => {
@@ -1030,6 +1039,7 @@ fn inject_character_card(
     character_name: &str,
     mode: Option<&str>,
     user_name: Option<&str>,
+    user_description: Option<&str>,
     memory_context: &str,
 ) -> anyhow::Result<(Option<String>, Option<zeroclaw_affect::CompanionPersona>)> {
     let mgr = zeroclaw_cards::CardManager::default()?;
@@ -1042,7 +1052,11 @@ fn inject_character_card(
 
     let uname = user_name.unwrap_or("User");
     let char_mode = mode.unwrap_or("play");
-    let fragments = card.build_prompt(char_mode, uname, "", None);
+    // Pass the user's persona so the card prompt knows who the character is
+    // talking to — same input the SSE path feeds build_prompt_with_order.
+    // Previously the WS path passed None here, so the main companion never saw
+    // the user's self-description.
+    let fragments = card.build_prompt(char_mode, uname, "", user_description.filter(|d| !d.is_empty()));
 
     let card_prompt = fragments
         .iter()

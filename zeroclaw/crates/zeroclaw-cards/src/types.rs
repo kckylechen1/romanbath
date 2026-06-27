@@ -627,6 +627,34 @@ mod tests {
     }
 
     #[test]
+    fn build_prompt_includes_user_persona_when_provided() {
+        // The WS companion path now feeds the user's persona here (it used to
+        // pass None, so the main character never knew who it was talking to).
+        // Lock that a non-empty persona lands in the prompt, and an absent one
+        // doesn't fabricate a persona section.
+        let card = make_card();
+
+        let with = card.build_prompt(
+            "play",
+            "Alex",
+            "hello there friend",
+            Some("Alex is a night-shift nurse who loves jazz."),
+        );
+        let has_persona = with
+            .iter()
+            .any(|f| f.content.contains("night-shift nurse who loves jazz"));
+        assert!(has_persona, "persona text must appear when provided");
+        let labels_user = with
+            .iter()
+            .any(|f| f.content.contains("[Alex's persona]"));
+        assert!(labels_user, "persona block should be attributed to the user");
+
+        let without = card.build_prompt("play", "Alex", "hello there friend", None);
+        let fabricated = without.iter().any(|f| f.content.contains("persona]"));
+        assert!(!fabricated, "no persona section when none is provided");
+    }
+
+    #[test]
     fn test_lorebook_no_match() {
         let card = make_card();
         let fragments = card.build_prompt("play", "Alex", "Just water for me.", None);
