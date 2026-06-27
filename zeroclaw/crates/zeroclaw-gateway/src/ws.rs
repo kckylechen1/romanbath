@@ -954,6 +954,22 @@ async fn handle_socket(
                     let _ = sender.send(Message::Text(err.to_string().into())).await;
                     continue;
                 }
+                // A turn's user and assistant nodes are distinct rows; if the
+                // client sends the same id for both, the assistant INSERT
+                // collides with the just-inserted user node on the
+                // UNIQUE(session_key, msg_id) index and the reply is dropped.
+                // Reject up front (same short-circuit shape as id_too_long).
+                if let (Some(u), Some(a)) =
+                    (ws_ids.user_msg_id.as_deref(), ws_ids.assistant_msg_id.as_deref())
+                    && u == a
+                {
+                    let err = serde_json::json!({
+                        "type": "error",
+                        "message": "user_msg_id and assistant_msg_id must differ"
+                    });
+                    let _ = sender.send(Message::Text(err.to_string().into())).await;
+                    continue;
+                }
 
                 // Acquire session lock to serialize concurrent turns
                 let _session_guard = match state.session_queue.acquire(&session_key).await {
@@ -1179,10 +1195,10 @@ fn persist_turn_as_nodes(
     // User node (raw content). A UNIQUE conflict here means the client re-sent
     // an existing id (retry) — the node is already present with the same user
     // text, so we log and still chain the assistant under it (no data loss).
-    let user_id = ids.user_msg_id.clone().unwrap_or_else(mint);
+    let mut user_id = ids.user_msg_id.clone().unwrap_or_else(mint);
     let user_node = ConversationNode {
         msg_id: user_id.clone(),
-        parent_id: parent,
+        parent_id: parent.clone(),
         role: "user".to_string(),
         content: user_content.to_string(),
         author_id: None,
@@ -1192,19 +1208,47 @@ fn persist_turn_as_nodes(
     };
     if let Err(e) = backend.append_node(session_key, &user_node) {
         log_err("user", &user_id, e);
-        // Distinguish a benign UNIQUE conflict (the node already exists — a
-        // client id reuse, fine to chain the assistant under it) from a REAL
-        // write failure. If the user row genuinely isn't there, attaching the
-        // assistant to it would dangle the parent and orphan ALL prior history
-        // on resume (flatten_active_path breaks at the missing node). Bail.
-        if !backend.node_exists(session_key, &user_id) {
-            return None;
+        // Resolve who actually owns this id before chaining the assistant under
+        // it. Look up the existing node's role in the tree:
+        //   - absent  → a REAL write failure; chaining would dangle the parent
+        //     and orphan ALL prior history on resume (flatten_active_path breaks
+        //     at the missing node). Bail.
+        //   - role == "user" → benign id reuse (retry); chain under it.
+        //   - role != "user" → a different node already owns this id; chaining
+        //     would graft the assistant onto the wrong node. Mint a fresh user
+        //     id, append it under the resolved parent, and chain under that.
+        let existing_role = backend
+            .load_tree(session_key)
+            .into_iter()
+            .find(|n| n.msg_id == user_id)
+            .map(|n| n.role);
+        match existing_role.as_deref() {
+            None => return None,
+            Some("user") => {}
+            Some(_) => {
+                let fresh = mint();
+                let fresh_user = ConversationNode {
+                    msg_id: fresh.clone(),
+                    parent_id: parent.clone(),
+                    role: "user".to_string(),
+                    content: user_content.to_string(),
+                    author_id: None,
+                    status: None,
+                    meta: None,
+                    created_at: None,
+                };
+                if let Err(e2) = backend.append_node(session_key, &fresh_user) {
+                    log_err("user", &fresh, e2);
+                    return None;
+                }
+                user_id = fresh;
+            }
         }
     }
 
     // Assistant node, chained under the user node.
-    let assistant_id = ids.assistant_msg_id.clone().unwrap_or_else(mint);
-    let assistant_node = ConversationNode {
+    let mut assistant_id = ids.assistant_msg_id.clone().unwrap_or_else(mint);
+    let mut assistant_node = ConversationNode {
         msg_id: assistant_id.clone(),
         parent_id: Some(user_id),
         role: "assistant".to_string(),
@@ -1216,6 +1260,31 @@ fn persist_turn_as_nodes(
     };
     if let Err(e) = backend.append_node(session_key, &assistant_node) {
         log_err("assistant", &assistant_id, e);
+        // Resolve who owns this id before writing, mirroring the user-node guard:
+        //   - role == "assistant" → benign reuse (regenerate/retry of THIS turn);
+        //     UPDATE the node with the fresh content+status, never drop the reply.
+        //   - role != "assistant" → the id collides with an unrelated node; an
+        //     unconditional update_node would flip that node's role to "assistant"
+        //     and clobber its content (parent_id is never rewritten) → tree
+        //     corruption. Mint a fresh id and append instead.
+        //   - absent → a REAL write failure; re-mint and re-append.
+        // Bail only if even the fresh append fails (reply genuinely unpersistable).
+        let existing_role = backend
+            .load_tree(session_key)
+            .into_iter()
+            .find(|n| n.msg_id == assistant_id)
+            .map(|n| n.role);
+        if existing_role.as_deref() == Some("assistant") {
+            let _ = backend.update_node(session_key, &assistant_node);
+        } else {
+            let fresh = mint();
+            assistant_node.msg_id = fresh.clone();
+            if let Err(e2) = backend.append_node(session_key, &assistant_node) {
+                log_err("assistant", &fresh, e2);
+                return None;
+            }
+            assistant_id = fresh;
+        }
     }
 
     let _ = backend.set_active_leaf(session_key, &assistant_id);
@@ -2466,6 +2535,157 @@ mod tests {
                 session_id: "gw_test".into(),
             }),
             "SESSION_QUEUE_TIMEOUT"
+        );
+    }
+
+    #[test]
+    fn regenerate_reuses_user_node_creates_assistant_sibling() {
+        // SR-1/BI-3: a regenerate resends the SAME user_msg_id with a NEW
+        // assistant id. The user append conflicts (id reuse) but the existing
+        // node IS a user node -> chain the new assistant under it. Result: one
+        // user node, two assistant siblings — no duplicate user, no graft.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        let ids1 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U".to_string()),
+            assistant_msg_id: Some("A1".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q", "A1 answer", "complete", &ids1);
+
+        let ids2 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U".to_string()),
+            assistant_msg_id: Some("A2".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q", "A2 answer", "complete", &ids2);
+
+        let tree = backend.load_tree("s");
+        let users: Vec<_> = tree.iter().filter(|n| n.msg_id == "U").collect();
+        assert_eq!(users.len(), 1, "exactly one user node U (no duplicate)");
+        assert_eq!(users[0].role, "user");
+        let mut asst_children: Vec<String> = tree
+            .iter()
+            .filter(|n| n.parent_id.as_deref() == Some("U") && n.role == "assistant")
+            .map(|n| n.content.clone())
+            .collect();
+        asst_children.sort();
+        assert_eq!(asst_children, vec!["A1 answer".to_string(), "A2 answer".to_string()]);
+    }
+
+    #[test]
+    fn reused_assistant_id_upserts_content_not_dropped() {
+        // SR-1: a reused assistant id collides on the UNIQUE index. The fallback
+        // must UPSERT the fresh content via update_node, never silently drop it.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        let ids1 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U1".to_string()),
+            assistant_msg_id: Some("A".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q1", "first", "complete", &ids1);
+
+        let ids2 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U2".to_string()),
+            assistant_msg_id: Some("A".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q2", "second", "complete", &ids2);
+
+        let tree = backend.load_tree("s");
+        let a: Vec<_> = tree.iter().filter(|n| n.msg_id == "A").collect();
+        assert_eq!(a.len(), 1, "still exactly one assistant node A");
+        assert_eq!(a[0].content, "second", "reused id UPSERTs content, not dropped");
+    }
+
+    #[test]
+    fn assistant_id_colliding_with_nonassistant_node_mints_fresh_no_clobber() {
+        // SR-1/BI-3 (symmetric guard): if assistant_msg_id collides with an
+        // existing NON-assistant node (here a prior user node), the fallback must
+        // NOT update_node (that would flip the node's role to "assistant" and
+        // clobber its content while leaving parent_id dangling) — it must mint a
+        // fresh assistant id instead. Mirrors the user-node role guard.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        let ids1 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U".to_string()),
+            assistant_msg_id: Some("A".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q1", "ans1", "complete", &ids1);
+
+        // Turn 2 (user != assistant, so the handler guard passes) deliberately
+        // reuses "U" as the assistant id — collides with the user node.
+        let ids2 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U2".to_string()),
+            assistant_msg_id: Some("U".to_string()),
+        };
+        let leaf = persist_turn_as_nodes(&backend, "s", "Q2", "second answer", "complete", &ids2);
+
+        let tree = backend.load_tree("s");
+        let u = tree.iter().find(|n| n.msg_id == "U").expect("node U survives");
+        assert_eq!(u.role, "user", "U is NOT flipped to assistant");
+        assert_eq!(u.content, "Q1", "U content NOT clobbered");
+        // The fresh assistant carries the new content under the new user node.
+        let fresh = tree
+            .iter()
+            .find(|n| n.role == "assistant" && n.content == "second answer")
+            .expect("a fresh assistant node was minted");
+        assert_ne!(fresh.msg_id, "U", "minted a fresh id, not the colliding one");
+        assert_eq!(fresh.parent_id.as_deref(), Some("U2"));
+        assert_eq!(leaf.as_deref(), Some(fresh.msg_id.as_str()), "active leaf = fresh node");
+    }
+
+    #[test]
+    fn user_id_colliding_with_assistant_node_mints_fresh_no_graft() {
+        // SR-1/BI-3 (user-path role guard): if user_msg_id collides with an
+        // existing ASSISTANT node, chaining under it would graft the turn onto the
+        // wrong node. Mint a fresh user id and append under the resolved parent.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        let ids1 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U1".to_string()),
+            assistant_msg_id: Some("A1".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q1", "ans1", "complete", &ids1);
+
+        // Reuse "A1" (an assistant node) as the user id.
+        let ids2 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("A1".to_string()),
+            assistant_msg_id: Some("A2".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q2", "ans2", "complete", &ids2);
+
+        let tree = backend.load_tree("s");
+        let a1 = tree.iter().find(|n| n.msg_id == "A1").expect("node A1 survives");
+        assert_eq!(a1.role, "assistant", "A1 is NOT flipped to user");
+        assert_eq!(a1.content, "ans1", "A1 content NOT clobbered");
+        let fresh_user = tree
+            .iter()
+            .find(|n| n.role == "user" && n.content == "Q2")
+            .expect("a fresh user node was minted");
+        assert_ne!(fresh_user.msg_id, "A1", "minted a fresh user id, not the colliding one");
+        let a2 = tree.iter().find(|n| n.msg_id == "A2").expect("assistant A2 exists");
+        assert_eq!(
+            a2.parent_id.as_deref(),
+            Some(fresh_user.msg_id.as_str()),
+            "assistant chains under the fresh user node, not the grafted assistant"
         );
     }
 }

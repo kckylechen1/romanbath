@@ -967,7 +967,24 @@ impl SessionBackend for SqliteSessionBackend {
             params![node.role, node.content, node.status, meta_str, session_key, node.msg_id],
         )
         .map_err(std::io::Error::other)?;
-        let changed = conn.changes() > 0;
+        let mut changed = conn.changes() > 0;
+        // Legacy fallback: a purely-linear row has msg_id IS NULL, so the
+        // msg_id match above never fires. load_tree() surfaces such rows as
+        // `lin-{rowid}`; resolve back to the rowid and update by id. Attempted
+        // ONLY on a real miss and ONLY against NULL-msg_id rows, so a genuine
+        // client id literally equal to "lin-7" stays matched by the msg_id path
+        // and is never shadowed by this fallback.
+        if !changed
+            && let Some(rowid) = parse_lin_rowid(&node.msg_id)
+        {
+            conn.execute(
+                "UPDATE sessions SET role = ?1, content = ?2, node_status = ?3, node_meta = ?4
+                 WHERE session_key = ?5 AND id = ?6 AND msg_id IS NULL",
+                params![node.role, node.content, node.status, meta_str, session_key, rowid],
+            )
+            .map_err(std::io::Error::other)?;
+            changed = conn.changes() > 0;
+        }
         if changed {
             let now = Utc::now().to_rfc3339();
             let _ = conn.execute(
@@ -1104,10 +1121,24 @@ impl SessionBackend for SqliteSessionBackend {
         {
             let conn = self.conn.lock();
             for id in &removed {
-                let _ = conn.execute(
-                    "DELETE FROM sessions WHERE session_key = ?1 AND msg_id = ?2",
-                    params![session_key, id],
-                );
+                let deleted = conn
+                    .execute(
+                        "DELETE FROM sessions WHERE session_key = ?1 AND msg_id = ?2",
+                        params![session_key, id],
+                    )
+                    .unwrap_or(0);
+                // Legacy fallback (mirror update_node): a NULL-msg_id linear row
+                // is surfaced as `lin-{rowid}` and never matched by the msg_id
+                // DELETE, so it would silently survive. Resolve back to the rowid
+                // and delete by id — only on a real miss, only against NULL rows.
+                if deleted == 0
+                    && let Some(rowid) = parse_lin_rowid(id)
+                {
+                    let _ = conn.execute(
+                        "DELETE FROM sessions WHERE session_key = ?1 AND id = ?2 AND msg_id IS NULL",
+                        params![session_key, rowid],
+                    );
+                }
             }
             let cnt: i64 = conn
                 .query_row(
@@ -1123,6 +1154,20 @@ impl SessionBackend for SqliteSessionBackend {
         }
         Ok(removed)
     }
+}
+
+/// Resolve a synthesized legacy id back to its sqlite rowid. load_tree()
+/// surfaces purely-linear (NULL-msg_id) rows as `lin-{rowid}`; the write ops
+/// (update_node/delete_subtree) match on msg_id, which never hits a NULL row, so
+/// they need this fallback to act on legacy history. Strictly `^lin-(\d+)$` —
+/// any non-digit suffix (or a real client id that merely starts with "lin-")
+/// returns None so the msg_id path is never shadowed.
+fn parse_lin_rowid(msg_id: &str) -> Option<i64> {
+    let suffix = msg_id.strip_prefix("lin-")?;
+    if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse::<i64>().ok()
 }
 
 /// Flatten a conversation tree to the active root→leaf path as a message list
@@ -1992,5 +2037,127 @@ mod tests {
         assert_eq!(single.name, from_list.name);
         assert_eq!(single.created_at, from_list.created_at);
         assert_eq!(single.last_activity, from_list.last_activity);
+    }
+
+    fn session_row_count(backend: &SqliteSessionBackend, session_key: &str) -> i64 {
+        let conn = backend.conn.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE session_key = ?1",
+            params![session_key],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn delete_subtree_removes_legacy_linear_rows() {
+        // BI-2: legacy rows have msg_id IS NULL, so the msg_id-only DELETE never
+        // matched them — delete_subtree returned a populated removed-list while
+        // deleting NOTHING (false success). The rowid fallback must actually
+        // delete the synthesized lin-* subtree.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        // Build via the LINEAR append path -> every row has msg_id = NULL.
+        backend.append("c", &ChatMessage::user("one")).unwrap();
+        backend.append("c", &ChatMessage::assistant("two")).unwrap();
+        backend.append("c", &ChatMessage::user("three")).unwrap();
+        backend.append("c", &ChatMessage::assistant("four")).unwrap();
+        assert_eq!(session_row_count(&backend, "c"), 4);
+
+        // load_tree synthesizes the lin-{rowid} ids + parent chain.
+        let tree = backend.load_tree("c");
+        assert_eq!(tree.len(), 4);
+        assert!(parse_lin_rowid(&tree[1].msg_id).is_some(), "legacy ids surface as lin-*");
+        // Delete the 2nd (non-leaf) node's subtree: it + every descendant.
+        let target = tree[1].msg_id.clone();
+        let expected: HashSet<String> = tree[1..].iter().map(|n| n.msg_id.clone()).collect();
+
+        let removed = backend.delete_subtree("c", &target).unwrap();
+        assert_eq!(removed.into_iter().collect::<HashSet<_>>(), expected);
+        // The actual rows are gone: count dropped by the 3-node subtree.
+        assert_eq!(session_row_count(&backend, "c"), 1);
+    }
+
+    #[test]
+    fn update_node_updates_legacy_linear_row() {
+        // BI-2: update_node on a synthesized lin-* id must reach the NULL-msg_id
+        // legacy row (via the rowid fallback) AND fire sessions_au so FTS stays
+        // in sync.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend.append("c", &ChatMessage::user("alpha question")).unwrap();
+        backend.append("c", &ChatMessage::assistant("beta draft")).unwrap();
+
+        let tree = backend.load_tree("c");
+        let lin_id = tree[1].msg_id.clone();
+        assert!(parse_lin_rowid(&lin_id).is_some(), "legacy row surfaces as lin-*");
+        let updated = node(&lin_id, tree[1].parent_id.as_deref(), "assistant", "gamma revised");
+        assert!(backend.update_node("c", &updated).unwrap());
+
+        let tree2 = backend.load_tree("c");
+        let n = tree2.iter().find(|n| n.msg_id == lin_id).unwrap();
+        assert_eq!(n.content, "gamma revised");
+
+        // FTS reflects the update: the new word matches, the replaced one does not.
+        let hit = backend.search(&SessionQuery { keyword: Some("gamma".into()), limit: Some(10) });
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].key, "c");
+        let stale = backend.search(&SessionQuery { keyword: Some("beta".into()), limit: Some(10) });
+        assert!(stale.is_empty());
+    }
+
+    #[test]
+    fn update_node_real_msgid_not_shadowed_by_lin_fallback() {
+        // The ordering invariant: a REAL client msg_id literally equal to
+        // "lin-7" must be matched by the msg_id path, never shadowed by the
+        // rowid fallback onto a different NULL-msg_id row at rowid 7.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        // A real tree node whose literal msg_id IS the string "lin-7" (rowid 1).
+        backend
+            .append_node("c", &node("lin-7", None, "user", "real lin-7 content"))
+            .unwrap();
+        // Six linear (NULL-msg_id) rows -> the 6th lands at rowid 7.
+        for i in 2..=6 {
+            backend.append("c", &ChatMessage::user(format!("filler {i}"))).unwrap();
+        }
+        backend.append("c", &ChatMessage::user("untouched legacy seven")).unwrap();
+        // Confirm the rowid-7 row is the NULL legacy row we expect.
+        {
+            let conn = backend.conn.lock();
+            let (mid, content): (Option<String>, String) = conn
+                .query_row(
+                    "SELECT msg_id, content FROM sessions WHERE id = 7",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert!(mid.is_none());
+            assert_eq!(content, "untouched legacy seven");
+        }
+
+        // Update by the real msg_id "lin-7": must hit the real node, NOT rowid 7.
+        assert!(backend
+            .update_node("c", &node("lin-7", None, "user", "updated real content"))
+            .unwrap());
+
+        let conn = backend.conn.lock();
+        let real: String = conn
+            .query_row(
+                "SELECT content FROM sessions WHERE session_key = 'c' AND msg_id = 'lin-7'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(real, "updated real content", "msg_id path updated the real node");
+        let legacy7: String = conn
+            .query_row(
+                "SELECT content FROM sessions WHERE id = 7 AND msg_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy7, "untouched legacy seven", "rowid-7 row was NOT shadowed");
     }
 }
