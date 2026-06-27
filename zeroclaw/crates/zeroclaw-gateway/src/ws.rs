@@ -1288,11 +1288,37 @@ async fn process_chat_message(
     // the agent sees. The hint is NOT stored in memory or consolidation
     // — those use the original `content` argument. Only the agent turn
     // sees the hint.
+    // ── Per-turn memory recall ────────────────────────────────────
+    // Recall driven by THIS message, not the connect-time history. The
+    // connect-time injection (memory_context) only fires on resumed sessions
+    // and keys off the *previous* last-user message, so a brand-new question
+    // would otherwise recall nothing relevant to what was just asked. Same
+    // discipline as the affect hint: this is prepended to what the agent sees
+    // for the turn and is NOT stored or consolidated (saves use raw `content`).
+    let recall_block = if let Some(ref char_name) = character_name {
+        let data_dir = state.config.read().data_dir.clone();
+        let char_name = char_name.clone();
+        let query = format!("User: {content}");
+        tokio::task::spawn_blocking(move || {
+            let store =
+                zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+            store.inject_memories_into_prompt(&char_name, &query)
+        })
+        .await
+        .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     let affect_hint = compute_affect_hint(content, companion_persona);
-    let content_owned = if affect_hint.is_empty() {
+    let prefix_parts: Vec<String> = [recall_block, affect_hint]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
+    let content_owned = if prefix_parts.is_empty() {
         content.to_string()
     } else {
-        format!("{affect_hint}\n\n{content}")
+        format!("{}\n\n{content}", prefix_parts.join("\n\n"))
     };
     let session_key_owned = session_key.to_string();
     let turn_fut = async {
