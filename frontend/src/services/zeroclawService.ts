@@ -906,8 +906,11 @@ export const deleteBookEntry = async (name: string, entryId: string): Promise<bo
 export const getCharacterMemories = async (characterName: string): Promise<MemoryEntry[]> => {
   try {
     await ensurePairing();
+    // Per-character endpoint backed by the sigil ChatMemoryStore the chat
+    // pipeline writes to. NOT /api/memory — that resolves the install-wide
+    // backend, silently drops the path filter, and returns the wrong store.
     const res = await fetch(
-      `/api/memory?path=/chat/${encodeURIComponent(characterName)}/memories`,
+      `/api/characters/${encodeURIComponent(characterName)}/memories`,
       { headers: jsonHeaders() }
     );
     if (!res.ok) return [];

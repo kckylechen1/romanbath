@@ -405,6 +405,57 @@ fn get_character(name: &str) -> anyhow::Result<CharacterData> {
     Ok(card.data)
 }
 
+#[derive(Deserialize)]
+pub struct CharacterMemoriesQuery {
+    /// Max entries to return (default 200, capped at 1000).
+    pub limit: Option<usize>,
+}
+
+/// GET /api/characters/{name}/memories — what this character remembers.
+///
+/// Reads the *per-character* sigil store (`ChatMemoryStore` →
+/// `{data_dir}/chat_memory/{name}_memory.db`) that the chat pipeline actually
+/// writes to. This is deliberately NOT `/api/memory`, which resolves the
+/// install-wide `zeroclaw_memory` backend and has no per-character scope — the
+/// two are different stores, and the companion UI must read the one the model
+/// learns from.
+pub async fn handle_character_memories(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Query(params): Query<CharacterMemoriesQuery>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+
+    let data_dir = state.config.read().data_dir.clone();
+    let limit = params.limit.unwrap_or(200).min(1000);
+
+    let result = tokio::task::spawn_blocking(move || {
+        let store =
+            zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+        store.list_memories(&name, limit)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(entries)) => {
+            (StatusCode::OK, Json(serde_json::json!({ "entries": entries }))).into_response()
+        }
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("memory task failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn handle_delete_character(
     State(state): State<AppState>,
     headers: HeaderMap,

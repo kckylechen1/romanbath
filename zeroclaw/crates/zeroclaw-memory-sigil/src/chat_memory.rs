@@ -178,6 +178,24 @@ impl ChatMemoryStore {
         Ok(results)
     }
 
+    /// List a character's memories, newest first, scoped to
+    /// `/chat/{character_name}/memories`.
+    ///
+    /// Unlike [`recall_memories`](Self::recall_memories) this is a plain browse:
+    /// no query, no FTS ranking, no ACT-R access accounting. It backs the
+    /// read-only "what does this character remember" view, and reads the same
+    /// per-character store the chat pipeline writes to — so the UI and the
+    /// model see the same memories.
+    pub fn list_memories(
+        &self,
+        character_name: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        let conn = self.open(character_name)?;
+        let path_prefix = format!("/chat/{character_name}/memories");
+        memory_crud::list_by_path(&conn, &path_prefix, limit)
+    }
+
     /// Inject relevant memories into a prompt. Returns formatted text block.
     ///
     /// Default path is byte-identical to pre-continuity behavior: learned
@@ -396,6 +414,32 @@ mod tests {
             .recall_memories("test_char", "prefer dark mode everything", 5)
             .unwrap();
         assert!(!memories.is_empty(), "Should recall saved memory");
+    }
+
+    #[test]
+    fn list_memories_is_scoped_to_character() {
+        let (_dir, store) = temp_store();
+        store
+            .save_chat_memory("ada", "Alice", "user", "I prefer using dark mode for everything")
+            .unwrap()
+            .expect("not noise");
+        store
+            .save_chat_memory("ada", "Alice", "assistant", "Noted — I'll keep things in dark mode")
+            .unwrap()
+            .expect("not noise");
+        store
+            .save_chat_memory("bob", "Alice", "user", "I take my coffee black, no sugar at all")
+            .unwrap()
+            .expect("not noise");
+
+        // ada sees only ada's memories (both roles, no FTS query needed).
+        let ada = store.list_memories("ada", 200).unwrap();
+        assert_eq!(ada.len(), 2, "ada should see exactly its own two memories");
+        assert!(ada.iter().all(|m| m.path.starts_with("/chat/ada/memories")));
+
+        // A character that has never spoken has an empty (freshly-created) store.
+        let ghost = store.list_memories("ghost", 200).unwrap();
+        assert!(ghost.is_empty());
     }
 
     #[test]
