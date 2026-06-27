@@ -26,7 +26,7 @@ import DialogHost from './components/DialogHost';
 import { MemoryPanel } from './components/MemoryPanel';
 import StudioRail from './components/StudioRail';
 import { ContextInspector } from './components/studio/ContextInspector';
-import { BranchMiniMap } from './components/chat/BranchMiniMap';
+import { ConversationTree } from './components/studio/ConversationTree';
 
 // Command palette
 import { buildCommands } from './commands/buildCommands';
@@ -423,11 +423,12 @@ const AppContent: React.FC = () => {
             />
           }
           treePanel={
-            <BranchMiniMap
+            <ConversationTree
               messages={logic.messages}
-              messageTree={logic.messageTree}
               activeLeafId={logic.activeLeafId}
               onSelectLeaf={logic.setActiveLeafId}
+              characterId={logic.selectedCharacter.id}
+              chatFileName={logic.currentChatFileName}
             />
           }
           memoryPanel={
