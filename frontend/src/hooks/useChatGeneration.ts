@@ -50,6 +50,10 @@ export const useChatGeneration = (
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [currentAffect, setCurrentAffect] = useState<AffectState | null>(null);
+  // Chats already reconciled with the server snapshot this session (keyed by
+  // character+chat), so the per-message connection's repeated snapshots merge
+  // only once — see onHistory.
+  const hydratedChatsRef = useRef<Set<string>>(new Set());
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const wsChatRef = useRef<WsChatConnection | null>(null);
@@ -331,9 +335,16 @@ export const useChatGeneration = (
             },
             onAffect: (affect) => setCurrentAffect(affect),
             onHistory: (nodes) => {
-              // Reconcile with the server-authoritative tree (cross-device /
-              // replaceable frontend). Union by id — local nodes are kept, so
-              // an in-flight turn isn't disturbed; same-device this is a no-op.
+              // Reconcile with the server-authoritative tree ONCE per chat
+              // (cross-device / fresh client). Union by id keeps local nodes.
+              // Gated to first connect: the per-message connection replays the
+              // snapshot every turn, and re-merging each time would resurrect
+              // locally-deleted nodes (the server doesn't yet know about local
+              // deletes) and churn. After the first hydration the local tree is
+              // authoritative for the session.
+              const chatKey = `${respondingCharacter.id}:${currentChatFileName ?? 'default'}`;
+              if (hydratedChatsRef.current.has(chatKey)) return;
+              hydratedChatsRef.current.add(chatKey);
               setMessages((prev) => mergeServerNodes(prev, nodes));
             },
           });

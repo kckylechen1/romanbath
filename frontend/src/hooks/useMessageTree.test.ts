@@ -51,8 +51,13 @@ describe('mergeServerNodes', () => {
       { id: 'a2', parent_id: 'u2', role: 'assistant', content: 'reply' },
     ]);
     expect(merged.map((m) => m.id)).toEqual(['u1', 'a1', 'u2', 'a2']);
-    // Existing local node is untouched (server content does NOT clobber it).
+    // Existing local node keeps its content (server content does NOT clobber it).
     expect(merged.find((m) => m.id === 'a1')!.content).toBe('a1');
+    // childrenIds is rebuilt so leaf-detection (BranchMiniMap) stays consistent:
+    // a1 is no longer a phantom leaf — it now has child u2; only a2 is a leaf.
+    expect(merged.find((m) => m.id === 'a1')!.childrenIds).toEqual(['u2']);
+    expect(merged.find((m) => m.id === 'u2')!.childrenIds).toEqual(['a2']);
+    expect(merged.find((m) => m.id === 'a2')!.childrenIds).toEqual([]);
     // Added nodes map role + parent correctly for rendering.
     const a2 = merged.find((m) => m.id === 'a2')!;
     expect(a2.role).toBe(Role.Model);

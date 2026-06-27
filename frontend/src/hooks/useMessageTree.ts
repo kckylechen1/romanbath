@@ -47,7 +47,21 @@ export const mergeServerNodes = (local: Message[], nodes: ServerHistoryNode[]): 
       childrenIds: [],
     });
   }
-  return additions.length === 0 ? local : [...local, ...additions];
+  if (additions.length === 0) return local; // referential no-op → React bailout
+  const merged = [...local, ...additions];
+  // Rebuild childrenIds from parentId across the merged set. The chat view
+  // derives rendering from parentId (indexMessages), but BranchMiniMap/
+  // collectLeaves detect leaves from childrenIds — if the merge left a parent's
+  // childrenIds stale, that parent reads as a phantom leaf. Recompute so both
+  // sources of truth agree.
+  const childrenByParent = new Map<string, string[]>();
+  for (const m of merged) {
+    if (!m.parentId) continue;
+    const list = childrenByParent.get(m.parentId);
+    if (list) list.push(m.id);
+    else childrenByParent.set(m.parentId, [m.id]);
+  }
+  return merged.map((m) => ({ ...m, childrenIds: childrenByParent.get(m.id) ?? [] }));
 };
 
 export interface MessageTree {

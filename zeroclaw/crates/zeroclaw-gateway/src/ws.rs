@@ -1115,103 +1115,84 @@ fn parse_turn_node_ids(parsed: &serde_json::Value) -> TurnNodeIds {
     }
 }
 
+/// Persist one conversation turn as exactly TWO tree nodes — the user node and
+/// the assistant node — under the session's validated tip (or the client's
+/// validated parent_id). Returns the assistant node id (the new active leaf).
+///
+/// Deliberately persists `user_content` (the RAW user input) — NOT the agent's
+/// view of the turn, which carries the ephemeral recall/affect/timestamp prefix
+/// (`content_owned`) that must never surface as the user's own words. And it
+/// persists only the user + final assistant, NOT the turn's intermediate
+/// messages (tool calls / XML "[Tool results]" pseudo-user messages), which are
+/// turn-internal, not conversation nodes — persisting them produced phantom
+/// bubbles and dangling branches in the client tree.
 fn persist_turn_as_nodes(
     backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
     session_key: &str,
-    messages: &[zeroclaw_providers::ConversationMessage],
+    user_content: &str,
+    assistant_content: &str,
     status: &str,
-    fallback_assistant: Option<&str>,
     ids: &TurnNodeIds,
 ) -> Option<String> {
     use zeroclaw_infra::session_backend::ConversationNode;
 
-    let chats: Vec<&zeroclaw_providers::ChatMessage> = messages
-        .iter()
-        .filter_map(|m| match m {
-            zeroclaw_providers::ConversationMessage::Chat(c) if c.role != "system" => Some(c),
-            _ => None,
-        })
-        .collect();
+    let mint = || uuid::Uuid::new_v4().to_string();
+    let log_err = |which: &str, msg_id: &str, e: std::io::Error| {
+        ::zeroclaw_log::record!(
+            WARN,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "session_key": session_key, "which": which, "msg_id": msg_id, "error": e.to_string(),
+                })),
+            "append_node failed while persisting turn node"
+        );
+    };
 
-    let first_user = chats.iter().position(|c| c.role == "user");
-    let last_assistant = chats.iter().rposition(|c| c.role == "assistant");
-    // Attach under the client-chosen parent ONLY if it actually exists in the
-    // tree; a bogus/dangling client parent_id would orphan history on resume,
-    // so fall back to the validated tip. (Mirrors conversation_tip's guard.)
-    let mut parent = match ids.parent_id.as_deref() {
+    // Attach under the client-chosen parent ONLY if it exists in the tree;
+    // a bogus/dangling parent would orphan history on resume (mirror the read
+    // side's guard), so fall back to the validated tip.
+    let parent = match ids.parent_id.as_deref() {
         Some(p) if backend.node_exists(session_key, p) => Some(p.to_string()),
         _ => backend.conversation_tip(session_key),
     };
-    let mut last_id: Option<String> = None;
 
-    for (i, c) in chats.iter().enumerate() {
-        // The first user message and the final assistant message take the
-        // client's stable ids (when sent); everything else is minted.
-        let msg_id = if Some(i) == first_user {
-            ids.user_msg_id.clone()
-        } else if Some(i) == last_assistant {
-            ids.assistant_msg_id.clone()
-        } else {
-            None
-        }
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let node = ConversationNode {
-            msg_id: msg_id.clone(),
-            parent_id: parent.clone(),
-            role: c.role.clone(),
-            content: c.content.clone(),
-            author_id: None,
-            status: (Some(i) == last_assistant).then(|| status.to_string()),
-            meta: None,
-            created_at: None,
-        };
-        // Don't swallow the insert error: a UNIQUE(session_key,msg_id) conflict
-        // (a client reusing an id on retry) must not silently drop content and
-        // leave the chain advancing onto a node we didn't write. Stop the chain
-        // and keep the active leaf at the last node we actually persisted.
-        if let Err(e) = backend.append_node(session_key, &node) {
-            ::zeroclaw_log::record!(
-                WARN,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
-                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                    .with_attrs(::serde_json::json!({
-                        "session_key": session_key, "msg_id": msg_id, "error": e.to_string(),
-                    })),
-                "append_node failed while persisting turn (chain truncated at last good node)"
-            );
-            break;
-        }
-        parent = Some(msg_id.clone());
-        last_id = Some(msg_id);
+    // User node (raw content). A UNIQUE conflict here means the client re-sent
+    // an existing id (retry) — the node is already present with the same user
+    // text, so we log and still chain the assistant under it (no data loss).
+    let user_id = ids.user_msg_id.clone().unwrap_or_else(mint);
+    let user_node = ConversationNode {
+        msg_id: user_id.clone(),
+        parent_id: parent,
+        role: "user".to_string(),
+        content: user_content.to_string(),
+        author_id: None,
+        status: None,
+        meta: None,
+        created_at: None,
+    };
+    if let Err(e) = backend.append_node(session_key, &user_node) {
+        log_err("user", &user_id, e);
     }
 
-    // Cancelled/failed before any assistant output: keep the old behavior of
-    // recording a placeholder assistant turn so the interruption is visible.
-    if last_assistant.is_none()
-        && let Some(content) = fallback_assistant
-    {
-        let msg_id = ids
-            .assistant_msg_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let node = ConversationNode {
-            msg_id: msg_id.clone(),
-            parent_id: parent.clone(),
-            role: "assistant".to_string(),
-            content: content.to_string(),
-            author_id: None,
-            status: Some(status.to_string()),
-            meta: None,
-            created_at: None,
-        };
-        let _ = backend.append_node(session_key, &node);
-        last_id = Some(msg_id);
+    // Assistant node, chained under the user node.
+    let assistant_id = ids.assistant_msg_id.clone().unwrap_or_else(mint);
+    let assistant_node = ConversationNode {
+        msg_id: assistant_id.clone(),
+        parent_id: Some(user_id),
+        role: "assistant".to_string(),
+        content: assistant_content.to_string(),
+        author_id: None,
+        status: Some(status.to_string()),
+        meta: None,
+        created_at: None,
+    };
+    if let Err(e) = backend.append_node(session_key, &assistant_node) {
+        log_err("assistant", &assistant_id, e);
     }
 
-    if let Some(ref leaf) = last_id {
-        let _ = backend.set_active_leaf(session_key, leaf);
-    }
-    last_id
+    let _ = backend.set_active_leaf(session_key, &assistant_id);
+    Some(assistant_id)
 }
 
 /// Load a character card and inject it into the agent's system prompt.
@@ -1748,16 +1729,12 @@ async fn process_chat_message(
             } else {
                 format!("{accumulated_text}\n\n[interrupted by user]")
             };
-            let msgs: &[zeroclaw_providers::ConversationMessage] = match &result {
-                Err(error) => &error.new_messages,
-                Ok(_) => &[],
-            };
             persist_turn_as_nodes(
                 backend.as_ref(),
                 session_key,
-                msgs,
+                content,
+                &truncated,
                 "interrupted",
-                Some(&truncated),
                 &turn_ids,
             );
         }
@@ -1807,9 +1784,9 @@ async fn process_chat_message(
                 persisted_leaf = persist_turn_as_nodes(
                     backend.as_ref(),
                     session_key,
-                    &outcome.new_messages,
+                    content,
+                    &outcome.response,
                     "complete",
-                    None,
                     &turn_ids,
                 );
             }
@@ -1980,15 +1957,20 @@ async fn process_chat_message(
             );
         }
         Err(e) => {
-            if let Some(ref backend) = state.session_backend
-                && !e.new_messages.is_empty()
-            {
+            if let Some(ref backend) = state.session_backend {
+                // Persist the user turn + a visible failed-assistant node so the
+                // turn isn't silently lost and a retry has an anchor.
+                let partial = if accumulated_text.is_empty() {
+                    "[generation failed]".to_string()
+                } else {
+                    format!("{accumulated_text}\n\n[generation failed]")
+                };
                 persist_turn_as_nodes(
                     backend.as_ref(),
                     session_key,
-                    &e.new_messages,
+                    content,
+                    &partial,
                     "interrupted",
-                    None,
                     &turn_ids,
                 );
             }
