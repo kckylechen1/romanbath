@@ -19,6 +19,8 @@ pub enum MemoryError {
     Json(#[from] serde_json::Error),
     #[error("Invalid argument: {0}")]
     InvalidArg(String),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

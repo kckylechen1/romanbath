@@ -136,6 +136,27 @@ impl CardManager {
         self.save_card(&to_write, &[], "json")
     }
 
+    /// Create a new card, refusing to clobber an existing one.
+    ///
+    /// [`save`](Self::save) is a create-*or*-update: it writes
+    /// `{sanitize(name)}.json` unconditionally, which is correct when editing
+    /// a card but silently overwrites a *different* card whose name sanitizes
+    /// to the same file (e.g. "Aria!" vs "Aria?"). Create and duplicate must
+    /// not do that — they call this instead and get an error on collision.
+    pub fn save_new(&self, card: &CharacterCard) -> Result<String, CardError> {
+        let safe_name = sanitize_filename(&card.data.name);
+        if self.cards_dir.join(format!("{safe_name}.json")).exists() {
+            return Err(CardError::AlreadyExists(card.data.name.clone()));
+        }
+        self.save(card)
+    }
+
+    /// Whether a card already exists under this (sanitized) name.
+    pub fn exists(&self, name: &str) -> bool {
+        let safe_name = sanitize_filename(name);
+        self.cards_dir.join(format!("{safe_name}.json")).exists()
+    }
+
     /// List all imported character names.
     pub fn list(&self) -> Result<Vec<String>, CardError> {
         if !self.cards_dir.exists() {
@@ -268,6 +289,52 @@ mod tests {
     fn test_sanitize_filename() {
         assert_eq!(sanitize_filename("Hello World"), "Hello_World");
         assert_eq!(sanitize_filename("test/name:1"), "test_name_1");
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let p = std::env::temp_dir().join(format!("zc-cards-test-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn save_new_refuses_to_clobber_and_duplicate_suffixes() {
+        let dir = unique_temp_dir();
+        let mgr = CardManager::new(dir.clone());
+        let card = extract_from_json(
+            r#"{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Aria","description":"d","first_mes":"hi"}}"#,
+        )
+        .unwrap();
+
+        // First create lands.
+        assert_eq!(mgr.save_new(&card).unwrap(), "Aria");
+        assert!(mgr.exists("Aria"));
+        assert!(!mgr.exists("Nobody"));
+
+        // Second create under the same (sanitized) name is refused, not a
+        // silent overwrite of the first card.
+        assert!(matches!(
+            mgr.save_new(&card).unwrap_err(),
+            CardError::AlreadyExists(_)
+        ));
+
+        // Two *different* display names that sanitize to the same file collide
+        // — the real footgun (both "Aria!" and "Aria?" map to "Aria_.json").
+        let mut bang = card.clone();
+        bang.data.name = "Aria!".into();
+        assert_eq!(mgr.save_new(&bang).unwrap(), "Aria!");
+        let mut question = card.clone();
+        question.data.name = "Aria?".into();
+        assert!(matches!(
+            mgr.save_new(&question).unwrap_err(),
+            CardError::AlreadyExists(_)
+        ));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

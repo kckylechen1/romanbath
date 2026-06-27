@@ -250,6 +250,10 @@ interface CharacterDataResponse {
   source: string[];
   character_book: CharacterBook | null;
   extensions: Record<string, unknown>;
+  // V3 asset manifest (avatar/expression/background URIs). The backend always
+  // serializes this; the form must read it back or every edit-save round-trip
+  // writes `assets: []` and silently drops the card's assets.
+  assets?: CharacterAsset[];
 }
 
 const characterAvatarUrl = (name: string): string =>
@@ -442,6 +446,7 @@ export const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData
     nickname: char.nickname || '',
     groupOnlyGreetings: char.group_only_greetings || [],
     source: char.source || [],
+    assets: char.assets || [],
     characterBook: mapBookToForm(char.character_book),
     extensions,
     companion: parseCompanionConfig(extensions),

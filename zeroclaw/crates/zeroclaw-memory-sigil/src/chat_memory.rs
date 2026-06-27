@@ -196,6 +196,54 @@ impl ChatMemoryStore {
         memory_crud::list_by_path(&conn, &path_prefix, limit)
     }
 
+    /// Move a character's memory when the card is renamed, so a rename doesn't
+    /// orphan everything the companion has learned. No-op if the source DB
+    /// doesn't exist yet or the names collide.
+    ///
+    /// Two things have to move, not one: the DB *file* is named by the
+    /// (sanitized) character name, and every row's `path`/`entities` *embed*
+    /// the (raw) character name (`/chat/{name}/memories/...`). Moving only the
+    /// file would leave the rows keyed to the old name — `list_memories(new)`
+    /// would query `/chat/{new}/...` and find nothing. So we move the file
+    /// (plus WAL/SHM sidecars) and then rewrite the embedded name in place,
+    /// reusing the tested `upsert` so the FTS mirror stays in sync.
+    ///
+    /// Lives here because this type owns both the `{safe_name}_memory.db`
+    /// filename and the `/chat/{name}/memories` path convention.
+    pub fn rename_character(&self, old_name: &str, new_name: &str) -> Result<(), MemoryError> {
+        let old_path = self.db_path_for(old_name);
+        let new_path = self.db_path_for(new_name);
+        if old_path == new_path || !old_path.exists() {
+            return Ok(());
+        }
+
+        // 1. Move the DB file and its WAL/SHM sidecars to the new filename.
+        std::fs::rename(&old_path, &new_path)?;
+        for suffix in ["-wal", "-shm"] {
+            let from = append_suffix(&old_path, suffix);
+            if from.exists() {
+                let _ = std::fs::rename(&from, &append_suffix(&new_path, suffix));
+            }
+        }
+
+        // 2. Rewrite the embedded character name in every row's path + entities.
+        let mut conn = crate::schema::open(&new_path)?;
+        let old_seg = format!("/chat/{old_name}/");
+        let new_seg = format!("/chat/{new_name}/");
+        let old_prefix = format!("/chat/{old_name}/memories");
+        let entries = memory_crud::list_by_path(&conn, &old_prefix, 1_000_000)?;
+        for mut entry in entries {
+            entry.path = entry.path.replacen(&old_seg, &new_seg, 1);
+            for ent in entry.entities.iter_mut() {
+                if ent == old_name {
+                    *ent = new_name.to_string();
+                }
+            }
+            memory_crud::upsert(&mut conn, &entry)?;
+        }
+        Ok(())
+    }
+
     /// Inject relevant memories into a prompt. Returns formatted text block.
     ///
     /// Default path is byte-identical to pre-continuity behavior: learned
@@ -339,6 +387,14 @@ fn extract_mentions(content: &str) -> Vec<String> {
     mentions
 }
 
+/// Append a raw suffix to a path's filename (e.g. `x.db` + `-wal` → `x.db-wal`),
+/// matching how SQLite names its WAL/SHM sidecar files.
+fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
 fn extract_last_user_message(conversation_text: &str) -> Option<String> {
     // Find the last "user: " line in the conversation
     let mut last_user = None;
@@ -440,6 +496,24 @@ mod tests {
         // A character that has never spoken has an empty (freshly-created) store.
         let ghost = store.list_memories("ghost", 200).unwrap();
         assert!(ghost.is_empty());
+    }
+
+    #[test]
+    fn rename_character_moves_memories() {
+        let (_dir, store) = temp_store();
+        store
+            .save_chat_memory("ada", "Alice", "user", "I prefer using dark mode for everything")
+            .unwrap()
+            .expect("not noise");
+
+        store.rename_character("ada", "ada_renamed").unwrap();
+
+        // Memory followed the rename; the old name is now empty.
+        assert_eq!(store.list_memories("ada_renamed", 200).unwrap().len(), 1);
+        assert!(store.list_memories("ada", 200).unwrap().is_empty());
+
+        // Renaming a character with no memory DB yet is a harmless no-op.
+        store.rename_character("never_existed", "still_nothing").unwrap();
     }
 
     #[test]

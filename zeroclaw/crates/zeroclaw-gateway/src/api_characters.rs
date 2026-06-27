@@ -555,8 +555,16 @@ pub async fn handle_duplicate_character(
 fn duplicate_character(name: &str) -> anyhow::Result<String> {
     let mgr = CardManager::default()?;
     let mut card = mgr.load(name)?;
-    card.data.name = format!("{} (Copy)", card.data.name);
-    let new_name = mgr.save(&card)?;
+    // Find a free name so duplicating twice doesn't overwrite the first copy.
+    let base = card.data.name.clone();
+    let mut candidate = format!("{base} (Copy)");
+    let mut n = 2;
+    while mgr.exists(&candidate) {
+        candidate = format!("{base} (Copy {n})");
+        n += 1;
+    }
+    card.data.name = candidate;
+    let new_name = mgr.save_new(&card)?;
     Ok(new_name)
 }
 
@@ -611,7 +619,8 @@ pub async fn handle_update_character(
         return resp.into_response();
     }
 
-    match update_character_data(&name, data) {
+    let data_dir = state.config.read().data_dir.clone();
+    match update_character_data(&name, data, &data_dir) {
         Ok(new_name) => (
             StatusCode::OK,
             Json(ImportResponse {
@@ -631,11 +640,17 @@ pub async fn handle_update_character(
 fn save_character_data(data: CharacterData) -> anyhow::Result<String> {
     let mgr = CardManager::default()?;
     let card = default_card(data);
-    mgr.save(&card)
+    // Create, never clobber: a name that sanitizes onto an existing card's
+    // file must fail loudly, not silently replace it.
+    mgr.save_new(&card)
         .map_err(|e| anyhow::Error::msg(format!("{e}")))
 }
 
-fn update_character_data(previous_name: &str, data: CharacterData) -> anyhow::Result<String> {
+fn update_character_data(
+    previous_name: &str,
+    data: CharacterData,
+    data_dir: &std::path::Path,
+) -> anyhow::Result<String> {
     let mgr = CardManager::default()?;
     if previous_name != data.name {
         // Move the avatar file from the old safe name to the new one (if any)
@@ -648,6 +663,21 @@ fn update_character_data(previous_name: &str, data: CharacterData) -> anyhow::Re
             if old_avatar != new_avatar {
                 let _ = std::fs::rename(&old_avatar, &new_avatar);
             }
+        }
+        // Move the per-character memory DB too, so a rename doesn't orphan
+        // everything the companion has learned (the whole point of a
+        // remembering companion). The store owns its own filename sanitizer.
+        let store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+        if let Err(e) = store.rename_character(previous_name, &data.name) {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "from": previous_name, "to": &data.name, "error": e.to_string(),
+                    })),
+                "character rename: memory DB migration failed (card renamed anyway)"
+            );
         }
         let _ = mgr.delete(previous_name);
     }
