@@ -779,6 +779,7 @@ async fn handle_socket(
                         &session_key,
                         character_name.clone(),
                         user_name.clone(),
+                        parse_turn_node_ids(&parsed),
                     )
                     .await;
                     if let Some(ref cn) = character_name {
@@ -877,6 +878,29 @@ async fn handle_socket(
                     continue;
                 }
 
+                // ── select_leaf (switch the active branch; zero generation) ──
+                // Swipe/branch navigation: the client picks which leaf is the
+                // active path. No model call — just record the selection so the
+                // next resume seeds that branch. (Solution B Phase 2.)
+                if msg_type == "select_leaf" {
+                    let leaf_id = parsed["leaf_id"].as_str().unwrap_or("");
+                    if leaf_id.is_empty() {
+                        let err = serde_json::json!({
+                            "type": "error",
+                            "message": "select_leaf requires leaf_id",
+                            "code": "INVALID_SELECT_LEAF"
+                        });
+                        let _ = sender.send(Message::Text(err.to_string().into())).await;
+                        continue;
+                    }
+                    if let Some(ref backend) = state.session_backend {
+                        let _ = backend.set_active_leaf(&session_key, leaf_id);
+                    }
+                    let ack = serde_json::json!({ "type": "active_leaf", "active_leaf": leaf_id });
+                    let _ = sender.send(Message::Text(ack.to_string().into())).await;
+                    continue;
+                }
+
                 if msg_type != "message" {
                     let err = serde_json::json!({
                         "type": "error",
@@ -928,6 +952,7 @@ async fn handle_socket(
                     &session_key,
                     character_name.clone(),
                     user_name.clone(),
+                    parse_turn_node_ids(&parsed),
                 )
                 .await;
                 if let Some(ref cn) = character_name {
@@ -1054,12 +1079,37 @@ fn session_queue_ws_error_code(error: &crate::session_queue::SessionQueueError) 
 ///
 /// Ids are minted server-side here; once the client sends stable msg_ids
 /// (Solution B Phase 2) they replace the minted ones to drive branching.
+/// Client-supplied node identity for a turn (Solution B Phase 2). When the
+/// client mints stable ids they drive the tree; when absent (pre-P2 clients)
+/// they are minted server-side, preserving Phase-1 behavior.
+#[derive(Default, Clone)]
+struct TurnNodeIds {
+    /// Parent to attach the turn under; falls back to `conversation_tip`.
+    parent_id: Option<String>,
+    /// Id for the user node.
+    user_msg_id: Option<String>,
+    /// Id for the (final) assistant node — also the streaming `node_id`.
+    assistant_msg_id: Option<String>,
+}
+
+/// Pull client-minted node ids off a `message` frame. All optional — a pre-P2
+/// client sends none and the server mints them (Phase-1 behavior preserved).
+fn parse_turn_node_ids(parsed: &serde_json::Value) -> TurnNodeIds {
+    let s = |k: &str| parsed[k].as_str().map(str::to_string);
+    TurnNodeIds {
+        parent_id: s("parent_id"),
+        user_msg_id: s("msg_id"),
+        assistant_msg_id: s("assistant_msg_id"),
+    }
+}
+
 fn persist_turn_as_nodes(
     backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
     session_key: &str,
     messages: &[zeroclaw_providers::ConversationMessage],
     status: &str,
     fallback_assistant: Option<&str>,
+    ids: &TurnNodeIds,
 ) -> Option<String> {
     use zeroclaw_infra::session_backend::ConversationNode;
 
@@ -1071,12 +1121,26 @@ fn persist_turn_as_nodes(
         })
         .collect();
 
+    let first_user = chats.iter().position(|c| c.role == "user");
     let last_assistant = chats.iter().rposition(|c| c.role == "assistant");
-    let mut parent = backend.conversation_tip(session_key);
+    // Attach under the client-chosen parent, else the current tip.
+    let mut parent = ids
+        .parent_id
+        .clone()
+        .or_else(|| backend.conversation_tip(session_key));
     let mut last_id: Option<String> = None;
 
     for (i, c) in chats.iter().enumerate() {
-        let msg_id = uuid::Uuid::new_v4().to_string();
+        // The first user message and the final assistant message take the
+        // client's stable ids (when sent); everything else is minted.
+        let msg_id = if Some(i) == first_user {
+            ids.user_msg_id.clone()
+        } else if Some(i) == last_assistant {
+            ids.assistant_msg_id.clone()
+        } else {
+            None
+        }
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let node = ConversationNode {
             msg_id: msg_id.clone(),
             parent_id: parent.clone(),
@@ -1097,7 +1161,10 @@ fn persist_turn_as_nodes(
     if last_assistant.is_none()
         && let Some(content) = fallback_assistant
     {
-        let msg_id = uuid::Uuid::new_v4().to_string();
+        let msg_id = ids
+            .assistant_msg_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let node = ConversationNode {
             msg_id: msg_id.clone(),
             parent_id: parent.clone(),
@@ -1345,6 +1412,7 @@ async fn process_chat_message(
     session_key: &str,
     character_name: Option<String>,
     user_name: Option<String>,
+    turn_ids: TurnNodeIds,
 ) {
     use futures_util::StreamExt as _;
     use zeroclaw_runtime::agent::TurnEvent;
@@ -1661,6 +1729,7 @@ async fn process_chat_message(
                 msgs,
                 "interrupted",
                 Some(&truncated),
+                &turn_ids,
             );
         }
 
@@ -1700,15 +1769,19 @@ async fn process_chat_message(
         return;
     }
 
+    // The assistant node id this turn persisted under, surfaced on the done
+    // frame so the client can bind its streamed placeholder to the server node.
+    let mut persisted_leaf: Option<String> = None;
     match result {
         Ok(outcome) => {
             if let Some(ref backend) = state.session_backend {
-                persist_turn_as_nodes(
+                persisted_leaf = persist_turn_as_nodes(
                     backend.as_ref(),
                     session_key,
                     &outcome.new_messages,
                     "complete",
                     None,
+                    &turn_ids,
                 );
             }
 
@@ -1836,6 +1909,9 @@ async fn process_chat_message(
                 // The user's perceived affect this turn (null when confidence is
                 // below the floor). The client tints the avatar's mood glow.
                 "affect": affect_state,
+                // The server-side conversation node this turn landed on, so the
+                // client can bind its streamed placeholder to the tree.
+                "node_id": persisted_leaf,
             });
             let _ = sender.send(Message::Text(done.to_string().into())).await;
 
@@ -1881,6 +1957,7 @@ async fn process_chat_message(
                     &e.new_messages,
                     "interrupted",
                     None,
+                    &turn_ids,
                 );
             }
 
