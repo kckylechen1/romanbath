@@ -1331,10 +1331,27 @@ export class WsChatConnection {
   // Lets onclose tell "closed mid-reply" (surface an error so the UI unsticks)
   // apart from "closed at rest" (silent, expected).
   private turnSettled = true;
+  // The session this socket is bound to. A persistent connection is reused
+  // across turns of the same conversation; the caller checks `session` before
+  // reusing vs reconnecting.
+  private sessionId?: string;
 
   constructor(callbacks: WsChatCallbacks) {
     this.callbacks = callbacks;
     this.token = getToken() || '';
+  }
+
+  /** Which conversation this socket is bound to (undefined if none). */
+  get session(): string | undefined {
+    return this.sessionId;
+  }
+
+  /** Swap the per-turn callbacks before reusing a persistent socket for a new
+   *  turn (each turn's callbacks close over a fresh placeholder message id).
+   *  Connection-level callbacks (onHistory/onAffect) are swapped too — harmless,
+   *  since history merge is idempotent and gated. */
+  rebindCallbacks(callbacks: WsChatCallbacks): void {
+    this.callbacks = callbacks;
   }
 
   connect(
@@ -1348,6 +1365,7 @@ export class WsChatConnection {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(WS_URL(agentAlias, this.token, sessionId));
       this.fullText = '';
+      this.sessionId = sessionId;
       let opened = false;
 
       const timer = setTimeout(() => {

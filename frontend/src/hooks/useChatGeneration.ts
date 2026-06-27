@@ -6,6 +6,7 @@ import {
   WsChatConnection,
   getCharacterDetails,
   type AffectState,
+  type WsChatCallbacks,
 } from '../services/zeroclawService';
 import {
   buildCharacterPhotoPrompt,
@@ -94,13 +95,16 @@ export const useChatGeneration = (
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  // Close WS chat and abort pending REST requests on character switch
+  // Close WS chat and abort pending REST requests when the conversation
+  // changes (character OR chat thread) — the persistent socket is bound to one
+  // (character, chat) session, so a switch must drop it; the next send opens a
+  // fresh one for the new session.
   useEffect(() => {
     wsChatRef.current?.close();
     wsChatRef.current = null;
     abortCtrlRef.current?.abort();
     abortCtrlRef.current = null;
-  }, [selectedCharacter.id]);
+  }, [selectedCharacter.id, currentChatFileName]);
 
   const handleSendMessage = useCallback(async () => {
     if (!inputText.trim() || isTyping) return;
@@ -261,11 +265,13 @@ export const useChatGeneration = (
 
       if (useWs) {
         try {
-          // Always create a fresh connection per message so onChunk/onDone/onToolResult
-          // close over the correct botMsgId. Reusing an existing connection would leave
-          // callbacks pointing at the previous message's id.
-          wsChatRef.current?.close();
-          const ws = new WsChatConnection({
+          // Stable session id per (character, chat thread): the gateway resumes
+          // this conversation's server-side session instead of starting amnesiac.
+          const sessionId = `companion:${respondingCharacter.id}:${currentChatFileName ?? 'default'}`;
+          // Per-turn callbacks close over THIS turn's botMsgId. For a reused
+          // (persistent) socket they're rebound before each send; for a fresh
+          // socket they're the constructor callbacks.
+          const callbacks: WsChatCallbacks = {
             onChunk: (_chunk: string, fullText: string) => {
               setMessages((prev) =>
                 prev.map((msg) =>
@@ -347,29 +353,36 @@ export const useChatGeneration = (
               hydratedChatsRef.current.add(chatKey);
               setMessages((prev) => mergeServerNodes(prev, nodes));
             },
-          });
-          // Stable session id per (character, chat thread) so the gateway
-          // resumes this conversation's server-side session instead of
-          // starting amnesiac each message. Different threads / characters
-          // get different ids, so context never bleeds across them.
-          const sessionId = `companion:${respondingCharacter.id}:${currentChatFileName ?? 'default'}`;
-          await ws.connect(
-            respondingCharacter.name,
-            'play',
-            config.userName || undefined,
-            undefined,
-            sessionId,
-            config.userDescription || undefined
-          );
-          wsChatRef.current = ws;
-          // Send the client-minted node ids so the server stores the same tree
-          // the client renders: this user turn (userMsg.id under parentForUser)
-          // and the assistant placeholder (botMsgId).
-          wsChatRef.current.send(expandedInput, {
+          };
+          // Client-minted node ids so the server stores the same tree the client
+          // renders: this user turn (userMsg.id under parentForUser) + the
+          // assistant placeholder (botMsgId).
+          const sendIds = {
             msgId: userMsg.id,
             parentId: parentForUser,
             assistantMsgId: botMsgId,
-          });
+          };
+          const existing = wsChatRef.current;
+          if (existing?.isConnected && existing.session === sessionId) {
+            // Reuse the persistent socket (the gateway's WS loop handles many
+            // turns per connection) — rebind this turn's callbacks, then send.
+            existing.rebindCallbacks(callbacks);
+            existing.send(expandedInput, sendIds);
+          } else {
+            // Different conversation or no live socket: (re)connect.
+            existing?.close();
+            const ws = new WsChatConnection(callbacks);
+            await ws.connect(
+              respondingCharacter.name,
+              'play',
+              config.userName || undefined,
+              undefined,
+              sessionId,
+              config.userDescription || undefined
+            );
+            wsChatRef.current = ws;
+            ws.send(expandedInput, sendIds);
+          }
           usedWs = true;
         } catch (wsErr) {
           console.warn('WebSocket chat unavailable for character, falling back to REST:', wsErr);

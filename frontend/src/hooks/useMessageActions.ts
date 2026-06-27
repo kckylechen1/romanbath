@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { Message, Role, Character, ChatConfig, GroupChat } from '../types';
-import { generateText } from '../services/zeroclawService';
+import { generateText, type WsChatConnection } from '../services/zeroclawService';
 import { useChatHelpers, characterNameForMessage } from './useChatHelpers';
 import type { ToastAPI } from '../components/Toast';
 import { confirm as confirmDialog } from '../services/dialogService';
@@ -27,7 +27,8 @@ export const useMessageActions = (
   config: ChatConfig,
   activeGroup: GroupChat | null,
   setIsTyping: React.Dispatch<React.SetStateAction<boolean>>,
-  toast: ToastAPI
+  toast: ToastAPI,
+  wsChatRef: React.MutableRefObject<WsChatConnection | null>
 ): UseMessageActionsReturn => {
   const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } = useChatHelpers(
     config,
@@ -80,8 +81,12 @@ export const useMessageActions = (
       const newLeaf = deepestLeaf(tree, nextSibling.id);
       if (!newLeaf) return;
       setActiveLeafId(newLeaf.id);
+      // Tell the server which branch is now active (zero-generation), so a
+      // resume / another device lands on the same leaf. No-op if no live
+      // socket (selectLeaf guards on readyState).
+      wsChatRef.current?.selectLeaf(newLeaf.id);
     },
-    [messages, setActiveLeafId]
+    [messages, setActiveLeafId, wsChatRef]
   );
 
   // Shared branch-creation helper for swipe and regenerate. Both flows
