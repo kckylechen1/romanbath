@@ -106,6 +106,64 @@ export const useChatGeneration = (
     abortCtrlRef.current = null;
   }, [selectedCharacter.id, currentChatFileName]);
 
+  // Connect-on-load: open the persistent socket when a chat WITH HISTORY is
+  // selected — not just on first send — so the server tree is hydrated and the
+  // active branch adopted up front (the thin-client "load → view server state"
+  // path). Gated to chats that already have local history: a brand-new chat has
+  // nothing to hydrate, and connecting fresh would emit the first_mes greeting,
+  // which no-op hydration callbacks would swallow — so fresh chats keep being
+  // opened lazily by the first send (greeting intact). The send path reuses this
+  // socket (session match) and rebinds the real turn callbacks.
+  useEffect(() => {
+    if (selectedCharacter.id === 'default' || activeGroup || !currentChatFileName) return;
+    if (messagesRef.current.length === 0) return; // fresh chat → lazy connect on send
+    const sessionId = `companion:${selectedCharacter.id}:${currentChatFileName}`;
+    if (wsChatRef.current?.isConnected && wsChatRef.current.session === sessionId) return;
+    const chatKey = `${selectedCharacter.id}:${currentChatFileName}`;
+    let cancelled = false;
+    const ws = new WsChatConnection({
+      onChunk: () => {},
+      onToolCall: () => {},
+      onToolResult: () => {},
+      onDone: () => {},
+      onError: () => {},
+      onAffect: (affect) => setCurrentAffect(affect),
+      onHistory: (nodes, activeLeaf) => {
+        if (hydratedChatsRef.current.has(chatKey)) return;
+        hydratedChatsRef.current.add(chatKey);
+        setMessages((prev) => mergeServerNodes(prev, nodes));
+        // X3: on load (no in-flight turn) adopt the server's active branch so a
+        // fresh client / another device lands where the conversation left off.
+        if (activeLeaf) setActiveLeafId(activeLeaf);
+      },
+    });
+    ws.connect(
+      selectedCharacter.name,
+      'play',
+      config.userName || undefined,
+      undefined,
+      sessionId,
+      config.userDescription || undefined
+    )
+      .then(() => {
+        if (cancelled) ws.close();
+        else wsChatRef.current = ws;
+      })
+      .catch(() => ws.close());
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedCharacter.id,
+    selectedCharacter.name,
+    currentChatFileName,
+    activeGroup,
+    config.userName,
+    config.userDescription,
+    setMessages,
+    setActiveLeafId,
+  ]);
+
   const handleSendMessage = useCallback(async () => {
     if (!inputText.trim() || isTyping) return;
 
