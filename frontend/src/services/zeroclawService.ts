@@ -1200,6 +1200,14 @@ export interface WsChatCallbacks {
   /** Fired on connect with the server-authoritative conversation tree, so the
    *  client can reconcile its local view (cross-device / replaceable frontend). */
   onHistory?: (nodes: WsHistoryNode[], activeLeaf: string | null) => void;
+  /** Fired when the server broadcasts an in-place content edit (this device's
+   *  own echo, or another device). Must be idempotent with the optimistic
+   *  local update — the same edit may already be applied. */
+  onNodeEdited?: (msgId: string, content: string) => void;
+  /** Fired when the server broadcasts a subtree delete. `removed` lists every
+   *  deleted node id (the target + its descendants). Must be idempotent with
+   *  the optimistic local delete. */
+  onNodeDeleted?: (msgId: string, removed: string[]) => void;
 }
 
 /** Client-minted node ids for a turn, sent on the message frame so the server
@@ -1208,6 +1216,10 @@ export interface WsSendIds {
   msgId?: string;
   parentId?: string | null;
   assistantMsgId?: string;
+  /** Regenerate / generate-swipe: mark this turn as an alternate. The server
+   *  reuses the existing user node (msgId) and creates a NEW assistant SIBLING
+   *  (assistantMsgId) under it, and SKIPS memory for the turn. */
+  alternate?: boolean;
 }
 
 const WS_URL = (agentAlias: string = 'default', token?: string, sessionId?: string) => {
@@ -1432,6 +1444,20 @@ export class WsChatConnection {
                 (frame.active_leaf as string | null) ?? null
               );
               break;
+            case 'node_edited':
+              // Echo of an edit frame (this device) or a cross-device edit.
+              this.callbacks.onNodeEdited?.(
+                String(frame.msg_id ?? ''),
+                String(frame.content ?? '')
+              );
+              break;
+            case 'node_deleted':
+              // Echo of a delete frame (this device) or a cross-device delete.
+              this.callbacks.onNodeDeleted?.(
+                String(frame.msg_id ?? ''),
+                (frame.removed as string[]) ?? []
+              );
+              break;
             case 'done':
               this.turnSettled = true;
               if (this.callbacks.onAffect && 'affect' in frame) {
@@ -1493,6 +1519,9 @@ export class WsChatConnection {
     if (ids?.msgId) frame.msg_id = ids.msgId;
     if (ids?.parentId) frame.parent_id = ids.parentId;
     if (ids?.assistantMsgId) frame.assistant_msg_id = ids.assistantMsgId;
+    // Regenerate / swipe: server reuses the user node + adds a new assistant
+    // sibling, and skips memory for this turn.
+    if (ids?.alternate) frame.alternate = true;
     this.ws.send(JSON.stringify(frame));
     this.fullText = '';
   }
@@ -1501,6 +1530,23 @@ export class WsChatConnection {
   selectLeaf(leafId: string): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: 'select_leaf', leaf_id: leafId }));
+  }
+
+  /** Tell the server to update a node's content in place (zero-generation).
+   *  No-op if the socket isn't open, like selectLeaf — the optimistic local
+   *  edit already happened; this is best-effort server sync. */
+  editNode(msgId: string, content: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'edit', msg_id: msgId, content }));
+  }
+
+  /** Tell the server to delete a node and its subtree (zero-generation).
+   *  No-op if the socket isn't open, like selectLeaf — the optimistic local
+   *  delete already happened; this is best-effort server sync (also fixes the
+   *  X1 "server resurrects deleted node on reload" class when online). */
+  deleteNode(msgId: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'delete', msg_id: msgId }));
   }
 
   close(): void {

@@ -137,7 +137,8 @@ export const useAppLogic = () => {
     activeGroup,
     generation.setIsTyping,
     toast,
-    generation.wsChatRef
+    generation.wsChatRef,
+    generation.regenerateAssistant
   );
 
   // ==================== CHAT PUSH (server-initiated messages) =====

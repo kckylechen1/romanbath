@@ -10,6 +10,7 @@ import {
   updateBookEntry,
   deleteBookEntry,
   invalidatePairingCache,
+  WsChatConnection,
   type CharacterFormData,
   type ChatOptions,
 } from './zeroclawService';
@@ -495,5 +496,80 @@ describe('lorebook CRUD', () => {
       return new Response(null, { status: 500 });
     });
     expect(await deleteBookEntry('Mara', 'entry-9')).toBe(false);
+  });
+});
+
+describe('WsChatConnection outgoing frames', () => {
+  beforeEach(() => {
+    stubLocalStorage();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Required per-turn callbacks (no-ops for frame tests).
+  const noopCallbacks = () => ({
+    onChunk: () => {},
+    onToolCall: () => {},
+    onToolResult: () => {},
+    onDone: () => {},
+    onError: () => {},
+  });
+
+  const socketAt = (readyState: number) => {
+    const sent: string[] = [];
+    const conn = new WsChatConnection(noopCallbacks());
+    (conn as unknown as { ws: unknown }).ws = {
+      readyState,
+      send: (data: string) => sent.push(data),
+    };
+    return { conn, sent };
+  };
+
+  const openSocket = () => socketAt(WebSocket.OPEN);
+
+  it('send() carries alternate:true + the reused ids for a regenerate turn', () => {
+    const { conn, sent } = openSocket();
+    conn.send('the user content', {
+      msgId: 'U',
+      parentId: 'P',
+      assistantMsgId: 'A2',
+      alternate: true,
+    });
+    expect(JSON.parse(sent[0])).toMatchObject({
+      type: 'message',
+      content: 'the user content',
+      msg_id: 'U',
+      parent_id: 'P',
+      assistant_msg_id: 'A2',
+      alternate: true,
+    });
+  });
+
+  it('send() omits alternate for a normal turn', () => {
+    const { conn, sent } = openSocket();
+    conn.send('hi', { msgId: 'u1', parentId: null, assistantMsgId: 'a1' });
+    const frame = JSON.parse(sent[0]);
+    expect(frame.type).toBe('message');
+    expect('alternate' in frame).toBe(false);
+  });
+
+  it('editNode() sends an edit frame', () => {
+    const { conn, sent } = openSocket();
+    conn.editNode('m1', 'fixed text');
+    expect(JSON.parse(sent[0])).toEqual({ type: 'edit', msg_id: 'm1', content: 'fixed text' });
+  });
+
+  it('deleteNode() sends a delete frame', () => {
+    const { conn, sent } = openSocket();
+    conn.deleteNode('m1');
+    expect(JSON.parse(sent[0])).toEqual({ type: 'delete', msg_id: 'm1' });
+  });
+
+  it('editNode/deleteNode are no-ops when the socket is not open (best-effort, like selectLeaf)', () => {
+    const { conn, sent } = socketAt(WebSocket.CLOSED);
+    conn.editNode('m1', 'x');
+    conn.deleteNode('m1');
+    expect(sent).toEqual([]);
   });
 });

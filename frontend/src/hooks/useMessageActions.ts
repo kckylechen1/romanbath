@@ -28,7 +28,11 @@ export const useMessageActions = (
   activeGroup: GroupChat | null,
   setIsTyping: React.Dispatch<React.SetStateAction<boolean>>,
   toast: ToastAPI,
-  wsChatRef: React.MutableRefObject<WsChatConnection | null>
+  wsChatRef: React.MutableRefObject<WsChatConnection | null>,
+  // Companion (WS) regenerate/swipe: reuse the user node + grow a server-synced
+  // alternate assistant sibling. Returns true if it handled the turn, false to
+  // decline (no user node to reuse) so we fall back to the REST branch helper.
+  regenerateAssistant: (target: Message) => Promise<boolean>
 ): UseMessageActionsReturn => {
   const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } = useChatHelpers(
     config,
@@ -163,10 +167,20 @@ export const useMessageActions = (
     ]
   );
 
+  // Companion (WS) chat routes regenerate/swipe through the server-synced
+  // alternate-turn pipeline; group chat and the "Assistant" character keep the
+  // REST branch helper (they don't use the WS conversation tree).
+  const wsRegenEligible = useCallback(
+    (target: Message): boolean =>
+      !activeGroup && characterNameForMessage(target, selectedCharacter) !== 'Assistant',
+    [activeGroup, selectedCharacter]
+  );
+
   const handleGenerateSwipe = useCallback(
     async (messageId: string) => {
       const target = messages.find((m) => m.id === messageId);
       if (!target || target.role !== Role.Model) return;
+      if (wsRegenEligible(target) && (await regenerateAssistant(target))) return;
       await appendModelBranch(
         target,
         target.id,
@@ -174,7 +188,7 @@ export const useMessageActions = (
         'Failed to generate branch'
       );
     },
-    [messages, appendModelBranch]
+    [messages, wsRegenEligible, regenerateAssistant, appendModelBranch]
   );
 
   const handleRegenerate = useCallback(
@@ -193,6 +207,7 @@ export const useMessageActions = (
         }
       }
       if (!target || target.role !== Role.Model) return;
+      if (wsRegenEligible(target) && (await regenerateAssistant(target))) return;
       await appendModelBranch(
         target,
         activeLeafId ?? target.id,
@@ -200,7 +215,7 @@ export const useMessageActions = (
         'Regeneration failed'
       );
     },
-    [messages, activePath, activeLeafId, appendModelBranch]
+    [messages, activePath, activeLeafId, wsRegenEligible, regenerateAssistant, appendModelBranch]
   );
 
   const handleContinue = useCallback(
@@ -279,9 +294,17 @@ export const useMessageActions = (
       setMessages((prev) =>
         prev.map((msg) => (msg.id === messageId ? { ...msg, content: newContent } : msg))
       );
+      // Server-sync the in-place edit so the conversation tree stays
+      // authoritative — companion (WS) path only (no-op if offline). Group chat
+      // and "Assistant" don't use the WS tree; leave them local, as before, so
+      // an edit can't leak onto a lingering companion socket's session.
+      const target = messages.find((m) => m.id === messageId);
+      if (target && wsRegenEligible(target)) {
+        wsChatRef.current?.editNode(messageId, newContent);
+      }
       toast.success('Message edited');
     },
-    [setMessages, toast]
+    [messages, wsRegenEligible, setMessages, wsChatRef, toast]
   );
 
   const handleDeleteMessage = useCallback(
@@ -342,9 +365,16 @@ export const useMessageActions = (
       if (activeLeafId && toRemove.has(activeLeafId)) {
         setActiveLeafId(targetParentId);
       }
+      // Server-sync the delete so the server tree drops the subtree too — this
+      // is what permanently fixes the "server resurrects a deleted node on
+      // reload" class. Companion (WS) path only (no-op if offline); group chat /
+      // "Assistant" stay local, as before.
+      if (target && wsRegenEligible(target)) {
+        wsChatRef.current?.deleteNode(messageId);
+      }
       toast.success('Message deleted');
     },
-    [messages, activeLeafId, setMessages, setActiveLeafId, toast]
+    [messages, activeLeafId, wsRegenEligible, setMessages, setActiveLeafId, wsChatRef, toast]
   );
 
   return {

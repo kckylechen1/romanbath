@@ -7,6 +7,7 @@ import {
   getCharacterDetails,
   type AffectState,
   type WsChatCallbacks,
+  type WsSendIds,
 } from '../services/zeroclawService';
 import {
   buildCharacterPhotoPrompt,
@@ -15,7 +16,7 @@ import {
 } from '../services/imageGenService';
 import { selectNextCharacter, updateGroupChat } from '../services/groupChatService';
 import { useChatHelpers } from './useChatHelpers';
-import { mergeServerNodes } from './useMessageTree';
+import { mergeServerNodes, shouldAdoptServerLeaf } from './useMessageTree';
 import { generateId } from '../utils/id';
 import type { ToastAPI } from '../components/Toast';
 import { expandMacros, type MacroContext } from '../services/macroService';
@@ -32,6 +33,11 @@ export interface UseChatGenerationReturn {
   wsChatRef: React.MutableRefObject<WsChatConnection | null>;
   /** Latest perceived affect (drives the avatar mood glow); null = neutral. */
   currentAffect: AffectState | null;
+  /** Regenerate/generate-swipe over the WS pipeline: reuse the target's user
+   *  node and grow a server-synced alternate assistant sibling. Resolves true
+   *  if handled, false to decline (no user node) so the caller falls back to
+   *  the REST branch helper. Companion (WS) path only. */
+  regenerateAssistant: (target: Message) => Promise<boolean>;
 }
 
 export const useChatGeneration = (
@@ -84,6 +90,42 @@ export const useChatGeneration = (
     activePathRef.current = activePath;
   }, [activePath]);
 
+  // Reconcile a server-broadcast in-place edit. Idempotent with the optimistic
+  // local edit: if the content already matches (this device's own echo) it's a
+  // referential no-op so React bails out.
+  const applyNodeEdited = useCallback(
+    (msgId: string, content: string) => {
+      setMessages((prev) => {
+        const target = prev.find((m) => m.id === msgId);
+        if (!target || target.content === content) return prev;
+        return prev.map((m) => (m.id === msgId ? { ...m, content } : m));
+      });
+    },
+    [setMessages]
+  );
+
+  // Reconcile a server-broadcast subtree delete. Idempotent with the optimistic
+  // local delete: if none of the removed ids are present (this device already
+  // deleted them) it's a no-op. childrenIds are patched so a deleted branch
+  // doesn't leave a phantom leaf in BranchMiniMap. The activeLeafId effect in
+  // useAppLogic recovers the active branch if it pointed into the deleted set.
+  const applyNodeDeleted = useCallback(
+    (msgId: string, removed: string[]) => {
+      const toRemove = new Set<string>(removed.length > 0 ? removed : [msgId]);
+      if (msgId) toRemove.add(msgId);
+      setMessages((prev) => {
+        if (!prev.some((m) => toRemove.has(m.id))) return prev;
+        return prev
+          .filter((m) => !toRemove.has(m.id))
+          .map((m) => ({
+            ...m,
+            childrenIds: (m.childrenIds ?? []).filter((id) => !toRemove.has(id)),
+          }));
+      });
+    },
+    [setMessages]
+  );
+
   const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } = useChatHelpers(
     config,
     activeGroup,
@@ -132,16 +174,33 @@ export const useChatGeneration = (
       onDone: () => {},
       onError: () => {},
       onAffect: (affect) => setCurrentAffect(affect),
-      onHistory: (nodes) => {
+      onHistory: (nodes, activeLeaf) => {
         if (hydratedChatsRef.current.has(chatKey)) return;
         hydratedChatsRef.current.add(chatKey);
-        setMessages((prev) => mergeServerNodes(prev, nodes));
-        // NOTE: adopting the server's active_leaf here (X3) is DEFERRED to
-        // increment 3. Local regenerate/swipe branches aren't server-synced yet
-        // (they go via REST), so the server's active_leaf is stale relative to
-        // them — adopting it would yank the user back to a pre-regenerate branch
-        // on every reload. Safe to adopt only once local branches selectLeaf.
+        // X3 (re-enabled in inc 3b): adopt the server's active_leaf on FIRST
+        // hydration. Regenerate/swipe/delete are now server-synced (alternate
+        // turns + delete frames), so the server's active_leaf is no longer
+        // stale relative to local branches.
+        // SAFETY: only adopt a leaf that EXISTS in the post-merge local tree.
+        // A locally-deleted node the server still has (e.g. a delete sent while
+        // offline) is not resurrected by mergeServerNodes here beyond the union,
+        // and we never point the active branch at a node absent from the merged
+        // tree — so X3 can't yank the user into a vanished subtree.
+        setMessages((prev) => {
+          const merged = mergeServerNodes(prev, nodes);
+          // Adopt the server's active branch only when SAFE (see
+          // shouldAdoptServerLeaf): never yank the user onto a node the
+          // union-merge resurrected from the server but the client had deleted.
+          const localIds = new Set(prev.map((m) => m.id));
+          const mergedIds = new Set(merged.map((m) => m.id));
+          if (shouldAdoptServerLeaf(localIds, mergedIds, activeLeaf)) {
+            setActiveLeafId(activeLeaf);
+          }
+          return merged;
+        });
       },
+      onNodeEdited: applyNodeEdited,
+      onNodeDeleted: applyNodeDeleted,
     });
     ws.connect(
       selectedCharacter.name,
@@ -170,7 +229,127 @@ export const useChatGeneration = (
     config.userDescription,
     setMessages,
     setActiveLeafId,
+    applyNodeEdited,
+    applyNodeDeleted,
   ]);
+
+  // Shared per-turn WS callbacks: stream chunks/tools into the assistant
+  // placeholder `botMsgId`, settle on done/error, and reconcile server
+  // broadcasts. Used by BOTH the normal send and the alternate (regenerate/
+  // swipe) turn so the streaming/placeholder/done machinery lives in one place.
+  // NOTE: onHistory here MERGES but does NOT adopt active_leaf — during a live
+  // turn the user is on the freshly-grown branch; adopting the server leaf would
+  // yank them off it. active_leaf adoption (X3) happens only on connect-on-load.
+  const buildTurnCallbacks = useCallback(
+    (botMsgId: string): WsChatCallbacks => ({
+      onChunk: (_chunk: string, fullText: string) => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === botMsgId ? { ...msg, content: fullText, isThinking: false } : msg
+          )
+        );
+      },
+      onToolCall: (toolName: string) => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === botMsgId
+              ? {
+                  ...msg,
+                  toolCalls: [...(msg.toolCalls || []), { toolName, status: 'running' as const }],
+                }
+              : msg
+          )
+        );
+      },
+      onToolResult: (
+        toolName: string,
+        output: string,
+        mediaUrl?: string,
+        mediaType?: 'image' | 'audio' | 'video'
+      ) => {
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== botMsgId) return msg;
+            const calls = [...(msg.toolCalls || [])];
+            const idx = calls.findIndex(
+              (tc) => tc.toolName === toolName && tc.status === 'running'
+            );
+            if (idx !== -1) {
+              calls[idx] = { ...calls[idx], status: 'done' as const, output, mediaUrl, mediaType };
+            }
+            return { ...msg, toolCalls: calls, isThinking: false };
+          })
+        );
+      },
+      onDone: (fullText: string) => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === botMsgId ? { ...msg, content: fullText, isThinking: false } : msg
+          )
+        );
+        setIsTyping(false);
+      },
+      onError: (error: string) => {
+        console.error('WS chat error:', error);
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === botMsgId ? { ...msg, content: `⚠️ ${error}`, isThinking: false } : msg
+          )
+        );
+        setIsTyping(false);
+      },
+      onAffect: (affect) => setCurrentAffect(affect),
+      onHistory: (nodes) => {
+        // Reconcile with the server-authoritative tree ONCE per chat
+        // (cross-device / fresh client). Union by id keeps local nodes.
+        const chatKey = `${selectedCharacter.id}:${currentChatFileName ?? 'default'}`;
+        if (hydratedChatsRef.current.has(chatKey)) return;
+        hydratedChatsRef.current.add(chatKey);
+        setMessages((prev) => mergeServerNodes(prev, nodes));
+      },
+      onNodeEdited: applyNodeEdited,
+      onNodeDeleted: applyNodeDeleted,
+    }),
+    [
+      setMessages,
+      setIsTyping,
+      setCurrentAffect,
+      selectedCharacter.id,
+      currentChatFileName,
+      applyNodeEdited,
+      applyNodeDeleted,
+    ]
+  );
+
+  // Connect-or-reuse the persistent (character, chat) socket, then send. The
+  // gateway's WS loop handles many turns per connection, so an established
+  // socket for THIS session is reused (rebind this turn's callbacks); otherwise
+  // a stale/absent one is replaced. Shared by the normal send and the alternate
+  // (regenerate/swipe) turn so the connection lifecycle lives in one place.
+  const connectOrReuseAndSend = useCallback(
+    async (content: string, sendIds: WsSendIds, callbacks: WsChatCallbacks): Promise<void> => {
+      const sessionId = `companion:${selectedCharacter.id}:${currentChatFileName ?? 'default'}`;
+      const existing = wsChatRef.current;
+      if (existing?.isConnected && existing.session === sessionId) {
+        existing.rebindCallbacks(callbacks);
+        existing.send(content, sendIds);
+      } else {
+        existing?.close();
+        const ws = new WsChatConnection(callbacks);
+        await ws.connect(
+          selectedCharacter.name,
+          'play',
+          config.userName || undefined,
+          undefined,
+          sessionId,
+          config.userDescription || undefined
+        );
+        wsChatRef.current = ws;
+        ws.send(content, sendIds);
+      }
+    },
+    [selectedCharacter.id, selectedCharacter.name, currentChatFileName, config.userName, config.userDescription]
+  );
 
   const handleSendMessage = useCallback(async () => {
     if (!inputText.trim() || isTyping) return;
@@ -331,124 +510,17 @@ export const useChatGeneration = (
 
       if (useWs) {
         try {
-          // Stable session id per (character, chat thread): the gateway resumes
-          // this conversation's server-side session instead of starting amnesiac.
-          const sessionId = `companion:${respondingCharacter.id}:${currentChatFileName ?? 'default'}`;
-          // Per-turn callbacks close over THIS turn's botMsgId. For a reused
-          // (persistent) socket they're rebound before each send; for a fresh
-          // socket they're the constructor callbacks.
-          const callbacks: WsChatCallbacks = {
-            onChunk: (_chunk: string, fullText: string) => {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === botMsgId ? { ...msg, content: fullText, isThinking: false } : msg
-                )
-              );
-            },
-            onToolCall: (toolName: string) => {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === botMsgId
-                    ? {
-                        ...msg,
-                        toolCalls: [
-                          ...(msg.toolCalls || []),
-                          { toolName, status: 'running' as const },
-                        ],
-                      }
-                    : msg
-                )
-              );
-            },
-            onToolResult: (
-              toolName: string,
-              output: string,
-              mediaUrl?: string,
-              mediaType?: 'image' | 'audio' | 'video'
-            ) => {
-              setMessages((prev) =>
-                prev.map((msg) => {
-                  if (msg.id !== botMsgId) return msg;
-                  const calls = [...(msg.toolCalls || [])];
-                  const idx = calls.findIndex(
-                    (tc) => tc.toolName === toolName && tc.status === 'running'
-                  );
-                  if (idx !== -1) {
-                    calls[idx] = {
-                      ...calls[idx],
-                      status: 'done' as const,
-                      output,
-                      mediaUrl,
-                      mediaType,
-                    };
-                  }
-                  return { ...msg, toolCalls: calls, isThinking: false };
-                })
-              );
-            },
-            onDone: (fullText: string) => {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === botMsgId ? { ...msg, content: fullText, isThinking: false } : msg
-                )
-              );
-              setIsTyping(false);
-            },
-            onError: (error: string) => {
-              console.error('WS chat error:', error);
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === botMsgId
-                    ? { ...msg, content: `⚠️ ${error}`, isThinking: false }
-                    : msg
-                )
-              );
-              setIsTyping(false);
-            },
-            onAffect: (affect) => setCurrentAffect(affect),
-            onHistory: (nodes) => {
-              // Reconcile with the server-authoritative tree ONCE per chat
-              // (cross-device / fresh client). Union by id keeps local nodes.
-              // Gated to first connect: the per-message connection replays the
-              // snapshot every turn, and re-merging each time would resurrect
-              // locally-deleted nodes (the server doesn't yet know about local
-              // deletes) and churn. After the first hydration the local tree is
-              // authoritative for the session.
-              const chatKey = `${respondingCharacter.id}:${currentChatFileName ?? 'default'}`;
-              if (hydratedChatsRef.current.has(chatKey)) return;
-              hydratedChatsRef.current.add(chatKey);
-              setMessages((prev) => mergeServerNodes(prev, nodes));
-            },
-          };
           // Client-minted node ids so the server stores the same tree the client
           // renders: this user turn (userMsg.id under parentForUser) + the
-          // assistant placeholder (botMsgId).
-          const sendIds = {
+          // assistant placeholder (botMsgId). Per-turn callbacks close over THIS
+          // turn's botMsgId; connectOrReuseAndSend rebinds them on a reused
+          // socket or installs them on a fresh one.
+          const sendIds: WsSendIds = {
             msgId: userMsg.id,
             parentId: parentForUser,
             assistantMsgId: botMsgId,
           };
-          const existing = wsChatRef.current;
-          if (existing?.isConnected && existing.session === sessionId) {
-            // Reuse the persistent socket (the gateway's WS loop handles many
-            // turns per connection) — rebind this turn's callbacks, then send.
-            existing.rebindCallbacks(callbacks);
-            existing.send(expandedInput, sendIds);
-          } else {
-            // Different conversation or no live socket: (re)connect.
-            existing?.close();
-            const ws = new WsChatConnection(callbacks);
-            await ws.connect(
-              respondingCharacter.name,
-              'play',
-              config.userName || undefined,
-              undefined,
-              sessionId,
-              config.userDescription || undefined
-            );
-            wsChatRef.current = ws;
-            ws.send(expandedInput, sendIds);
-          }
+          await connectOrReuseAndSend(expandedInput, sendIds, buildTurnCallbacks(botMsgId));
           usedWs = true;
         } catch (wsErr) {
           console.warn('WebSocket chat unavailable for character, falling back to REST:', wsErr);
@@ -557,7 +629,82 @@ export const useChatGeneration = (
     buildChatMessagesForContext,
     currentChatFileName,
     setActiveGroup,
+    buildTurnCallbacks,
+    connectOrReuseAndSend,
   ]);
+
+  // Regenerate / generate-swipe over the WS pipeline. `target` is an assistant
+  // message; its parent is the user node U. We REUSE U (no new user bubble) and
+  // grow a NEW assistant SIBLING under it as an alternate turn (alternate:true →
+  // server reuses U + skips memory). Streams via the same machinery as a normal
+  // send. The companion (WS) path only — group/Assistant regenerate stays REST.
+  const regenerateAssistant = useCallback(
+    async (target: Message): Promise<boolean> => {
+      const all = messagesRef.current;
+      const userNode = target.parentId
+        ? (all.find((m) => m.id === target.parentId) ?? null)
+        : null;
+      // No user turn to reuse (e.g. the greeting / a root assistant) — nothing to
+      // regenerate against on the server. Decline so the caller falls back to the
+      // REST branch helper.
+      if (!userNode || userNode.role !== Role.User) return false;
+
+      const newBotId = generateId();
+      setIsTyping(true);
+
+      // Append the NEW assistant placeholder as a sibling under U and make it the
+      // active tip, so the chat surface renders the branch we're growing.
+      setMessages((prev) => {
+        const next = [
+          ...prev,
+          {
+            id: newBotId,
+            role: Role.Model,
+            content: '',
+            timestamp: Date.now(),
+            isThinking: true,
+            parentId: userNode.id,
+            childrenIds: [],
+            extra: target.extra,
+          } as Message,
+        ];
+        const uIdx = next.findIndex((m) => m.id === userNode.id);
+        if (uIdx >= 0) {
+          const u = { ...next[uIdx] };
+          u.childrenIds = [...(u.childrenIds ?? []), newBotId];
+          next[uIdx] = u;
+        }
+        return next;
+      });
+      setActiveLeafId(newBotId);
+
+      // Reuse U (msgId = U.id, parent = U.parentId, content = U.content) and add
+      // a NEW assistant sibling (assistantMsgId), alternate:true.
+      const sendIds: WsSendIds = {
+        msgId: userNode.id,
+        parentId: userNode.parentId ?? null,
+        assistantMsgId: newBotId,
+        alternate: true,
+      };
+
+      try {
+        await connectOrReuseAndSend(userNode.content, sendIds, buildTurnCallbacks(newBotId));
+      } catch (err) {
+        // Connect failed: roll back the placeholder so a failed regenerate
+        // doesn't strand a thinking bubble, and restore the prior tip. (Stream
+        // errors after a successful send are shown in-bubble by onError.)
+        console.error('Regenerate failed:', err);
+        setMessages((prev) => prev.filter((m) => m.id !== newBotId));
+        setActiveLeafId(target.id);
+        setIsTyping(false);
+        toast.error('Regeneration failed', err instanceof Error ? err.message : 'Unknown error');
+      }
+      // Handled (sent, or attempted-and-rolled-back) — don't double-attempt via
+      // REST. A no-user-node decline returned false earlier.
+      return true;
+    },
+    [setMessages, setActiveLeafId, setIsTyping, connectOrReuseAndSend, buildTurnCallbacks, toast]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -582,5 +729,6 @@ export const useChatGeneration = (
     isComposingRef,
     wsChatRef,
     currentAffect,
+    regenerateAssistant,
   };
 };

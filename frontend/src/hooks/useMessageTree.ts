@@ -64,6 +64,27 @@ export const mergeServerNodes = (local: Message[], nodes: ServerHistoryNode[]): 
   return merged.map((m) => ({ ...m, childrenIds: childrenByParent.get(m.id) ?? [] }));
 };
 
+/**
+ * X3 adoption safety. On connect-on-load hydration the client may adopt the
+ * server's active branch — but ONLY when it is safe to do so:
+ *  - the leaf survived the merge (`mergedIds.has(activeLeaf)`), AND
+ *  - either the client is fresh (no local tree to contradict) OR the leaf is
+ *    one the client ALREADY had locally (`localIds`).
+ * This blocks adopting a node that the union-merge resurrected from the server
+ * (e.g. a subtree the user deleted locally whose delete frame never reached the
+ * server) — such a node is absent from `localIds`, so we never yank the user
+ * onto a branch they deleted. (Full tombstone-aware merge lands in inc 4.)
+ */
+export const shouldAdoptServerLeaf = (
+  localIds: Set<string>,
+  mergedIds: Set<string>,
+  activeLeaf: string | null | undefined
+): activeLeaf is string => {
+  if (!activeLeaf) return false;
+  const locallyKnown = localIds.size === 0 || localIds.has(activeLeaf);
+  return locallyKnown && mergedIds.has(activeLeaf);
+};
+
 export interface MessageTree {
   byId: Map<string, Message>;
   childrenOf: Map<string | null, Message[]>;

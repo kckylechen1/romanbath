@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../types';
 import { Role } from '../types';
-import { deepestLeaf, indexMessages, mergeServerNodes } from './useMessageTree';
+import {
+  deepestLeaf,
+  indexMessages,
+  mergeServerNodes,
+  shouldAdoptServerLeaf,
+} from './useMessageTree';
 
 const mk = (
   id: string,
@@ -69,5 +74,37 @@ describe('mergeServerNodes', () => {
   it('returns the same array when there are no server nodes', () => {
     const local = [mk('u1', null)];
     expect(mergeServerNodes(local, [])).toBe(local);
+  });
+});
+
+describe('shouldAdoptServerLeaf (X3 adoption safety)', () => {
+  it('adopts on a fresh client (empty local tree) when the leaf is in the merged tree', () => {
+    // Cleared cache / new device: nothing local to contradict, land where the
+    // server says the active branch is.
+    expect(shouldAdoptServerLeaf(new Set(), new Set(['a2']), 'a2')).toBe(true);
+  });
+
+  it('adopts a leaf the client already had locally (reload → stay on my branch)', () => {
+    expect(shouldAdoptServerLeaf(new Set(['u1', 'a1', 'a2']), new Set(['u1', 'a1', 'a2']), 'a2')).toBe(
+      true
+    );
+  });
+
+  it('does NOT adopt a resurrected leaf absent from the local tree (deleted locally)', () => {
+    // The user deleted subtree {u2,a2} locally; the merge resurrected it from
+    // the server (delete frame never landed). It is in mergedIds but NOT in the
+    // non-empty localIds, so X3 must NOT yank the user onto it.
+    const localIds = new Set(['u1', 'a1']);
+    const mergedIds = new Set(['u1', 'a1', 'u2', 'a2']);
+    expect(shouldAdoptServerLeaf(localIds, mergedIds, 'a2')).toBe(false);
+  });
+
+  it('does NOT adopt a leaf missing from the merged tree', () => {
+    expect(shouldAdoptServerLeaf(new Set(['u1']), new Set(['u1']), 'ghost')).toBe(false);
+  });
+
+  it('does NOT adopt when there is no server active leaf', () => {
+    expect(shouldAdoptServerLeaf(new Set(['u1']), new Set(['u1']), null)).toBe(false);
+    expect(shouldAdoptServerLeaf(new Set(['u1']), new Set(['u1']), undefined)).toBe(false);
   });
 });
