@@ -32,12 +32,19 @@ export interface ServerHistoryNode {
  * the merge only does work for genuine cross-device / fresh-client reconciliation.
  * The snapshot is a self-contained tree, so added nodes' parents are present too.
  */
-export const mergeServerNodes = (local: Message[], nodes: ServerHistoryNode[]): Message[] => {
+export const mergeServerNodes = (
+  local: Message[],
+  nodes: ServerHistoryNode[],
+  tombstones?: Set<string>
+): Message[] => {
   if (nodes.length === 0) return local;
   const have = new Set(local.map((m) => m.id));
   const additions: Message[] = [];
   for (const n of nodes) {
     if (have.has(n.id)) continue;
+    // Never resurrect a node the user deleted locally (a delete whose frame
+    // may not have reached the server). See tombstoneStore.
+    if (tombstones?.has(n.id)) continue;
     additions.push({
       id: n.id,
       role: n.role === 'user' ? Role.User : Role.Model,

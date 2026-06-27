@@ -75,6 +75,37 @@ describe('mergeServerNodes', () => {
     const local = [mk('u1', null)];
     expect(mergeServerNodes(local, [])).toBe(local);
   });
+
+  it('does NOT resurrect a tombstoned (locally-deleted) server node', () => {
+    // The user deleted {u2,a2} locally; the server snapshot still has them
+    // (delete frame never landed). With those ids tombstoned the merge must NOT
+    // re-add them, even though they are server-only.
+    const local = [mk('u1', null), mk('a1', 'u1')];
+    const merged = mergeServerNodes(
+      local,
+      [
+        { id: 'u1', parent_id: null, role: 'user', content: 'hi' },
+        { id: 'a1', parent_id: 'u1', role: 'assistant', content: 'a1' },
+        { id: 'u2', parent_id: 'a1', role: 'user', content: 'deleted-locally' },
+        { id: 'a2', parent_id: 'u2', role: 'assistant', content: 'deleted-locally' },
+      ],
+      new Set(['u2', 'a2'])
+    );
+    expect(merged.map((m) => m.id).sort()).toEqual(['a1', 'u1']);
+  });
+
+  it('still adds non-tombstoned server-only nodes when a tombstone set is given', () => {
+    const local = [mk('u1', null)];
+    const merged = mergeServerNodes(
+      local,
+      [
+        { id: 'u1', parent_id: null, role: 'user', content: 'hi' },
+        { id: 'a1', parent_id: 'u1', role: 'assistant', content: 'genuinely new' },
+      ],
+      new Set(['some-other-deleted-id'])
+    );
+    expect(merged.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
 });
 
 describe('shouldAdoptServerLeaf (X3 adoption safety)', () => {

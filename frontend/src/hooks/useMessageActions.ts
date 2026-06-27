@@ -32,7 +32,9 @@ export const useMessageActions = (
   // Companion (WS) regenerate/swipe: reuse the user node + grow a server-synced
   // alternate assistant sibling. Returns true if it handled the turn, false to
   // decline (no user node to reuse) so we fall back to the REST branch helper.
-  regenerateAssistant: (target: Message) => Promise<boolean>
+  regenerateAssistant: (target: Message) => Promise<boolean>,
+  // Persist deleted node ids so a later hydration can't resurrect them.
+  recordTombstones: (ids: string[]) => void
 ): UseMessageActionsReturn => {
   const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } = useChatHelpers(
     config,
@@ -368,13 +370,25 @@ export const useMessageActions = (
       // Server-sync the delete so the server tree drops the subtree too — this
       // is what permanently fixes the "server resurrects a deleted node on
       // reload" class. Companion (WS) path only (no-op if offline); group chat /
-      // "Assistant" stay local, as before.
+      // "Assistant" stay local, as before. Tombstone the removed ids so even an
+      // OFFLINE delete (frame never reached the server) survives a reload — the
+      // next hydration won't resurrect them.
       if (target && wsRegenEligible(target)) {
         wsChatRef.current?.deleteNode(messageId);
+        recordTombstones([...toRemove]);
       }
       toast.success('Message deleted');
     },
-    [messages, activeLeafId, wsRegenEligible, setMessages, setActiveLeafId, wsChatRef, toast]
+    [
+      messages,
+      activeLeafId,
+      wsRegenEligible,
+      recordTombstones,
+      setMessages,
+      setActiveLeafId,
+      wsChatRef,
+      toast,
+    ]
   );
 
   return {

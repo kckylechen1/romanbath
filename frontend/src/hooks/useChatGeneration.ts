@@ -15,6 +15,7 @@ import {
   isPhotoRequest,
 } from '../services/imageGenService';
 import { selectNextCharacter, updateGroupChat } from '../services/groupChatService';
+import { getTombstones, addTombstones } from '../services/tombstoneStore';
 import { useChatHelpers } from './useChatHelpers';
 import { mergeServerNodes, shouldAdoptServerLeaf } from './useMessageTree';
 import { generateId } from '../utils/id';
@@ -38,6 +39,9 @@ export interface UseChatGenerationReturn {
    *  if handled, false to decline (no user node) so the caller falls back to
    *  the REST branch helper. Companion (WS) path only. */
   regenerateAssistant: (target: Message) => Promise<boolean>;
+  /** Persist deleted node ids (the delete handler + broadcast reconciler call
+   *  this) so a later hydration never resurrects them. */
+  recordTombstones: (ids: string[]) => void;
 }
 
 export const useChatGeneration = (
@@ -61,6 +65,10 @@ export const useChatGeneration = (
   // character+chat), so the per-message connection's repeated snapshots merge
   // only once — see onHistory.
   const hydratedChatsRef = useRef<Set<string>>(new Set());
+  // Ids the user deleted in THIS chat, loaded from IndexedDB on entry. Passed
+  // to mergeServerNodes so a delete that didn't reach the server can't be
+  // resurrected by a later hydration (survives reload). See tombstoneStore.
+  const tombstonesRef = useRef<Set<string>>(new Set());
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const wsChatRef = useRef<WsChatConnection | null>(null);
@@ -109,10 +117,25 @@ export const useChatGeneration = (
   // deleted them) it's a no-op. childrenIds are patched so a deleted branch
   // doesn't leave a phantom leaf in BranchMiniMap. The activeLeafId effect in
   // useAppLogic recovers the active branch if it pointed into the deleted set.
+  // Remember deleted ids (in-memory ref + persisted) so a later hydration never
+  // resurrects them. Called by the local delete handler and by the broadcast
+  // reconciler below.
+  const recordTombstones = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      for (const id of ids) tombstonesRef.current.add(id);
+      void addTombstones(selectedCharacter.id, currentChatFileName ?? 'default', ids);
+    },
+    [selectedCharacter.id, currentChatFileName]
+  );
+
   const applyNodeDeleted = useCallback(
     (msgId: string, removed: string[]) => {
       const toRemove = new Set<string>(removed.length > 0 ? removed : [msgId]);
       if (msgId) toRemove.add(msgId);
+      // A delete broadcast (this device's echo or another device) is also a
+      // tombstone: persist it so a future reload doesn't resurrect the subtree.
+      recordTombstones([...toRemove]);
       setMessages((prev) => {
         if (!prev.some((m) => toRemove.has(m.id))) return prev;
         return prev
@@ -123,7 +146,7 @@ export const useChatGeneration = (
           }));
       });
     },
-    [setMessages]
+    [setMessages, recordTombstones]
   );
 
   const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } = useChatHelpers(
@@ -150,6 +173,13 @@ export const useChatGeneration = (
     // switching away and back — or reconnecting — reconciles with the server
     // tree again instead of trusting a possibly-stale local snapshot.
     hydratedChatsRef.current.clear();
+    // Load this chat's tombstones before hydration so the merge can skip
+    // resurrecting deleted nodes (IndexedDB read; usually resolves before the
+    // server snapshot arrives over the network).
+    tombstonesRef.current = new Set();
+    void getTombstones(selectedCharacter.id, currentChatFileName ?? 'default').then((ids) => {
+      tombstonesRef.current = new Set(ids);
+    });
   }, [selectedCharacter.id, currentChatFileName]);
 
   // Connect-on-load: open the persistent socket when a chat WITH HISTORY is
@@ -187,7 +217,7 @@ export const useChatGeneration = (
         // and we never point the active branch at a node absent from the merged
         // tree — so X3 can't yank the user into a vanished subtree.
         setMessages((prev) => {
-          const merged = mergeServerNodes(prev, nodes);
+          const merged = mergeServerNodes(prev, nodes, tombstonesRef.current);
           // Adopt the server's active branch only when SAFE (see
           // shouldAdoptServerLeaf): never yank the user onto a node the
           // union-merge resurrected from the server but the client had deleted.
@@ -305,7 +335,7 @@ export const useChatGeneration = (
         const chatKey = `${selectedCharacter.id}:${currentChatFileName ?? 'default'}`;
         if (hydratedChatsRef.current.has(chatKey)) return;
         hydratedChatsRef.current.add(chatKey);
-        setMessages((prev) => mergeServerNodes(prev, nodes));
+        setMessages((prev) => mergeServerNodes(prev, nodes, tombstonesRef.current));
       },
       onNodeEdited: applyNodeEdited,
       onNodeDeleted: applyNodeDeleted,
@@ -730,5 +760,6 @@ export const useChatGeneration = (
     wsChatRef,
     currentAffect,
     regenerateAssistant,
+    recordTombstones,
   };
 };
