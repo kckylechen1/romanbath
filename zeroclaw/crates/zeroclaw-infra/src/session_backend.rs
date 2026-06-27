@@ -374,6 +374,15 @@ pub trait SessionBackend: Send + Sync {
     fn delete_subtree(&self, _session_key: &str, _msg_id: &str) -> std::io::Result<Vec<String>> {
         Ok(Vec::new())
     }
+
+    /// The leaf a new turn should extend: the explicit active leaf if set,
+    /// else the tree's deepest leaf. For a legacy purely-linear session this
+    /// resolves to the tail, so appending a new turn under this tip keeps the
+    /// old history connected to the new branch (no orphaned roots on resume).
+    /// Default: the active leaf (or `None`).
+    fn conversation_tip(&self, session_key: &str) -> Option<String> {
+        self.get_active_leaf(session_key)
+    }
 }
 
 /// Session state information.

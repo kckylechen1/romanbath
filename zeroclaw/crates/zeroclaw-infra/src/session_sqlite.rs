@@ -1067,6 +1067,16 @@ impl SessionBackend for SqliteSessionBackend {
         Ok(())
     }
 
+    fn conversation_tip(&self, session_key: &str) -> Option<String> {
+        if let Some(leaf) = self.get_active_leaf(session_key) {
+            return Some(leaf);
+        }
+        let tree = self.load_tree(session_key);
+        let by_id: HashMap<&str, &ConversationNode> =
+            tree.iter().map(|n| (n.msg_id.as_str(), n)).collect();
+        deepest_leaf(&tree, &by_id)
+    }
+
     fn delete_subtree(&self, session_key: &str, msg_id: &str) -> std::io::Result<Vec<String>> {
         let tree = self.load_tree(session_key);
         let existing: HashSet<&str> = tree.iter().map(|n| n.msg_id.as_str()).collect();
@@ -1867,6 +1877,42 @@ mod tests {
 
         // Deleting a non-existent node is a no-op.
         assert!(backend.delete_subtree("c", "ghost").unwrap().is_empty());
+    }
+
+    #[test]
+    fn new_tree_turn_attaches_to_legacy_linear_tip_preserving_history() {
+        // The migration hazard: a session created before the tree existed has
+        // linear rows (NULL msg_id). A new tree turn must attach to that
+        // chain's tip via conversation_tip, or load_active_path would orphan
+        // the legacy history behind a second root and drop it on resume.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        // Legacy linear history (the old append path).
+        backend.append("c", &ChatMessage::user("legacy one")).unwrap();
+        backend.append("c", &ChatMessage::assistant("legacy two")).unwrap();
+
+        // New turn attaches at the resolved tip.
+        let tip = backend.conversation_tip("c");
+        assert!(tip.is_some(), "tip resolves to the legacy chain's tail");
+        backend
+            .append_node("c", &node("u_new", tip.as_deref(), "user", "new question"))
+            .unwrap();
+        backend
+            .append_node("c", &node("a_new", Some("u_new"), "assistant", "new answer"))
+            .unwrap();
+
+        // Full history survives, in order — nothing orphaned.
+        let path = backend.load_active_path("c");
+        assert_eq!(
+            path.iter().map(|m| m.content.clone()).collect::<Vec<_>>(),
+            vec![
+                "legacy one".to_string(),
+                "legacy two".to_string(),
+                "new question".to_string(),
+                "new answer".to_string(),
+            ]
+        );
     }
 
     #[test]

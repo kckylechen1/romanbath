@@ -427,7 +427,11 @@ async fn handle_socket(
     let mut effective_name: Option<String> = None;
     let mut stored_messages = Vec::new();
     if let Some(ref backend) = state.session_backend {
-        let messages = backend.load(&session_key);
+        // Resume from the ACTIVE PATH of the conversation tree (root → active
+        // leaf), not the raw row order. For a legacy purely-linear session this
+        // is byte-identical to `load()`; for a branched one it seeds only the
+        // branch the client last had selected.
+        let messages = backend.load_active_path(&session_key);
         if !messages.is_empty() {
             message_count = messages.len();
             stored_messages = messages;
@@ -462,6 +466,40 @@ async fn handle_socket(
     let _ = sender
         .send(Message::Text(session_start.to_string().into()))
         .await;
+
+    // ── History snapshot ────────────────────────────────────────────
+    // Push the full conversation TREE (every branch, not just the active
+    // path) plus the active leaf, so a thin client can render the tree it no
+    // longer owns. Additive frame: pre-Solution-B clients ignore unknown
+    // frame types, so this is safe to always send. Only emitted when there is
+    // history to send.
+    if let Some(ref backend) = state.session_backend {
+        let nodes = backend.load_tree(&session_key);
+        if !nodes.is_empty() {
+            let active_leaf = backend.get_active_leaf(&session_key);
+            let node_json: Vec<serde_json::Value> = nodes
+                .iter()
+                .map(|n| {
+                    serde_json::json!({
+                        "id": n.msg_id,
+                        "parent_id": n.parent_id,
+                        "role": n.role,
+                        "content": n.content,
+                        "author_id": n.author_id,
+                        "status": n.status,
+                        "meta": n.meta,
+                        "timestamp": n.created_at.map(|d| d.to_rfc3339()),
+                    })
+                })
+                .collect();
+            let snapshot = serde_json::json!({
+                "type": "history_snapshot",
+                "nodes": node_json,
+                "active_leaf": active_leaf,
+            });
+            let _ = sender.send(Message::Text(snapshot.to_string().into())).await;
+        }
+    }
 
     // ── Optional connect handshake ──────────────────────────────────
     // The first message may be a `{"type":"connect",...}` frame carrying
@@ -1004,30 +1042,80 @@ fn session_queue_ws_error_code(error: &crate::session_queue::SessionQueueError) 
     }
 }
 
-fn persist_conversation_messages(
+/// Persist a turn's new messages as conversation-tree nodes, chained under the
+/// session's current tip (`conversation_tip`) so a new turn extends the active
+/// branch — and, crucially, extends a legacy purely-linear session's tail
+/// instead of orphaning it behind a second root. The final assistant node
+/// carries `status`; if the turn produced no assistant message (e.g. cancelled
+/// before any output) and `fallback_assistant` is provided, a synthetic
+/// assistant node with that content is appended so the interrupted turn stays
+/// visible and resumable. Sets the active leaf to the last node. Returns that
+/// leaf id, or `None` if nothing was persisted.
+///
+/// Ids are minted server-side here; once the client sends stable msg_ids
+/// (Solution B Phase 2) they replace the minted ones to drive branching.
+fn persist_turn_as_nodes(
     backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
     session_key: &str,
     messages: &[zeroclaw_providers::ConversationMessage],
-) {
-    for message in messages {
-        let zeroclaw_providers::ConversationMessage::Chat(message) = message else {
-            continue;
-        };
-        if message.role == "system" {
-            continue;
-        }
-        let _ = backend.append(session_key, message);
-    }
-}
+    status: &str,
+    fallback_assistant: Option<&str>,
+) -> Option<String> {
+    use zeroclaw_infra::session_backend::ConversationNode;
 
-fn has_assistant_chat_message(messages: &[zeroclaw_providers::ConversationMessage]) -> bool {
-    messages.iter().any(|message| {
-        matches!(
-            message,
-            zeroclaw_providers::ConversationMessage::Chat(message)
-                if message.role == "assistant"
-        )
-    })
+    let chats: Vec<&zeroclaw_providers::ChatMessage> = messages
+        .iter()
+        .filter_map(|m| match m {
+            zeroclaw_providers::ConversationMessage::Chat(c) if c.role != "system" => Some(c),
+            _ => None,
+        })
+        .collect();
+
+    let last_assistant = chats.iter().rposition(|c| c.role == "assistant");
+    let mut parent = backend.conversation_tip(session_key);
+    let mut last_id: Option<String> = None;
+
+    for (i, c) in chats.iter().enumerate() {
+        let msg_id = uuid::Uuid::new_v4().to_string();
+        let node = ConversationNode {
+            msg_id: msg_id.clone(),
+            parent_id: parent.clone(),
+            role: c.role.clone(),
+            content: c.content.clone(),
+            author_id: None,
+            status: (Some(i) == last_assistant).then(|| status.to_string()),
+            meta: None,
+            created_at: None,
+        };
+        let _ = backend.append_node(session_key, &node);
+        parent = Some(msg_id.clone());
+        last_id = Some(msg_id);
+    }
+
+    // Cancelled/failed before any assistant output: keep the old behavior of
+    // recording a placeholder assistant turn so the interruption is visible.
+    if last_assistant.is_none()
+        && let Some(content) = fallback_assistant
+    {
+        let msg_id = uuid::Uuid::new_v4().to_string();
+        let node = ConversationNode {
+            msg_id: msg_id.clone(),
+            parent_id: parent.clone(),
+            role: "assistant".to_string(),
+            content: content.to_string(),
+            author_id: None,
+            status: Some(status.to_string()),
+            meta: None,
+            created_at: None,
+        };
+        let _ = backend.append_node(session_key, &node);
+        last_id = Some(msg_id);
+    }
+
+    if let Some(ref leaf) = last_id {
+        let _ = backend.set_active_leaf(session_key, leaf);
+    }
+    last_id
 }
 
 /// Load a character card and inject it into the agent's system prompt.
@@ -1554,33 +1642,26 @@ async fn process_chat_message(
 
     if was_cancelled {
         if let Some(ref backend) = state.session_backend {
-            match &result {
-                Err(error) if !error.new_messages.is_empty() => {
-                    persist_conversation_messages(
-                        backend.as_ref(),
-                        session_key,
-                        &error.new_messages,
-                    );
-                    if !has_assistant_chat_message(&error.new_messages) {
-                        let truncated = if accumulated_text.is_empty() {
-                            "[interrupted by user]".to_string()
-                        } else {
-                            format!("{accumulated_text}\n\n[interrupted by user]")
-                        };
-                        let assistant_msg = zeroclaw_providers::ChatMessage::assistant(&truncated);
-                        let _ = backend.append(session_key, &assistant_msg);
-                    }
-                }
-                _ => {
-                    let truncated = if accumulated_text.is_empty() {
-                        "[interrupted by user]".to_string()
-                    } else {
-                        format!("{accumulated_text}\n\n[interrupted by user]")
-                    };
-                    let assistant_msg = zeroclaw_providers::ChatMessage::assistant(&truncated);
-                    let _ = backend.append(session_key, &assistant_msg);
-                }
-            }
+            // Persist whatever the turn produced as interrupted nodes; if no
+            // assistant message was emitted, the fallback records a placeholder
+            // assistant node (with any streamed text) so the interruption stays
+            // visible and resumable — same intent as the old append path.
+            let truncated = if accumulated_text.is_empty() {
+                "[interrupted by user]".to_string()
+            } else {
+                format!("{accumulated_text}\n\n[interrupted by user]")
+            };
+            let msgs: &[zeroclaw_providers::ConversationMessage] = match &result {
+                Err(error) => &error.new_messages,
+                Ok(_) => &[],
+            };
+            persist_turn_as_nodes(
+                backend.as_ref(),
+                session_key,
+                msgs,
+                "interrupted",
+                Some(&truncated),
+            );
         }
 
         // Inform the client the turn was aborted
@@ -1622,7 +1703,13 @@ async fn process_chat_message(
     match result {
         Ok(outcome) => {
             if let Some(ref backend) = state.session_backend {
-                persist_conversation_messages(backend.as_ref(), session_key, &outcome.new_messages);
+                persist_turn_as_nodes(
+                    backend.as_ref(),
+                    session_key,
+                    &outcome.new_messages,
+                    "complete",
+                    None,
+                );
             }
 
             // Save assistant memory to card SQLite DB (offloaded to blocking thread)
@@ -1788,7 +1875,13 @@ async fn process_chat_message(
             if let Some(ref backend) = state.session_backend
                 && !e.new_messages.is_empty()
             {
-                persist_conversation_messages(backend.as_ref(), session_key, &e.new_messages);
+                persist_turn_as_nodes(
+                    backend.as_ref(),
+                    session_key,
+                    &e.new_messages,
+                    "interrupted",
+                    None,
+                );
             }
 
             // Set session state to error
