@@ -752,6 +752,7 @@ async fn handle_socket(
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
             if parsed["type"].as_str() == Some("message") {
                 let content = parsed["content"].as_str().unwrap_or("").to_string();
+                let is_alternate = parsed["alternate"].as_bool().unwrap_or(false);
                 if !content.is_empty() {
                     let _session_guard = match state.session_queue.acquire(&session_key).await {
                         Ok(guard) => guard,
@@ -780,9 +781,10 @@ async fn handle_socket(
                         character_name.clone(),
                         user_name.clone(),
                         parse_turn_node_ids(&parsed),
+                        is_alternate,
                     )
                     .await;
-                    if let Some(ref cn) = character_name {
+                    if !is_alternate && let Some(ref cn) = character_name {
                         save_user_memory(&content, cn, user_name.as_deref().unwrap_or("User"));
                     }
                 }
@@ -913,6 +915,77 @@ async fn handle_socket(
                     continue;
                 }
 
+                // ── edit (in-place content change; SillyTavern semantics) ──
+                // Same node id/role/parent — only the text changes. Broadcast so
+                // every client on this session re-renders the node. Keyed on the
+                // BARE session_id (matches event_matches_session).
+                if msg_type == "edit" {
+                    let msg_id = parsed["msg_id"].as_str().unwrap_or("");
+                    let new_content = parsed["content"].as_str().unwrap_or("");
+                    // Reject empty content too — an edit that clears text would
+                    // silently wipe a node; treat it as malformed, not a wipe.
+                    if msg_id.is_empty() || new_content.is_empty() {
+                        let err = serde_json::json!({
+                            "type": "error",
+                            "message": "edit requires a non-empty msg_id and content",
+                            "code": "INVALID_EDIT"
+                        });
+                        let _ = sender.send(Message::Text(err.to_string().into())).await;
+                        continue;
+                    }
+                    if let Some(ref backend) = state.session_backend {
+                        if !apply_edit(backend.as_ref(), &session_key, msg_id, new_content) {
+                            let err = serde_json::json!({
+                                "type": "error",
+                                "message": "edit: unknown msg_id",
+                                "code": "INVALID_EDIT"
+                            });
+                            let _ = sender.send(Message::Text(err.to_string().into())).await;
+                            continue;
+                        }
+                        let _ = state.event_tx.send(serde_json::json!({
+                            "type": "node_edited",
+                            "session_id": session_id,
+                            "msg_id": msg_id,
+                            "content": new_content
+                        }));
+                    }
+                    continue;
+                }
+
+                // ── delete (remove a node and its entire subtree) ──
+                if msg_type == "delete" {
+                    let msg_id = parsed["msg_id"].as_str().unwrap_or("");
+                    if msg_id.is_empty() {
+                        let err = serde_json::json!({
+                            "type": "error",
+                            "message": "delete requires a msg_id",
+                            "code": "INVALID_DELETE"
+                        });
+                        let _ = sender.send(Message::Text(err.to_string().into())).await;
+                        continue;
+                    }
+                    if let Some(ref backend) = state.session_backend {
+                        let removed = apply_delete(backend.as_ref(), &session_key, msg_id);
+                        if removed.is_empty() {
+                            let err = serde_json::json!({
+                                "type": "error",
+                                "message": "delete: unknown msg_id",
+                                "code": "INVALID_DELETE"
+                            });
+                            let _ = sender.send(Message::Text(err.to_string().into())).await;
+                            continue;
+                        }
+                        let _ = state.event_tx.send(serde_json::json!({
+                            "type": "node_deleted",
+                            "session_id": session_id,
+                            "msg_id": msg_id,
+                            "removed": removed
+                        }));
+                    }
+                    continue;
+                }
+
                 if msg_type != "message" {
                     let err = serde_json::json!({
                         "type": "error",
@@ -942,6 +1015,10 @@ async fn handle_socket(
                 // (client uuids) — a generous 256-char cap rejects abuse.
                 const MAX_NODE_ID_LEN: usize = 256;
                 let ws_ids = parse_turn_node_ids(&parsed);
+                // An alternate turn (regenerate/swipe) still generates + persists
+                // a sibling, but must NOT feed memory — it's a re-roll of the same
+                // exchange, not new lived context. Default false => normal turn.
+                let is_alternate = parsed["alternate"].as_bool().unwrap_or(false);
                 let id_too_long = [&ws_ids.parent_id, &ws_ids.user_msg_id, &ws_ids.assistant_msg_id]
                     .iter()
                     .any(|o| o.as_deref().is_some_and(|s| s.len() > MAX_NODE_ID_LEN));
@@ -1000,9 +1077,10 @@ async fn handle_socket(
                     character_name.clone(),
                     user_name.clone(),
                     parse_turn_node_ids(&parsed),
+                    is_alternate,
                 )
                 .await;
-                if let Some(ref cn) = character_name {
+                if !is_alternate && let Some(ref cn) = character_name {
                     save_user_memory(&content, cn, user_name.as_deref().unwrap_or("User"));
                 }
             }
@@ -1291,6 +1369,64 @@ fn persist_turn_as_nodes(
     Some(assistant_id)
 }
 
+/// Edit a node's content IN-PLACE (SillyTavern semantics) — same id, role,
+/// parent, status, meta, author, created_at; only the text changes. NOT a new
+/// branch. Returns false (no write) if the node is absent. Drives the `edit`
+/// WS frame. Relies on Inc 3a's update_node legacy `lin-*` rowid fallback so a
+/// pre-tree linear node is editable too.
+fn apply_edit(
+    backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
+    session_key: &str,
+    msg_id: &str,
+    new_content: &str,
+) -> bool {
+    let Some(existing) = backend
+        .load_tree(session_key)
+        .into_iter()
+        .find(|n| n.msg_id == msg_id)
+    else {
+        return false;
+    };
+    let updated = zeroclaw_infra::session_backend::ConversationNode {
+        content: new_content.to_string(),
+        ..existing
+    };
+    backend.update_node(session_key, &updated).unwrap_or(false)
+}
+
+/// Delete a node and its entire subtree; returns the removed `msg_id`s (empty
+/// — no write — if the node is absent). If the active leaf fell inside the
+/// removed subtree, reset it to the deleted node's parent (when that parent
+/// still exists) so the next turn extends a live branch instead of a dangling
+/// leaf. There is no clear-active-leaf method by design — if no valid parent
+/// remains, the active leaf is left as-is and the read side filters the unknown
+/// reference. Drives the `delete` WS frame; relies on Inc 3a's delete_subtree
+/// legacy `lin-*` rowid fallback.
+fn apply_delete(
+    backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
+    session_key: &str,
+    msg_id: &str,
+) -> Vec<String> {
+    // Capture the target's parent BEFORE deleting (the row is gone afterward).
+    let Some(parent) = backend
+        .load_tree(session_key)
+        .into_iter()
+        .find(|n| n.msg_id == msg_id)
+        .map(|n| n.parent_id)
+    else {
+        return Vec::new();
+    };
+    let removed = backend.delete_subtree(session_key, msg_id).unwrap_or_default();
+    if let Some(leaf) = backend.get_active_leaf(session_key)
+        && removed.contains(&leaf)
+        && let Some(parent_id) = parent
+        && backend.node_exists(session_key, &parent_id)
+    {
+        let _ = backend.set_active_leaf(session_key, &parent_id);
+    }
+    removed
+}
+
 /// Load a character card and inject it into the agent's system prompt.
 /// Also injects relevant memories from past conversations.
 /// Returns `Ok(Some(first_mes))` if the card has an opening message,
@@ -1519,6 +1655,7 @@ async fn process_chat_message(
     character_name: Option<String>,
     user_name: Option<String>,
     turn_ids: TurnNodeIds,
+    is_alternate: bool,
 ) {
     use futures_util::StreamExt as _;
     use zeroclaw_runtime::agent::TurnEvent;
@@ -1815,6 +1952,10 @@ async fn process_chat_message(
     };
 
     if was_cancelled {
+        // BI-5: surface the persisted leaf + the resulting active leaf so the
+        // client can rebind its placeholder and resume the right branch.
+        let mut aborted_leaf: Option<String> = None;
+        let mut aborted_active_leaf: Option<String> = None;
         if let Some(ref backend) = state.session_backend {
             // Persist whatever the turn produced as interrupted nodes; if no
             // assistant message was emitted, the fallback records a placeholder
@@ -1825,7 +1966,7 @@ async fn process_chat_message(
             } else {
                 format!("{accumulated_text}\n\n[interrupted by user]")
             };
-            persist_turn_as_nodes(
+            aborted_leaf = persist_turn_as_nodes(
                 backend.as_ref(),
                 session_key,
                 content,
@@ -1833,10 +1974,15 @@ async fn process_chat_message(
                 "interrupted",
                 &turn_ids,
             );
+            aborted_active_leaf = backend.get_active_leaf(session_key);
         }
 
         // Inform the client the turn was aborted
-        let aborted = serde_json::json!({ "type": "aborted" });
+        let aborted = serde_json::json!({
+            "type": "aborted",
+            "node_id": aborted_leaf,
+            "active_leaf": aborted_active_leaf,
+        });
         let _ = sender.send(Message::Text(aborted.to_string().into())).await;
 
         // Set session state to idle
@@ -1888,7 +2034,8 @@ async fn process_chat_message(
             }
 
             // Save assistant memory to card SQLite DB (offloaded to blocking thread)
-            if let Some(ref cn) = character_name {
+            // Alternate turns (regenerate/swipe) skip ALL memory feeds.
+            if !is_alternate && let Some(ref cn) = character_name {
                 let uname = user_name.as_deref().unwrap_or("User").to_string();
                 let response = outcome.response.clone();
                 let data_dir = state.config.read().data_dir.clone();
@@ -1903,7 +2050,7 @@ async fn process_chat_message(
 
             // Fire-and-forget memory consolidation so facts from WS sessions
             // are extracted to long-term memory (Daily + Core categories).
-            if state.auto_save {
+            if !is_alternate && state.auto_save {
                 if let Some(mem) = ws_memory.clone() {
                     let model_provider = state.model_provider.clone();
                     let model = state.model.clone();
@@ -1950,7 +2097,7 @@ async fn process_chat_message(
             // Deep/REM sleep is intentionally NOT triggered here — those are
             // scheduled offline passes (daily / weekly) and belong on the
             // cron scheduler, not in the per-turn hot path.
-            if let Some(cn) = character_name.as_ref() {
+            if !is_alternate && let Some(cn) = character_name.as_ref() {
                 let config_snapshot = state.config.read().clone();
                 let data_dir_dream = config_snapshot.data_dir.clone();
                 let agent_alias_dream = agent_alias.to_string();
@@ -2053,6 +2200,10 @@ async fn process_chat_message(
             );
         }
         Err(e) => {
+            // BI-5: surface the persisted leaf + the resulting active leaf on the
+            // error frame, mirroring the aborted frame.
+            let mut error_leaf: Option<String> = None;
+            let mut error_active_leaf: Option<String> = None;
             if let Some(ref backend) = state.session_backend {
                 // Persist the user turn + a visible failed-assistant node so the
                 // turn isn't silently lost and a retry has an anchor.
@@ -2061,7 +2212,7 @@ async fn process_chat_message(
                 } else {
                     format!("{accumulated_text}\n\n[generation failed]")
                 };
-                persist_turn_as_nodes(
+                error_leaf = persist_turn_as_nodes(
                     backend.as_ref(),
                     session_key,
                     content,
@@ -2069,6 +2220,7 @@ async fn process_chat_message(
                     "interrupted",
                     &turn_ids,
                 );
+                error_active_leaf = backend.get_active_leaf(session_key);
             }
 
             // Set session state to error
@@ -2100,6 +2252,8 @@ async fn process_chat_message(
                 "type": "error",
                 "message": sanitized,
                 "code": error_code,
+                "node_id": error_leaf,
+                "active_leaf": error_active_leaf,
             });
             let _ = sender.send(Message::Text(err.to_string().into())).await;
 
@@ -2687,5 +2841,271 @@ mod tests {
             Some(fresh_user.msg_id.as_str()),
             "assistant chains under the fresh user node, not the grafted assistant"
         );
+    }
+
+    // ── Inc 3b: edit/delete free fns ──────────────────────────────────────
+
+    #[test]
+    fn apply_edit_updates_content_preserves_role() {
+        // Inc 3b: edit is IN-PLACE — only content changes; role/parent/id stay.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        let ids = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U".to_string()),
+            assistant_msg_id: Some("A".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q", "ans", "complete", &ids);
+
+        assert!(apply_edit(&backend, "s", "A", "edited ans"));
+
+        let tree = backend.load_tree("s");
+        let a = tree.iter().find(|n| n.msg_id == "A").expect("node A exists");
+        assert_eq!(a.content, "edited ans");
+        assert_eq!(a.role, "assistant", "role preserved");
+        assert_eq!(a.parent_id.as_deref(), Some("U"), "parent unchanged (in-place)");
+    }
+
+    #[test]
+    fn apply_edit_absent_returns_false() {
+        // Inc 3b: editing an unknown id is a no-op write returning false.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        let ids = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U".to_string()),
+            assistant_msg_id: Some("A".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q", "ans", "complete", &ids);
+        let before = backend.load_tree("s");
+
+        assert!(!apply_edit(&backend, "s", "ghost", "x"));
+
+        let after = backend.load_tree("s");
+        assert_eq!(before.len(), after.len(), "tree unchanged");
+        assert_eq!(
+            after.iter().find(|n| n.msg_id == "A").unwrap().content,
+            "ans",
+            "existing content untouched"
+        );
+    }
+
+    #[test]
+    fn apply_edit_legacy_linear_node() {
+        // Inc 3b: a pre-tree linear row (NULL msg_id) surfaces as `lin-*` and
+        // must be editable via Inc 3a's update_node rowid fallback.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        backend
+            .append(
+                "s",
+                &zeroclaw_api::model_provider::ChatMessage {
+                    role: "user".to_string(),
+                    content: "hello".to_string(),
+                },
+            )
+            .unwrap();
+
+        let lin_id = backend.load_tree("s")[0].msg_id.clone();
+        assert!(lin_id.starts_with("lin-"), "synthesized legacy id");
+
+        assert!(apply_edit(&backend, "s", &lin_id, "edited hello"));
+
+        let tree = backend.load_tree("s");
+        assert_eq!(tree[0].content, "edited hello", "legacy row edited by rowid");
+    }
+
+    #[test]
+    fn apply_delete_removes_subtree_returns_removed() {
+        // Inc 3b: delete removes the node + its whole subtree, returns the ids.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        // U -> A, then a regenerate branch under A: U2 -> A2.
+        let ids1 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U".to_string()),
+            assistant_msg_id: Some("A".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q", "ans", "complete", &ids1);
+        let ids2 = TurnNodeIds {
+            parent_id: Some("A".to_string()),
+            user_msg_id: Some("U2".to_string()),
+            assistant_msg_id: Some("A2".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q2", "ans2", "complete", &ids2);
+
+        let mut removed = apply_delete(&backend, "s", "U2");
+        removed.sort();
+        assert_eq!(removed, vec!["A2".to_string(), "U2".to_string()]);
+
+        let tree = backend.load_tree("s");
+        assert!(!tree.iter().any(|n| n.msg_id == "U2" || n.msg_id == "A2"), "subtree gone");
+        assert!(tree.iter().any(|n| n.msg_id == "U"), "U remains");
+        assert!(tree.iter().any(|n| n.msg_id == "A"), "A remains");
+    }
+
+    #[test]
+    fn apply_delete_spares_parallel_sibling_branch() {
+        // Inc 3b isolation invariant: deleting one branch must NOT touch a
+        // parallel sibling branch — delete_subtree's BFS descends only via
+        // parent_id, so siblings (and deeper descendants of siblings) survive.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        // U has two assistant siblings A1 and A2 (regenerate); A2 is continued
+        // with U2 -> A2b. Deleting A1 (a leaf sibling) must spare everything else.
+        persist_turn_as_nodes(
+            &backend, "s", "Q", "ans1", "complete",
+            &TurnNodeIds { parent_id: None, user_msg_id: Some("U".into()), assistant_msg_id: Some("A1".into()) },
+        );
+        persist_turn_as_nodes(
+            &backend, "s", "Q", "ans2", "complete",
+            &TurnNodeIds { parent_id: None, user_msg_id: Some("U".into()), assistant_msg_id: Some("A2".into()) },
+        );
+        persist_turn_as_nodes(
+            &backend, "s", "Q2", "ans2b", "complete",
+            &TurnNodeIds { parent_id: Some("A2".into()), user_msg_id: Some("U2".into()), assistant_msg_id: Some("A2b".into()) },
+        );
+
+        let removed = apply_delete(&backend, "s", "A1");
+        assert_eq!(removed, vec!["A1".to_string()], "only the A1 leaf is removed");
+
+        let tree = backend.load_tree("s");
+        assert!(!tree.iter().any(|n| n.msg_id == "A1"), "A1 gone");
+        for survivor in ["U", "A2", "U2", "A2b"] {
+            assert!(tree.iter().any(|n| n.msg_id == survivor), "{survivor} survives the sibling delete");
+        }
+    }
+
+    #[test]
+    fn apply_delete_root_leaves_read_path_coherent() {
+        // Inc 3b: deleting the root (parent None) removes the whole tree. The
+        // active leaf then dangles by design — but the read side filters an
+        // unknown active_leaf, so load_active_path stays coherent (empty), not
+        // a crash or a partial path.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        persist_turn_as_nodes(
+            &backend, "s", "Q", "ans", "complete",
+            &TurnNodeIds { parent_id: None, user_msg_id: Some("U".into()), assistant_msg_id: Some("A".into()) },
+        );
+
+        let mut removed = apply_delete(&backend, "s", "U");
+        removed.sort();
+        assert_eq!(removed, vec!["A".to_string(), "U".to_string()], "whole tree removed");
+
+        assert!(backend.load_tree("s").is_empty(), "tree empty after root delete");
+        assert!(
+            backend.load_active_path("s").is_empty(),
+            "read path coherent (empty) despite a dangling active_leaf"
+        );
+    }
+
+    #[test]
+    fn apply_delete_resets_active_leaf_to_parent() {
+        // Inc 3b: deleting a subtree that contains the active leaf resets the
+        // active leaf to the deleted node's parent — never a removed id.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        let ids1 = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U".to_string()),
+            assistant_msg_id: Some("A".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q", "ans", "complete", &ids1);
+        let ids2 = TurnNodeIds {
+            parent_id: Some("A".to_string()),
+            user_msg_id: Some("U2".to_string()),
+            assistant_msg_id: Some("A2".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q2", "ans2", "complete", &ids2);
+
+        backend.set_active_leaf("s", "A2").unwrap();
+
+        let removed = apply_delete(&backend, "s", "U2");
+
+        let active = backend.get_active_leaf("s");
+        assert_eq!(active.as_deref(), Some("A"), "active leaf reset to deleted node's parent");
+        assert!(
+            !active.as_ref().is_some_and(|l| removed.contains(l)),
+            "active leaf is never a removed id"
+        );
+    }
+
+    #[test]
+    fn apply_delete_legacy_linear_node() {
+        // Inc 3b: deleting a legacy `lin-*` subtree must actually remove rows
+        // via Inc 3a's delete_subtree rowid fallback (NULL msg_id never matches
+        // the msg_id DELETE).
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        for (role, content) in [("user", "q1"), ("assistant", "a1"), ("user", "q2")] {
+            backend
+                .append(
+                    "s",
+                    &zeroclaw_api::model_provider::ChatMessage {
+                        role: role.to_string(),
+                        content: content.to_string(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let before = backend.load_tree("s");
+        assert_eq!(before.len(), 3);
+        // Delete from the second linear node down (it + its synthesized children).
+        let target = before[1].msg_id.clone();
+        assert!(target.starts_with("lin-"));
+
+        let removed = apply_delete(&backend, "s", &target);
+        assert!(!removed.is_empty(), "legacy subtree actually removed");
+
+        let after = backend.load_tree("s");
+        assert!(after.len() < before.len(), "row count dropped");
+        assert!(!after.iter().any(|n| n.msg_id == target), "target row gone");
+    }
+
+    #[test]
+    fn apply_delete_absent_returns_empty() {
+        // Inc 3b: deleting an unknown id is a no-op returning an empty vec.
+        use zeroclaw_infra::session_backend::SessionBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        let ids = TurnNodeIds {
+            parent_id: None,
+            user_msg_id: Some("U".to_string()),
+            assistant_msg_id: Some("A".to_string()),
+        };
+        persist_turn_as_nodes(&backend, "s", "Q", "ans", "complete", &ids);
+        let before = backend.load_tree("s").len();
+
+        assert!(apply_delete(&backend, "s", "ghost").is_empty());
+
+        assert_eq!(backend.load_tree("s").len(), before, "tree unchanged");
     }
 }
