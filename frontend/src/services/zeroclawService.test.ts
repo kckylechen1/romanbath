@@ -189,74 +189,52 @@ describe('parseSseEvents', () => {
   };
 
   it('parses simple newline-separated events', async () => {
-    const out = await collect([
-      encode('data: hello\n\ndata: world\n\n'),
-    ]);
+    const out = await collect([encode('data: hello\n\ndata: world\n\n')]);
     expect(out).toEqual(['hello', 'world']);
   });
 
   it('handles CRLF line endings rewritten by proxies', async () => {
-    const out = await collect([
-      encode('data: hello\r\n\r\ndata: world\r\n\r\n'),
-    ]);
+    const out = await collect([encode('data: hello\r\n\r\ndata: world\r\n\r\n')]);
     expect(out).toEqual(['hello', 'world']);
   });
 
   it('handles lone CR line endings (legacy but spec-legal)', async () => {
-    const out = await collect([
-      encode('data: hello\r\rdata: world\r\r'),
-    ]);
+    const out = await collect([encode('data: hello\r\rdata: world\r\r')]);
     expect(out).toEqual(['hello', 'world']);
   });
 
   it('concatenates multi-line data: fields with newline per SSE spec', async () => {
-    const out = await collect([
-      encode('data: line1\ndata: line2\ndata: line3\n\n'),
-    ]);
+    const out = await collect([encode('data: line1\ndata: line2\ndata: line3\n\n')]);
     expect(out).toEqual(['line1\nline2\nline3']);
   });
 
   it('strips a single leading space after the colon but preserves the rest', async () => {
-    const out = await collect([
-      encode('data:   padded\n\n'),
-    ]);
+    const out = await collect([encode('data:   padded\n\n')]);
     expect(out).toEqual(['  padded']); // only one leading space stripped
   });
 
   it('skips comment lines starting with colon (heartbeat)', async () => {
-    const out = await collect([
-      encode(': heartbeat comment\ndata: real\n\n'),
-    ]);
+    const out = await collect([encode(': heartbeat comment\ndata: real\n\n')]);
     expect(out).toEqual(['real']);
   });
 
   it('ignores event:, id:, retry: fields but still yields empty string for non-data events', async () => {
-    const out = await collect([
-      encode('event: ping\nid: 42\nretry: 5000\n\ndata: actual\n\n'),
-    ]);
+    const out = await collect([encode('event: ping\nid: 42\nretry: 5000\n\ndata: actual\n\n')]);
     expect(out).toEqual(['', 'actual']);
   });
 
   it('handles event boundaries split across read() chunks', async () => {
-    const out = await collect([
-      encode('data: hel'),
-      encode('lo\n\nda'),
-      encode('ta: world\n\n'),
-    ]);
+    const out = await collect([encode('data: hel'), encode('lo\n\nda'), encode('ta: world\n\n')]);
     expect(out).toEqual(['hello', 'world']);
   });
 
   it('flushes a trailing event without a final blank line', async () => {
-    const out = await collect([
-      encode('data: trailing'),
-    ]);
+    const out = await collect([encode('data: trailing')]);
     expect(out).toEqual(['trailing']);
   });
 
   it('does not flush a trailing comment-only block', async () => {
-    const out = await collect([
-      encode(': just a comment'),
-    ]);
+    const out = await collect([encode(': just a comment')]);
     expect(out).toEqual([]);
   });
 });
@@ -277,8 +255,7 @@ const json = (body: unknown, init?: ResponseInit): Response =>
 
 const noContent = (): Response => new Response(null, { status: 204 });
 
-const pairedHealth = (): Response =>
-  json({ paired: true });
+const pairedHealth = (): Response => json({ paired: true });
 
 // jsdom under vitest doesn't seed localStorage unless --localstorage-file
 // is provided; zeroclawService.getToken() reads it on every call. Stub a
@@ -446,7 +423,7 @@ describe('lorebook CRUD', () => {
             recursive: false,
           },
         },
-        { status: 201 },
+        { status: 201 }
       );
     });
     const saved = await addBookEntry('Mara', {

@@ -454,10 +454,7 @@ mod tests {
         assert!(!entry.text.contains("<think>"));
     }
 
-    // ── Slice 3: continuity projection integration ──────────────────────────
-
-    /// Seed a projection memory under /user/patterns/ directly (as `project`
-    /// would), so tests don't depend on the event-ledger → projector pipeline.
+    /// Seed a pattern memory under /user/patterns/ directly for testing.
     fn seed_pattern(store: &ChatMemoryStore, character: &str, id: &str, tier: &str, seen: i64) {
         let mut conn = crate::schema::open(&store.db_path_for(character)).unwrap();
         memory_crud::upsert(

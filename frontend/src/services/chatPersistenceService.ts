@@ -9,85 +9,85 @@ const STORAGE_PREFIX = 'romanbath';
 const LEGACY_STORAGE_PREFIXES = ['etheria'] as const;
 
 const CHAT_STATE_KEY = `${STORAGE_PREFIX}_chat_state`;
-const LEGACY_CHAT_STATE_KEYS = LEGACY_STORAGE_PREFIXES.map(prefix => `${prefix}_chat_state`);
+const LEGACY_CHAT_STATE_KEYS = LEGACY_STORAGE_PREFIXES.map((prefix) => `${prefix}_chat_state`);
 
 const APP_SETTINGS_KEY = `${STORAGE_PREFIX}_app_settings`;
-const LEGACY_APP_SETTINGS_KEYS = LEGACY_STORAGE_PREFIXES.map(prefix => `${prefix}_app_settings`);
+const LEGACY_APP_SETTINGS_KEYS = LEGACY_STORAGE_PREFIXES.map((prefix) => `${prefix}_app_settings`);
 
 const getItemWithLegacyFallback = (primaryKey: string, legacyKeys: string[]): string | null => {
-    const current = localStorage.getItem(primaryKey);
-    if (current !== null) return current;
+  const current = localStorage.getItem(primaryKey);
+  if (current !== null) return current;
 
-    for (const legacyKey of legacyKeys) {
-        const legacyValue = localStorage.getItem(legacyKey);
-        if (legacyValue !== null) {
-            // Migrate legacy value forward, then drop the legacy key so
-            // subsequent writes only touch the primary key.
-            localStorage.setItem(primaryKey, legacyValue);
-            localStorage.removeItem(legacyKey);
-            return legacyValue;
-        }
+  for (const legacyKey of legacyKeys) {
+    const legacyValue = localStorage.getItem(legacyKey);
+    if (legacyValue !== null) {
+      // Migrate legacy value forward, then drop the legacy key so
+      // subsequent writes only touch the primary key.
+      localStorage.setItem(primaryKey, legacyValue);
+      localStorage.removeItem(legacyKey);
+      return legacyValue;
     }
+  }
 
-    return null;
+  return null;
 };
 
 const safeSetItem = (primaryKey: string, value: string): boolean => {
-    try {
-        localStorage.setItem(primaryKey, value);
-        return true;
-    } catch (e) {
-        if (
-            e instanceof DOMException &&
-            (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED")
-        ) {
-            console.warn("localStorage quota exceeded — chat persistence disabled");
-        } else {
-            console.error("Failed to write to localStorage:", e);
-        }
-        return false;
+  try {
+    localStorage.setItem(primaryKey, value);
+    return true;
+  } catch (e) {
+    if (
+      e instanceof DOMException &&
+      (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')
+    ) {
+      console.warn('localStorage quota exceeded — chat persistence disabled');
+    } else {
+      console.error('Failed to write to localStorage:', e);
     }
+    return false;
+  }
 };
 
 // Backwards-compatible aliases. The legacy "write to all keys" and
 // "remove from all keys" behavior is gone — the legacy keys are migrated
 // lazily on read and from then on only the primary key is touched.
 const setItemForAllKeys = (primaryKey: string, _legacyKeys: string[], value: string): boolean =>
-    safeSetItem(primaryKey, value);
+  safeSetItem(primaryKey, value);
 
 const removeItemForAllKeys = (primaryKey: string, legacyKeys: string[]): void => {
-    localStorage.removeItem(primaryKey);
-    // Best-effort cleanup of any stale legacy keys so they don't sneak back
-    // as the source of truth on a future read.
-    for (const legacyKey of legacyKeys) {
-        localStorage.removeItem(legacyKey);
-    }
+  localStorage.removeItem(primaryKey);
+  // Best-effort cleanup of any stale legacy keys so they don't sneak back
+  // as the source of truth on a future read.
+  for (const legacyKey of legacyKeys) {
+    localStorage.removeItem(legacyKey);
+  }
 };
 
 // One-shot migration at module load: copy any lingering legacy chat_state
 // and app_settings into the primary keys, then drop the legacy entries.
 // Safe to call repeatedly — once the legacy keys are gone this is a no-op.
 const migrateLegacyStorage = (): void => {
-    try {
-        const legacyPairs: Array<[string, string[]]> = [
-            [CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS],
-            [APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS],
-        ];
-        for (const [primary, legacyKeys] of legacyPairs) {
-            if (localStorage.getItem(primary) !== null) continue;
-            for (const legacyKey of legacyKeys) {
-                const legacyValue = localStorage.getItem(legacyKey);
-                if (legacyValue !== null) {
-                    localStorage.setItem(primary, legacyValue);
-                    localStorage.removeItem(legacyKey);
-                    break;
-                }
-            }
+  try {
+    const legacyPairs: Array<[string, string[]]> = [
+      [CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS],
+      [APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS],
+    ];
+    for (const [primary, legacyKeys] of legacyPairs) {
+      if (localStorage.getItem(primary) !== null) continue;
+      for (const legacyKey of legacyKeys) {
+        const legacyValue = localStorage.getItem(legacyKey);
+        if (legacyValue !== null) {
+          localStorage.setItem(primary, legacyValue);
+          localStorage.removeItem(legacyKey);
+          break;
         }
-    } catch {
-        // localStorage can throw in private browsing / disabled storage.
-        // Persistence is best-effort; the app still runs without it.
+      }
     }
+  } catch {
+    // localStorage can throw in private browsing / disabled storage.
+    // Persistence is best-effort; the app still runs without it.
+  }
 };
 
 migrateLegacyStorage();
@@ -102,169 +102,173 @@ migrateLegacyStorage();
 const LAST_SESSION_KEY = `${STORAGE_PREFIX}_last_session_v1`;
 
 export interface LastSession {
-    characterId: string;
-    chatFileName: string;
-    messageCount: number;
-    lastUpdated: number;
+  characterId: string;
+  chatFileName: string;
+  messageCount: number;
+  lastUpdated: number;
 }
 
 export const saveLastSession = (session: LastSession): void => {
-    try {
-        localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(session));
-    } catch {
-        // Best-effort — private mode etc.
-    }
+  try {
+    localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // Best-effort — private mode etc.
+  }
 };
 
 export const loadLastSession = (): LastSession | null => {
-    try {
-        const raw = localStorage.getItem(LAST_SESSION_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw) as Partial<LastSession>;
-        if (
-            typeof parsed.characterId !== 'string' ||
-            typeof parsed.chatFileName !== 'string' ||
-            typeof parsed.lastUpdated !== 'number'
-        ) {
-            return null;
-        }
-        return {
-            characterId: parsed.characterId,
-            chatFileName: parsed.chatFileName,
-            messageCount: typeof parsed.messageCount === 'number' ? parsed.messageCount : 0,
-            lastUpdated: parsed.lastUpdated,
-        };
-    } catch {
-        return null;
+  try {
+    const raw = localStorage.getItem(LAST_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LastSession>;
+    if (
+      typeof parsed.characterId !== 'string' ||
+      typeof parsed.chatFileName !== 'string' ||
+      typeof parsed.lastUpdated !== 'number'
+    ) {
+      return null;
     }
+    return {
+      characterId: parsed.characterId,
+      chatFileName: parsed.chatFileName,
+      messageCount: typeof parsed.messageCount === 'number' ? parsed.messageCount : 0,
+      lastUpdated: parsed.lastUpdated,
+    };
+  } catch {
+    return null;
+  }
 };
 
 export const clearLastSession = (): void => {
-    try {
-        localStorage.removeItem(LAST_SESSION_KEY);
-    } catch {
-        // Best-effort.
-    }
+  try {
+    localStorage.removeItem(LAST_SESSION_KEY);
+  } catch {
+    // Best-effort.
+  }
 };
 
 // Default app settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
-    autoRestoreChat: true,
-    showPersonaSwitchNotification: true,
-    activePersonaId: null,
-    language: 'en',
+  autoRestoreChat: true,
+  showPersonaSwitchNotification: true,
+  activePersonaId: null,
+  language: 'en',
 };
 
 // Save chat state for a character
-export const saveChatState = (characterId: string, messages: Message[], chatFileName?: string): boolean => {
-    try {
-        const state: ChatPersistenceState = {
-            characterId,
-            messages,
-            ...(chatFileName ? { chatFileName } : {}),
-            lastUpdated: Date.now(),
-        };
-        return setItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS, JSON.stringify(state));
-    } catch (e) {
-        console.error('Failed to save chat state:', e);
-        return false;
-    }
+export const saveChatState = (
+  characterId: string,
+  messages: Message[],
+  chatFileName?: string
+): boolean => {
+  try {
+    const state: ChatPersistenceState = {
+      characterId,
+      messages,
+      ...(chatFileName ? { chatFileName } : {}),
+      lastUpdated: Date.now(),
+    };
+    return setItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS, JSON.stringify(state));
+  } catch (e) {
+    console.error('Failed to save chat state:', e);
+    return false;
+  }
 };
 
 // Load saved chat state
 export const loadChatState = (): ChatPersistenceState | null => {
-    try {
-        const stored = getItemWithLegacyFallback(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS);
-        if (stored) {
-            const state = JSON.parse(stored) as ChatPersistenceState;
-            // Validate the state has required fields
-            if (state.characterId && Array.isArray(state.messages)) {
-                return state;
-            }
-        }
-    } catch (e) {
-        console.error('Failed to load chat state:', e);
+  try {
+    const stored = getItemWithLegacyFallback(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS);
+    if (stored) {
+      const state = JSON.parse(stored) as ChatPersistenceState;
+      // Validate the state has required fields
+      if (state.characterId && Array.isArray(state.messages)) {
+        return state;
+      }
     }
-    return null;
+  } catch (e) {
+    console.error('Failed to load chat state:', e);
+  }
+  return null;
 };
 
 // Clear saved chat state
 export const clearChatState = (): void => {
-    try {
-        removeItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS);
-    } catch (e) {
-        console.error('Failed to clear chat state:', e);
-    }
+  try {
+    removeItemForAllKeys(CHAT_STATE_KEY, LEGACY_CHAT_STATE_KEYS);
+  } catch (e) {
+    console.error('Failed to clear chat state:', e);
+  }
 };
 
 // Check if there's a saved chat to restore
 export const hasSavedChat = (): boolean => {
-    return loadChatState() !== null;
+  return loadChatState() !== null;
 };
 
 // Get app settings
 export const getAppSettings = (): AppSettings => {
-    try {
-        const stored = getItemWithLegacyFallback(APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS);
-        if (stored) {
-            return { ...DEFAULT_APP_SETTINGS, ...JSON.parse(stored) };
-        }
-    } catch (e) {
-        console.error('Failed to load app settings:', e);
+  try {
+    const stored = getItemWithLegacyFallback(APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS);
+    if (stored) {
+      return { ...DEFAULT_APP_SETTINGS, ...JSON.parse(stored) };
     }
-    return DEFAULT_APP_SETTINGS;
+  } catch (e) {
+    console.error('Failed to load app settings:', e);
+  }
+  return DEFAULT_APP_SETTINGS;
 };
 
 // Save app settings
 export const saveAppSettings = (settings: Partial<AppSettings>): boolean => {
-    try {
-        const current = getAppSettings();
-        const updated = { ...current, ...settings };
-        return setItemForAllKeys(APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS, JSON.stringify(updated));
-    } catch (e) {
-        console.error('Failed to save app settings:', e);
-        return false;
-    }
+  try {
+    const current = getAppSettings();
+    const updated = { ...current, ...settings };
+    return setItemForAllKeys(APP_SETTINGS_KEY, LEGACY_APP_SETTINGS_KEYS, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to save app settings:', e);
+    return false;
+  }
 };
 
 // Update a single setting
 export const updateAppSetting = <K extends keyof AppSettings>(
-    key: K,
-    value: AppSettings[K]
+  key: K,
+  value: AppSettings[K]
 ): void => {
-    saveAppSettings({ [key]: value });
+  saveAppSettings({ [key]: value });
 };
 
 // Get time since last chat update (for display purposes)
 export const getTimeSinceLastChat = (): string | null => {
-    const state = loadChatState();
-    if (!state) return null;
+  const state = loadChatState();
+  if (!state) return null;
 
-    const diff = Date.now() - state.lastUpdated;
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
+  const diff = Date.now() - state.lastUpdated;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
 
-    if (days > 0) return `${days} day${days > 1 ? 's' : ''} ago`;
-    if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
-    if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
-    return 'just now';
+  if (days > 0) return `${days} day${days > 1 ? 's' : ''} ago`;
+  if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  return 'just now';
 };
 
 // Auto-save debounce utility
 let saveTimeout: NodeJS.Timeout | null = null;
 
 export const debouncedSaveChatState = (
-    characterId: string,
-    messages: Message[],
-    chatFileName?: string,
-    delay: number = 1000
+  characterId: string,
+  messages: Message[],
+  chatFileName?: string,
+  delay: number = 1000
 ): void => {
-    if (saveTimeout) {
-        clearTimeout(saveTimeout);
-    }
-    saveTimeout = setTimeout(() => {
-        saveChatState(characterId, messages, chatFileName);
-        saveTimeout = null;
-    }, delay);
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+  }
+  saveTimeout = setTimeout(() => {
+    saveChatState(characterId, messages, chatFileName);
+    saveTimeout = null;
+  }, delay);
 };

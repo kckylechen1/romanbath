@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useRef } from "react";
-import { X, Image as ImageIcon, Loader2, Download } from "lucide-react";
-import { generateImage } from "../services/imageGenService";
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Image as ImageIcon, Loader2, Download } from 'lucide-react';
+import { generateImage } from '../services/imageGenService';
 
 const STYLE_PRESETS = [
-  "cinematic photorealistic",
-  "anime style",
-  "oil painting",
-  "dark fantasy",
-  "film noir",
-  "soft watercolor",
+  'cinematic photorealistic',
+  'anime style',
+  'oil painting',
+  'dark fantasy',
+  'film noir',
+  'soft watercolor',
 ] as const;
 
 interface ImageGenModalProps {
@@ -24,8 +24,8 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
   initialPrompt,
   characterAppearance,
 }) => {
-  const [prompt, setPrompt] = useState("");
-  const [resolution, setResolution] = useState<"1k" | "2k">("1k");
+  const [prompt, setPrompt] = useState('');
+  const [resolution, setResolution] = useState<'1k' | '2k'>('1k');
   const [style, setStyle] = useState<string>(STYLE_PRESETS[0]);
   const [useCharacterContext, setUseCharacterContext] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -54,7 +54,7 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
       parts.push(characterAppearance.trim());
     }
     parts.push(trimmed);
-    const assembledPrompt = parts.join(" ") + ", " + style;
+    const assembledPrompt = parts.join(' ') + ', ' + style;
 
     setLoading(true);
     setError(null);
@@ -65,10 +65,10 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
       if (result.success && result.image_data_url) {
         setImage(result.image_data_url);
       } else {
-        setError(result.error || "Image generation failed. Please try again.");
+        setError(result.error || 'Image generation failed. Please try again.');
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
       setLoading(false);
     }
@@ -76,10 +76,10 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
 
   const handleDownload = () => {
     if (!image) return;
-    const link = document.createElement("a");
+    const link = document.createElement('a');
     link.href = image;
     const mime = image.match(/^data:([^;]+);base64,/)?.[1];
-    const ext = mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
+    const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
     link.download = `grok-image-${Date.now()}.${ext}`;
     document.body.appendChild(link);
     link.click();
@@ -87,7 +87,7 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter" || e.shiftKey) return;
+    if (e.key !== 'Enter' || e.shiftKey) return;
     if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) {
       return;
     }
@@ -111,9 +111,7 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
               <ImageIcon className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h2 className="text-white font-semibold text-lg leading-tight">
-                Image Generation
-              </h2>
+              <h2 className="text-white font-semibold text-lg leading-tight">Image Generation</h2>
               <p className="text-white/40 text-xs">Grok Imagine</p>
             </div>
           </div>
@@ -129,9 +127,7 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
         <div className="p-5 space-y-4">
           {/* Prompt textarea */}
           <div>
-            <label className="block text-white/60 text-sm mb-2 font-medium">
-              Prompt
-            </label>
+            <label className="block text-white/60 text-sm mb-2 font-medium">Prompt</label>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -150,9 +146,7 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
 
           {/* Style selector */}
           <div>
-            <label className="block text-white/60 text-sm mb-2 font-medium">
-              Style
-            </label>
+            <label className="block text-white/60 text-sm mb-2 font-medium">Style</label>
             <div className="flex flex-wrap gap-2">
               {STYLE_PRESETS.map((s) => (
                 <button
@@ -160,8 +154,8 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
                   onClick={() => setStyle(s)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all capitalize ${
                     style === s
-                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
-                      : "bg-white/5 text-white/40 border border-white/10 hover:text-white/60 hover:bg-white/10"
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                      : 'bg-white/5 text-white/40 border border-white/10 hover:text-white/60 hover:bg-white/10'
                   }`}
                 >
                   {s}
@@ -172,18 +166,16 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
 
           {/* Use Character Context toggle */}
           <div className="flex items-center justify-between">
-            <label className="text-white/60 text-sm font-medium">
-              Use Character Context
-            </label>
+            <label className="text-white/60 text-sm font-medium">Use Character Context</label>
             <button
               onClick={() => setUseCharacterContext(!useCharacterContext)}
               className={`relative w-10 h-5 rounded-full transition-colors ${
-                useCharacterContext ? "bg-purple-500" : "bg-white/10"
+                useCharacterContext ? 'bg-purple-500' : 'bg-white/10'
               }`}
             >
               <span
                 className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                  useCharacterContext ? "translate-x-5" : "translate-x-0"
+                  useCharacterContext ? 'translate-x-5' : 'translate-x-0'
                 }`}
               />
             </button>
@@ -191,21 +183,19 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
 
           {/* Resolution toggle */}
           <div>
-            <label className="block text-white/60 text-sm mb-2 font-medium">
-              Resolution
-            </label>
+            <label className="block text-white/60 text-sm mb-2 font-medium">Resolution</label>
             <div className="flex gap-2">
-              {(["1k", "2k"] as const).map((res) => (
+              {(['1k', '2k'] as const).map((res) => (
                 <button
                   key={res}
                   onClick={() => setResolution(res)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                     resolution === res
-                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
-                      : "bg-white/5 text-white/40 border border-white/10 hover:text-white/60 hover:bg-white/10"
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                      : 'bg-white/5 text-white/40 border border-white/10 hover:text-white/60 hover:bg-white/10'
                   }`}
                 >
-                  {res === "1k" ? "1K" : "2K"}
+                  {res === '1k' ? '1K' : '2K'}
                 </button>
               ))}
             </div>
@@ -223,7 +213,7 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
                 Generating…
               </>
             ) : (
-              "Generate"
+              'Generate'
             )}
           </button>
 
@@ -238,11 +228,7 @@ const ImageGenModal: React.FC<ImageGenModalProps> = ({
           {image && (
             <div className="space-y-3">
               <div className="rounded-xl overflow-hidden border border-white/10">
-                <img
-                  src={image}
-                  alt="Generated"
-                  className="w-full h-auto"
-                />
+                <img src={image} alt="Generated" className="w-full h-auto" />
               </div>
               <button
                 onClick={handleDownload}

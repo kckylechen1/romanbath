@@ -1,7 +1,7 @@
-import React from "react";
-import { ChatConfig } from "../../types";
-import { BufferedTextArea } from "./SharedComponents";
-import { Shield, MessageSquare, List } from "lucide-react";
+import React from 'react';
+import { ChatConfig } from '../../types';
+import { BufferedTextArea } from './SharedComponents';
+import { Shield, MessageSquare, List } from 'lucide-react';
 
 interface CharacterTabProps {
   config: ChatConfig;
@@ -9,7 +9,6 @@ interface CharacterTabProps {
 }
 
 const CharacterTab: React.FC<CharacterTabProps> = ({ config, handleChange }) => {
-
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
       <BufferedTextArea
@@ -19,7 +18,7 @@ const CharacterTab: React.FC<CharacterTabProps> = ({ config, handleChange }) => 
           </span>
         }
         value={config.systemPromptOverride}
-        onSave={(val) => handleChange("systemPromptOverride", val)}
+        onSave={(val) => handleChange('systemPromptOverride', val)}
         placeholder="Enter a full replacement for the character card description..."
         className="w-full h-40 bg-black/30 border border-red-500/20 rounded-xl p-3 text-xs font-mono text-gray-300 focus:outline-none focus:border-red-500/50 resize-none"
       />
@@ -36,7 +35,7 @@ const CharacterTab: React.FC<CharacterTabProps> = ({ config, handleChange }) => 
           </>
         }
         value={config.exampleDialogue}
-        onSave={(val) => handleChange("exampleDialogue", val)}
+        onSave={(val) => handleChange('exampleDialogue', val)}
         placeholder={`<START>\n{{user}}: Hello\n{{char}}: *smirks* Well look who it is.`}
         className="w-full h-40 bg-black/30 border border-white/10 rounded-xl p-3 text-xs font-mono text-gray-300 focus:outline-none focus:border-stone-500/40 resize-none"
       />
@@ -47,18 +46,12 @@ const CharacterTab: React.FC<CharacterTabProps> = ({ config, handleChange }) => 
         </label>
         <select
           value={config.promptOrder}
-          onChange={(e) => handleChange("promptOrder", e.target.value)}
+          onChange={(e) => handleChange('promptOrder', e.target.value)}
           className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-gray-300 focus:outline-none focus:border-stone-500/40"
         >
-          <option value="default">
-            Default (Char → Examples → User → Scenario)
-          </option>
-          <option value="style_first">
-            Style First (Note → Char → Scenario)
-          </option>
-          <option value="scenario_last">
-            Scenario Last (Char → Note → Scenario)
-          </option>
+          <option value="default">Default (Char → Examples → User → Scenario)</option>
+          <option value="style_first">Style First (Note → Char → Scenario)</option>
+          <option value="scenario_last">Scenario Last (Char → Note → Scenario)</option>
         </select>
       </div>
     </div>

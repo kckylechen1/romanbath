@@ -468,6 +468,11 @@ pub fn prune_access_history(
     conn: &mut Connection,
     keep_per_memory: usize,
 ) -> Result<usize, MemoryError> {
+    // 0 means "disabled — keep everything". ROW_NUMBER() starts at 1, so
+    // rn > 0 would delete every row, which is never the intended behavior.
+    if keep_per_memory == 0 {
+        return Ok(0);
+    }
     let tx = conn.transaction()?;
     // keep_per_memory is a trusted usize (digits only), safe to interpolate.
     let deleted = tx.execute(

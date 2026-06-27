@@ -32,9 +32,9 @@ interface CharacterListProps {
   selectedId: string;
   onSelect: (character: Character) => void;
   isCollapsed: boolean;
-  onCharacterImported?: () => void;  // Callback to refresh character list
-  onEditCharacter?: (charId: string) => void;  // Callback to edit character
-  onCreateCharacter?: () => void;  // Callback to create new character
+  onCharacterImported?: () => void; // Callback to refresh character list
+  onEditCharacter?: (charId: string) => void; // Callback to edit character
+  onCreateCharacter?: () => void; // Callback to create new character
   // Server-side filter state. When provided, the list drives search/tag
   // selection through this pair instead of mutating its own copy.
   filter?: GetCharactersOptions;
@@ -196,8 +196,14 @@ const CharacterList: React.FC<CharacterListProps> = ({
 
   return (
     <div className="flex flex-col h-full gap-4">
-      <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'} px-2 py-4`}>
-        {!isCollapsed && <h2 className="text-lg font-bold text-white tracking-wide flex items-center gap-2"><Users size={20} /> {t('character.contacts')}</h2>}
+      <div
+        className={`flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'} px-2 py-4`}
+      >
+        {!isCollapsed && (
+          <h2 className="text-lg font-bold text-white tracking-wide flex items-center gap-2">
+            <Users size={20} /> {t('character.contacts')}
+          </h2>
+        )}
         {isCollapsed && <Users size={24} className="text-gray-400" />}
       </div>
 
@@ -206,7 +212,10 @@ const CharacterList: React.FC<CharacterListProps> = ({
       {!isCollapsed && onFilterChange && (
         <div className="px-2 space-y-2">
           <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 pointer-events-none" />
+            <Search
+              size={14}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 pointer-events-none"
+            />
             <input
               type="text"
               value={searchInput}
@@ -233,9 +242,7 @@ const CharacterList: React.FC<CharacterListProps> = ({
                   <button
                     key={tag}
                     type="button"
-                    onClick={() =>
-                      onFilterChange({ ...filter, tag: active ? undefined : tag })
-                    }
+                    onClick={() => onFilterChange({ ...filter, tag: active ? undefined : tag })}
                     className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
                       active
                         ? 'bg-bath-500/20 border-bath-500/40 text-bath-200'
@@ -270,9 +277,10 @@ const CharacterList: React.FC<CharacterListProps> = ({
             <button
               onClick={() => onSelect(char)}
               className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-300
-                ${selectedId === char.id
-                  ? 'bg-gradient-to-r from-bath-500/5 to-transparent border border-bath-500/10 border-l-2 border-l-bath-500/40 shadow-sm'
-                  : 'hover:bg-gradient-to-r hover:from-white/[0.03] hover:to-transparent border border-transparent border-l-2 border-l-transparent'
+                ${
+                  selectedId === char.id
+                    ? 'bg-gradient-to-r from-bath-500/5 to-transparent border border-bath-500/10 border-l-2 border-l-bath-500/40 shadow-sm'
+                    : 'hover:bg-gradient-to-r hover:from-white/[0.03] hover:to-transparent border border-transparent border-l-2 border-l-transparent'
                 }
               `}
             >
@@ -281,14 +289,22 @@ const CharacterList: React.FC<CharacterListProps> = ({
                   name={char.name}
                   avatar={char.avatar}
                   size="lg"
-                  ringClassName={selectedId === char.id ? 'ring-bath-500/30' : 'ring-white/5 group-hover:ring-white/10'}
+                  ringClassName={
+                    selectedId === char.id
+                      ? 'ring-bath-500/30'
+                      : 'ring-white/5 group-hover:ring-white/10'
+                  }
                 />
-                <div className={`absolute bottom-0.5 right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#0d0b09] transition-colors duration-300 ${selectedId === char.id ? 'bg-bath-400' : 'bg-stone-700'}`}></div>
+                <div
+                  className={`absolute bottom-0.5 right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#0d0b09] transition-colors duration-300 ${selectedId === char.id ? 'bg-bath-400' : 'bg-stone-700'}`}
+                ></div>
               </div>
 
               {!isCollapsed && (
                 <div className="flex flex-col items-start text-left overflow-hidden flex-1">
-                  <span className={`font-semibold text-sm truncate w-full ${selectedId === char.id ? 'text-stone-100' : 'text-stone-400 group-hover:text-stone-300'}`}>
+                  <span
+                    className={`font-semibold text-sm truncate w-full ${selectedId === char.id ? 'text-stone-100' : 'text-stone-400 group-hover:text-stone-300'}`}
+                  >
                     {char.name}
                   </span>
                   <span className="text-[10px] text-stone-600 truncate w-full">
@@ -424,12 +440,16 @@ const CharacterList: React.FC<CharacterListProps> = ({
           {isImporting ? (
             <>
               <Loader2 size={18} className="animate-spin" />
-              {!isCollapsed && <span className="text-sm font-medium">{t('character.importing')}</span>}
+              {!isCollapsed && (
+                <span className="text-sm font-medium">{t('character.importing')}</span>
+              )}
             </>
           ) : (
             <>
               <Upload size={18} />
-              {!isCollapsed && <span className="text-sm font-medium">{t('character.importCard')}</span>}
+              {!isCollapsed && (
+                <span className="text-sm font-medium">{t('character.importCard')}</span>
+              )}
             </>
           )}
         </button>

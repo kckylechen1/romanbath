@@ -133,12 +133,7 @@ export const migrateFromLocalStorageIfNeeded = async (): Promise<void> => {
         await storageSetChat(chat as IDBStoredChat);
       } catch (error) {
         allLanded = false;
-        console.error(
-          'Chat history migration failed for',
-          characterId,
-          chat.fileName,
-          error,
-        );
+        console.error('Chat history migration failed for', characterId, chat.fileName, error);
       }
     }
   }
@@ -173,7 +168,7 @@ export const saveChat = async (
   chatFileName: string,
   messages: Message[],
   userName: string,
-  characterName: string,
+  characterName: string
 ): Promise<boolean> => {
   try {
     // Explicit race guard: if the legacy localStorage key is still present
@@ -211,8 +206,11 @@ export const saveChat = async (
 
 export const loadChat = async (
   characterId: string,
-  chatFileName: string,
-): Promise<{ messages: Message[]; metadata: { user_name: string; character_name: string } | null }> => {
+  chatFileName: string
+): Promise<{
+  messages: Message[];
+  metadata: { user_name: string; character_name: string } | null;
+}> => {
   try {
     await ensureMigrated();
     const chat = await storageGetChat(characterId, chatFileName);
@@ -243,8 +241,10 @@ export const loadChat = async (
 // pre-dates the tree model we synthesize a linear chain (each message's
 // parent is the previous message in array order). Messages that already
 // declare a parentId are left alone — their existing tree is respected.
-export const linkLinearTree = <T extends { id: string; parentId?: string | null; childrenIds?: string[] }>(
-  messages: T[],
+export const linkLinearTree = <
+  T extends { id: string; parentId?: string | null; childrenIds?: string[] },
+>(
+  messages: T[]
 ): T[] => {
   const byId = new Map(messages.map((m) => [m.id, m]));
   const next = messages.map((msg) => ({
@@ -326,7 +326,7 @@ export const deleteChat = async (characterId: string, chatFileName: string): Pro
 export const renameChat = async (
   characterId: string,
   originalFileName: string,
-  newFileName: string,
+  newFileName: string
 ): Promise<boolean> => {
   try {
     await ensureMigrated();
@@ -351,8 +351,7 @@ export const renameChat = async (
 export const createNewChatFileName = (characterName: string): string =>
   formatDateForFilename(characterName);
 
-export const stripChatExtension = (fileName: string): string =>
-  fileName.replace(/\.jsonl$/, '');
+export const stripChatExtension = (fileName: string): string => fileName.replace(/\.jsonl$/, '');
 
 /**
  * Test-only: drop every IndexedDB chat record AND reset the cached migration

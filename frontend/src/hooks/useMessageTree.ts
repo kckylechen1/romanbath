@@ -11,8 +11,8 @@
 // off the active path exist in the messages array but are not rendered
 // until the user switches to them.
 
-import { useMemo } from "react";
-import type { Message } from "../types";
+import { useMemo } from 'react';
+import type { Message } from '../types';
 
 export interface MessageTree {
   byId: Map<string, Message>;
@@ -89,7 +89,10 @@ export const deepestLeaf = (tree: MessageTree, fromId: string): Message | null =
 
 // Resolve the active leaf for a given starting point. If the start is
 // already a leaf, returns it; otherwise walks down via deepestLeaf.
-export const resolveLeaf = (tree: MessageTree, startId: string | null | undefined): string | null => {
+export const resolveLeaf = (
+  tree: MessageTree,
+  startId: string | null | undefined
+): string | null => {
   if (!startId) return null;
   const start = tree.byId.get(startId);
   if (!start) return null;

@@ -1,9 +1,9 @@
 import { generateSpeech } from './zeroclawService';
 
-export const GROK_VOICES = ["ara", "en-US"] as const;
+export const GROK_VOICES = ['ara', 'en-US'] as const;
 
 export interface TTSConfig {
-  provider: "browser" | "grok";
+  provider: 'browser' | 'grok';
   enabled: boolean;
   voice: string;
   rate: number;
@@ -13,9 +13,9 @@ export interface TTSConfig {
 }
 
 export const DEFAULT_TTS_CONFIG: TTSConfig = {
-  provider: "browser",
+  provider: 'browser',
   enabled: false,
-  voice: "",
+  voice: '',
   rate: 1,
   pitch: 1,
   volume: 1,
@@ -43,7 +43,7 @@ export const speak = async (text: string, config: TTSConfig): Promise<void> => {
 
   const cleanText = stripMetadataForTTS(text);
 
-  if (config.provider === "grok") {
+  if (config.provider === 'grok') {
     await speakGrok(cleanText, config);
   } else {
     speakBrowser(cleanText, config);
@@ -95,5 +95,7 @@ export const resume = (): void => {
 };
 
 export const isSpeaking = (): boolean => {
-  return window.speechSynthesis?.speaking || (currentAudio !== null && !currentAudio.paused) || false;
+  return (
+    window.speechSynthesis?.speaking || (currentAudio !== null && !currentAudio.paused) || false
+  );
 };

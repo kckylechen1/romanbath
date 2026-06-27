@@ -5,36 +5,37 @@
  * is currently active. Mount this once near the app root (App.tsx).
  */
 
-import React, { useEffect, useState } from "react";
-import { AlertTriangle, X } from "lucide-react";
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, X } from 'lucide-react';
 import {
   type DialogState,
   getCurrentDialog,
   resolveDialog,
   subscribe,
-} from "../services/dialogService";
+} from '../services/dialogService';
 
 const useSyncDialog = (): DialogState | null => {
   const [state, setState] = useState<DialogState | null>(getCurrentDialog());
-  useEffect(
-    () => subscribe((next) => setState(next)),
-    [],
-  );
+  useEffect(() => subscribe((next) => setState(next)), []);
   return state;
 };
 
-const ConfirmView: React.FC<{ state: Extract<DialogState, { kind: "confirm" }> }> = ({ state }) => {
+const ConfirmView: React.FC<{ state: Extract<DialogState, { kind: 'confirm' }> }> = ({ state }) => {
   const cancel = () => resolveDialog(false);
   const confirm = () => resolveDialog(true);
 
   return (
-    <DialogShell onClose={cancel} title={state.title} icon={state.danger ? <AlertTriangle className="text-red-400" size={20} /> : undefined}>
+    <DialogShell
+      onClose={cancel}
+      title={state.title}
+      icon={state.danger ? <AlertTriangle className="text-red-400" size={20} /> : undefined}
+    >
       {state.message && <p className="text-sm text-stone-300 leading-relaxed">{state.message}</p>}
       <div className="flex justify-end gap-2 mt-6">
         <DialogButton onClick={cancel} variant="ghost">
           {state.cancelLabel}
         </DialogButton>
-        <DialogButton onClick={confirm} variant={state.danger ? "danger" : "primary"}>
+        <DialogButton onClick={confirm} variant={state.danger ? 'danger' : 'primary'}>
           {state.confirmLabel}
         </DialogButton>
       </div>
@@ -42,7 +43,7 @@ const ConfirmView: React.FC<{ state: Extract<DialogState, { kind: "confirm" }> }
   );
 };
 
-const AlertView: React.FC<{ state: Extract<DialogState, { kind: "alert" }> }> = ({ state }) => {
+const AlertView: React.FC<{ state: Extract<DialogState, { kind: 'alert' }> }> = ({ state }) => {
   const close = () => resolveDialog(null);
 
   return (
@@ -57,7 +58,7 @@ const AlertView: React.FC<{ state: Extract<DialogState, { kind: "alert" }> }> = 
   );
 };
 
-const PromptView: React.FC<{ state: Extract<DialogState, { kind: "prompt" }> }> = ({ state }) => {
+const PromptView: React.FC<{ state: Extract<DialogState, { kind: 'prompt' }> }> = ({ state }) => {
   const [value, setValue] = useState(state.defaultValue);
   const inputRef = React.useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
@@ -74,8 +75,8 @@ const PromptView: React.FC<{ state: Extract<DialogState, { kind: "prompt" }> }> 
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
     // Enter submits only on single-line; on multiline, Cmd/Ctrl+Enter submits.
-    if (e.key === "Enter") {
-      if (!state.multiline || (e.metaKey || e.ctrlKey)) {
+    if (e.key === 'Enter') {
+      if (!state.multiline || e.metaKey || e.ctrlKey) {
         e.preventDefault();
         submit();
       }
@@ -84,7 +85,9 @@ const PromptView: React.FC<{ state: Extract<DialogState, { kind: "prompt" }> }> 
 
   return (
     <DialogShell onClose={cancel} title={state.title}>
-      {state.message && <p className="text-sm text-stone-300 leading-relaxed mb-3">{state.message}</p>}
+      {state.message && (
+        <p className="text-sm text-stone-300 leading-relaxed mb-3">{state.message}</p>
+      )}
       {state.multiline ? (
         <textarea
           ref={(el) => {
@@ -130,10 +133,10 @@ const DialogShell: React.FC<{
 }> = ({ title, onClose, icon, children }) => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") onClose();
+      if (e.key === 'Escape') onClose();
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
   return (
@@ -167,16 +170,16 @@ const DialogShell: React.FC<{
 
 const DialogButton: React.FC<{
   onClick: () => void;
-  variant: "primary" | "danger" | "ghost";
+  variant: 'primary' | 'danger' | 'ghost';
   disabled?: boolean;
   children: React.ReactNode;
 }> = ({ onClick, variant, disabled, children }) => {
   const cls =
-    variant === "primary"
-      ? "bg-gradient-to-r from-bath-600 to-bath-700 hover:from-bath-500 hover:to-bath-600 text-white shadow-lg shadow-bath-900/40"
-      : variant === "danger"
-        ? "bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white shadow-lg shadow-red-900/40"
-        : "bg-white/5 hover:bg-white/10 text-stone-300 hover:text-white border border-white/10";
+    variant === 'primary'
+      ? 'bg-gradient-to-r from-bath-600 to-bath-700 hover:from-bath-500 hover:to-bath-600 text-white shadow-lg shadow-bath-900/40'
+      : variant === 'danger'
+        ? 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white shadow-lg shadow-red-900/40'
+        : 'bg-white/5 hover:bg-white/10 text-stone-300 hover:text-white border border-white/10';
 
   return (
     <button
@@ -193,8 +196,8 @@ export const DialogHost: React.FC = () => {
   const state = useSyncDialog();
   if (!state) return null;
 
-  if (state.kind === "confirm") return <ConfirmView key={state.id} state={state} />;
-  if (state.kind === "alert") return <AlertView key={state.id} state={state} />;
+  if (state.kind === 'confirm') return <ConfirmView key={state.id} state={state} />;
+  if (state.kind === 'alert') return <AlertView key={state.id} state={state} />;
   return <PromptView key={state.id} state={state} />;
 };
 

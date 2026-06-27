@@ -1,30 +1,30 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { MessageCircle, Sparkles, Clock, X, Upload } from "lucide-react";
-import { LanguageProvider } from "./i18n";
-import { getTimeSinceLastChat } from "./services/chatPersistenceService";
+import React, { useEffect, useMemo, useState } from 'react';
+import { MessageCircle, Sparkles, Clock, X, Upload } from 'lucide-react';
+import { LanguageProvider } from './i18n';
+import { getTimeSinceLastChat } from './services/chatPersistenceService';
 
 // Hooks
-import { useAppLogic } from "./hooks/useAppLogic";
-import { useEscapeKey } from "./hooks/useEscapeKey";
-import { useCharacterImportDrop } from "./hooks/useCharacterImportDrop";
+import { useAppLogic } from './hooks/useAppLogic';
+import { useEscapeKey } from './hooks/useEscapeKey';
+import { useCharacterImportDrop } from './hooks/useCharacterImportDrop';
 
 // Components
-import { LeftSidebar } from "./components/layout/LeftSidebar";
-import { ChatHeader } from "./components/chat/ChatHeader";
-import { ChatInput } from "./components/chat/ChatInput";
-import CharacterList from "./components/CharacterList";
-import MessageBubble from "./components/MessageBubble";
-import SettingsPanel from "./components/SettingsPanel";
-import GroupChatManager from "./components/GroupChatManager";
-import ImageGenModal from "./components/ImageGenModal";
-import CharacterEditor from "./components/CharacterEditor";
-import CommandPalette from "./components/CommandPalette";
-import { useToast } from "./components/Toast";
-import { ErrorBoundary } from "./components/ErrorBoundary";
-import DialogHost from "./components/DialogHost";
+import { LeftSidebar } from './components/layout/LeftSidebar';
+import { ChatHeader } from './components/chat/ChatHeader';
+import { ChatInput } from './components/chat/ChatInput';
+import CharacterList from './components/CharacterList';
+import MessageBubble from './components/MessageBubble';
+import SettingsPanel from './components/SettingsPanel';
+import GroupChatManager from './components/GroupChatManager';
+import ImageGenModal from './components/ImageGenModal';
+import CharacterEditor from './components/CharacterEditor';
+import CommandPalette from './components/CommandPalette';
+import { useToast } from './components/Toast';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import DialogHost from './components/DialogHost';
 
 // Command palette
-import { buildCommands } from "./commands/buildCommands";
+import { buildCommands } from './commands/buildCommands';
 
 const AppContent: React.FC = () => {
   const logic = useAppLogic();
@@ -41,19 +41,19 @@ const AppContent: React.FC = () => {
     const onKey = (e: KeyboardEvent): void => {
       if (!isMod(e)) return;
       const key = e.key.toLowerCase();
-      if (key === "k") {
+      if (key === 'k') {
         e.preventDefault();
         setPaletteOpen((prev) => !prev);
-      } else if (key === "\\") {
+      } else if (key === '\\') {
         e.preventDefault();
         logic.setLeftSidebarOpen(!logic.leftSidebarOpen);
-      } else if (key === ".") {
+      } else if (key === '.') {
         e.preventDefault();
         logic.setRightSidebarOpen(!logic.rightSidebarOpen);
       }
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
   }, [logic]);
 
   // Escape key handlers for modals and sidebars
@@ -68,16 +68,16 @@ const AppContent: React.FC = () => {
   const { isDragging, rootHandlers: dropHandlers } = useCharacterImportDrop({
     onImported: (name) => {
       logic.refreshCharacters();
-      toast.success("Character imported", name);
+      toast.success('Character imported', name);
     },
     onError: (message) => {
-      toast.error("Import failed", message);
+      toast.error('Import failed', message);
     },
   });
 
   return (
     <div
-      className="relative w-full h-screen overflow-hidden font-sans text-stone-200 bg-black selection:bg-bath-500/20 selection:text-white"
+      className="relative w-full h-screen overflow-hidden font-sans text-stone-200 bg-bath-950 selection:bg-bath-500/20 selection:text-white"
       style={{ fontSize: `${logic.config.fontSize}px` }}
       onDragOver={dropHandlers.onDragOver}
       onDragLeave={dropHandlers.onDragLeave}
@@ -88,30 +88,30 @@ const AppContent: React.FC = () => {
         className="absolute inset-0 z-0 transition-opacity duration-1000 ease-in-out"
         style={{
           backgroundImage: `url(${logic.selectedCharacter.backgroundImage})`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
           opacity: 0.2,
           filter: `blur(${logic.config.backgroundBlur}px)`,
         }}
       />
-      <div className="absolute inset-0 z-0 bg-gradient-to-b from-[#090b0e]/70 via-[#0e1217]/90 to-[#090b0e] pointer-events-none" />
+      <div className="absolute inset-0 z-0 bg-gradient-to-b from-[#0e0b08]/50 via-[#14110d]/65 to-[#0e0b08] pointer-events-none" />
       <div className="absolute inset-0 z-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay"></div>
 
       {/* Restore Chat Modal */}
       {logic.showRestorePrompt && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
-          <div role="dialog" aria-modal="true" className="bg-[#0e1217]/95 backdrop-blur-2xl border border-white/10 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-4 duration-300">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-[#0e1217]/95 backdrop-blur-2xl border border-white/10 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl animate-in zoom-in-95 slide-in-from-bottom-4 duration-300"
+          >
             <div className="flex items-center gap-4 mb-6">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-bath-500/20 to-bath-600/20 flex items-center justify-center border border-bath-500/30">
                 <MessageCircle className="text-stone-400" size={28} />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-white">
-                  {logic.t("chat.restore")}
-                </h2>
-                <p className="text-sm text-stone-400 mt-0.5">
-                  {logic.t("chat.restorePrompt")}
-                </p>
+                <h2 className="text-xl font-bold text-white">{logic.t('chat.restore')}</h2>
+                <p className="text-sm text-stone-400 mt-0.5">{logic.t('chat.restorePrompt')}</p>
               </div>
             </div>
 
@@ -122,11 +122,11 @@ const AppContent: React.FC = () => {
                 </div>
                 <div className="flex-1">
                   <p className="text-sm text-white font-medium">
-                    {logic.t("chat.restoreWith")} {logic.savedChatCharacterName}
+                    {logic.t('chat.restoreWith')} {logic.savedChatCharacterName}
                   </p>
                   <p className="text-xs text-stone-500 flex items-center gap-1 mt-0.5">
                     <Clock size={12} />
-                    {logic.t("chat.lastActive")} {getTimeSinceLastChat()}
+                    {logic.t('chat.lastActive')} {getTimeSinceLastChat()}
                   </p>
                 </div>
               </div>
@@ -137,13 +137,13 @@ const AppContent: React.FC = () => {
                 onClick={logic.handleStartFresh}
                 className="flex-1 px-4 py-3 rounded-xl text-sm font-medium text-stone-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10 transition-all"
               >
-                {logic.t("chat.startFresh")}
+                {logic.t('chat.startFresh')}
               </button>
               <button
                 onClick={logic.handleRestoreChat}
                 className="flex-1 px-4 py-3 rounded-xl text-sm font-medium text-white bg-gradient-to-r from-bath-600 to-bath-700 hover:from-bath-500 hover:to-bath-600 shadow-lg shadow-bath-900/50 transition-all hover:scale-[1.02] active:scale-[0.98]"
               >
-                {logic.t("chat.continue")} →
+                {logic.t('chat.continue')} →
               </button>
             </div>
           </div>
@@ -168,9 +168,7 @@ const AppContent: React.FC = () => {
         {logic.mobileMenuOpen && (
           <div className="absolute inset-0 z-50 bg-[#090b0e]/98 backdrop-blur-2xl md:hidden flex flex-col animate-in fade-in slide-in-from-left-10 duration-200">
             <div className="p-4 flex justify-between items-center border-b border-white/5">
-              <span className="font-bold text-lg text-stone-100">
-                Select Persona
-              </span>
+              <span className="font-bold text-lg text-stone-100">Select Persona</span>
               <button
                 onClick={() => logic.setMobileMenuOpen(false)}
                 className="text-stone-400"
@@ -232,13 +230,17 @@ const AppContent: React.FC = () => {
           />
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar bath-reveal bath-reveal-delay-3" style={{ contain: "layout" }}>
+          <div
+            className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar bath-reveal bath-reveal-delay-3"
+            style={{ contain: 'layout' }}
+          >
             <div
-              className={`max-w-4xl mx-auto transition-transform ${logic.leftSidebarOpen ? "" : "md:-translate-x-10"}`}
+              className={`max-w-4xl mx-auto transition-transform ${logic.leftSidebarOpen ? '' : 'md:-translate-x-10'}`}
             >
               {logic.activePath.map((msg, idx) => {
-                const siblings = (logic.messageTree.childrenOf.get(msg.parentId ?? null) ?? [])
-                  .filter((m) => m.role === msg.role);
+                const siblings = (
+                  logic.messageTree.childrenOf.get(msg.parentId ?? null) ?? []
+                ).filter((m) => m.role === msg.role);
                 const branchIndex = siblings.findIndex((m) => m.id === msg.id);
                 return (
                   <MessageBubble
@@ -292,7 +294,7 @@ const AppContent: React.FC = () => {
             absolute top-0 right-0 h-full z-40
             w-[600px]
             transition-transform duration-500 cubic-bezier(0.25, 1, 0.5, 1)
-            ${logic.rightSidebarOpen ? "translate-x-0 shadow-[-10px_0_40px_rgba(0,0,0,0.5)]" : "translate-x-full"}
+            ${logic.rightSidebarOpen ? 'translate-x-0 shadow-[-10px_0_40px_rgba(0,0,0,0.5)]' : 'translate-x-full'}
             hidden md:block
         `}
         >
@@ -313,12 +315,12 @@ const AppContent: React.FC = () => {
             />
             <div className="absolute inset-0 z-50 md:hidden animate-in fade-in slide-in-from-right-10 duration-200">
               <SettingsPanel
-              config={logic.config}
-              onConfigChange={logic.handleConfigChange}
-              isOpen={true}
-              onClose={() => logic.setMobileSettingsOpen(false)}
-            />
-          </div>
+                config={logic.config}
+                onConfigChange={logic.handleConfigChange}
+                isOpen={true}
+                onClose={() => logic.setMobileSettingsOpen(false)}
+              />
+            </div>
           </>
         )}
       </div>
@@ -335,7 +337,10 @@ const AppContent: React.FC = () => {
       {/* Image Generation Modal */}
       <ImageGenModal
         isOpen={logic.showImageGen}
-        onClose={() => { logic.setShowImageGen(false); logic.setImageGenPrompt(undefined); }}
+        onClose={() => {
+          logic.setShowImageGen(false);
+          logic.setImageGenPrompt(undefined);
+        }}
         initialPrompt={logic.imageGenPrompt}
         characterAppearance={logic.selectedCharacter?.description}
       />
@@ -356,12 +361,7 @@ const AppContent: React.FC = () => {
       <DialogHost />
 
       {/* Cmd+K command palette */}
-      {paletteOpen && (
-        <CommandPalette
-          commands={commands}
-          onClose={() => setPaletteOpen(false)}
-        />
-      )}
+      {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
 
       {/* Drag-and-drop character import overlay */}
       {isDragging && (
@@ -371,12 +371,8 @@ const AppContent: React.FC = () => {
               <Upload className="text-bath-300" size={36} />
             </div>
             <div className="text-center">
-              <p className="text-lg font-semibold text-white">
-                Drop character card to import
-              </p>
-              <p className="text-sm text-stone-400 mt-1">
-                Supports PNG, JSON, WebP
-              </p>
+              <p className="text-lg font-semibold text-white">Drop character card to import</p>
+              <p className="text-sm text-stone-400 mt-1">Supports PNG, JSON, WebP</p>
             </div>
           </div>
         </div>

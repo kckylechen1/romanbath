@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadChatState, saveChatState, clearChatState, debouncedSaveChatState } from './chatPersistenceService';
+import {
+  loadChatState,
+  saveChatState,
+  clearChatState,
+  debouncedSaveChatState,
+} from './chatPersistenceService';
 import { Role, Message } from '../types';
 
-const createMessages = (): Message[] => ([
+const createMessages = (): Message[] => [
   {
     id: '1',
     role: Role.User,
@@ -15,7 +20,7 @@ const createMessages = (): Message[] => ([
     content: 'Hi there',
     timestamp: 2,
   },
-]);
+];
 
 describe('chatPersistenceService', () => {
   beforeEach(() => {

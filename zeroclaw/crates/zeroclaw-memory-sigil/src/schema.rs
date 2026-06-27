@@ -15,7 +15,7 @@ use crate::memory_crud::MemoryError;
 /// constraint changes — and add a matching guarded step in [`init_schema`]'s
 /// migration section. Existing databases are upgraded forward to this version
 /// on open; fresh databases are created at it directly.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 1;
 
 /// Open a sigil memory database, creating its parent directory and bringing
 /// the schema up to date.
@@ -54,50 +54,6 @@ pub fn init_schema(conn: &Connection) -> Result<(), MemoryError> {
     // no-op on databases that already have them — including pre-versioning
     // deployments that report `user_version = 0`.
     create_baseline(conn)?;
-
-    // ── Forward migrations ────────────────────────────────────────────────
-    // For changes `CREATE ... IF NOT EXISTS` cannot express (new columns,
-    // constraint changes), add a guarded step here and bump SCHEMA_VERSION:
-    //
-    //     if version < 3 {
-    //         conn.execute_batch(
-    //             "ALTER TABLE memories ADD COLUMN affect REAL NOT NULL DEFAULT 0.0;",
-    //         )?;
-    //     }
-    //
-    // Steps are ordered and guarded on `version`, so a database at any older
-    // version upgrades through every step to SCHEMA_VERSION in a single open.
-
-    // v2: continuity event ledger (`tachi_events`). Append-only substrate for
-    // pattern/timeline/bonding projections (see event_ledger.rs). Inert —
-    // ordinary recall never reads it, and nothing writes until a projector is
-    // wired in a later slice.
-    if version < 2 {
-        conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS tachi_events (
-                id               TEXT PRIMARY KEY,
-                source_repo      TEXT NOT NULL DEFAULT '',
-                adapter          TEXT NOT NULL DEFAULT '',
-                project          TEXT NOT NULL DEFAULT '',
-                domain           TEXT NOT NULL DEFAULT '',
-                session_id       TEXT NOT NULL DEFAULT '',
-                actor            TEXT NOT NULL DEFAULT '',
-                event_type       TEXT NOT NULL,
-                authority        TEXT NOT NULL DEFAULT 'collect_only',
-                effects          TEXT NOT NULL DEFAULT '[]',
-                projection_hints TEXT NOT NULL DEFAULT '[]',
-                payload_json     TEXT NOT NULL DEFAULT '{}',
-                provenance_json  TEXT NOT NULL DEFAULT '{}',
-                created_at       TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_tachi_events_created_at ON tachi_events(created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_tachi_events_project_domain ON tachi_events(project, domain, created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_tachi_events_type ON tachi_events(event_type, created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_tachi_events_session ON tachi_events(session_id, created_at DESC);
-            "#,
-        )?;
-    }
 
     // PRAGMA does not accept bind parameters; SCHEMA_VERSION is a trusted i64.
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;

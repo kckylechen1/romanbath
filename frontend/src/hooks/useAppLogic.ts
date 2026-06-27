@@ -1,38 +1,29 @@
-import { useState, useEffect, useMemo } from "react";
-import type React from "react";
-import { DEFAULT_CONFIG } from "../constants";
-import {
-  Message,
-  ChatConfig,
-  GroupChat,
-  GroupMessage,
-  Role,
-} from "../types";
-import { getSettings } from "../services/zeroclawService";
-import { countMessagesTokens } from "../services/tokenizerService";
+import { useState, useEffect, useMemo } from 'react';
+import type React from 'react';
+import { DEFAULT_CONFIG } from '../constants';
+import { Message, ChatConfig, GroupChat, GroupMessage, Role } from '../types';
+import { getSettings } from '../services/zeroclawService';
+import { countMessagesTokens } from '../services/tokenizerService';
 import {
   getBookmarks,
   saveBookmark,
   deleteBookmark,
   createBookmark,
   ChatBookmark,
-} from "../services/bookmarkService";
-import {
-  selectNextCharacter,
-  updateGroupChat,
-} from "../services/groupChatService";
-import { createNewChatFileName } from "../services/chatService";
-import { useToast } from "../components/Toast";
-import { useLanguage } from "../i18n";
-import { useSpeechRecognition } from "./useSpeechRecognition";
-import { generateId } from "../utils/id";
-import { useCharacterManagement } from "./useCharacterManagement";
-import { useChatPersistence } from "./useChatPersistence";
-import { useChatGeneration } from "./useChatGeneration";
-import { useMessageActions } from "./useMessageActions";
-import { useChatPush } from "./useChatPush";
-import { confirm as confirmDialog, prompt as promptDialog } from "../services/dialogService";
-import { indexMessages, pathToRoot } from "./useMessageTree";
+} from '../services/bookmarkService';
+import { selectNextCharacter, updateGroupChat } from '../services/groupChatService';
+import { createNewChatFileName } from '../services/chatService';
+import { useToast } from '../components/Toast';
+import { useLanguage } from '../i18n';
+import { useSpeechRecognition } from './useSpeechRecognition';
+import { generateId } from '../utils/id';
+import { useCharacterManagement } from './useCharacterManagement';
+import { useChatPersistence } from './useChatPersistence';
+import { useChatGeneration } from './useChatGeneration';
+import { useMessageActions } from './useMessageActions';
+import { useChatPush } from './useChatPush';
+import { confirm as confirmDialog, prompt as promptDialog } from '../services/dialogService';
+import { indexMessages, pathToRoot } from './useMessageTree';
 
 export const useAppLogic = () => {
   const { t, language, setLanguage } = useLanguage();
@@ -74,7 +65,7 @@ export const useAppLogic = () => {
   // using the full `messages` array so saving stores every branch.
   const activePath = useMemo(
     () => pathToRoot(messageTree, activeLeafId),
-    [messageTree, activeLeafId],
+    [messageTree, activeLeafId]
   );
 
   // ==================== UI STATE ====================
@@ -106,7 +97,7 @@ export const useAppLogic = () => {
     config,
     characterMgmt.characters,
     setMessages,
-    characterMgmt.setSelectedCharacter,
+    characterMgmt.setSelectedCharacter
   );
 
   // ==================== CHAT GENERATION ====================
@@ -120,19 +111,16 @@ export const useAppLogic = () => {
     setMessages,
     setActiveLeafId,
     toast,
-    t,
+    t
   );
 
   // Voice Input
-  const { isListening, toggleVoiceInput } = useSpeechRecognition(
-    (newTranscript) => {
-      generation.setInputText((prev) => {
-        const spacer =
-          prev.length > 0 && !prev.endsWith(" ") ? " " : "";
-        return prev + spacer + newTranscript;
-      });
-    },
-  );
+  const { isListening, toggleVoiceInput } = useSpeechRecognition((newTranscript) => {
+    generation.setInputText((prev) => {
+      const spacer = prev.length > 0 && !prev.endsWith(' ') ? ' ' : '';
+      return prev + spacer + newTranscript;
+    });
+  });
 
   // ==================== MESSAGE ACTIONS ====================
   const messageActions = useMessageActions(
@@ -146,14 +134,14 @@ export const useAppLogic = () => {
     config,
     activeGroup,
     generation.setIsTyping,
-    toast,
+    toast
   );
 
   // ==================== CHAT PUSH (server-initiated messages) =====
   useChatPush({
-    agentAlias: "default",
+    agentAlias: 'default',
     characterName:
-      characterMgmt.selectedCharacter.id !== "default"
+      characterMgmt.selectedCharacter.id !== 'default'
         ? characterMgmt.selectedCharacter.name
         : undefined,
     activeLeafId,
@@ -174,18 +162,14 @@ export const useAppLogic = () => {
         if (settings && Object.keys(settings).length > 0) {
           setConfig((prev) => ({
             ...prev,
-            temperature:
-              (settings.temperature as number | undefined) ??
-              prev.temperature,
+            temperature: (settings.temperature as number | undefined) ?? prev.temperature,
             maxOutputTokens:
-              (settings.maxOutputTokens as number | undefined) ??
-              prev.maxOutputTokens,
-            userName:
-              (settings.username as string | undefined) ?? prev.userName,
+              (settings.maxOutputTokens as number | undefined) ?? prev.maxOutputTokens,
+            userName: (settings.username as string | undefined) ?? prev.userName,
           }));
         }
       } catch (e) {
-        console.warn("Failed to load settings:", e);
+        console.warn('Failed to load settings:', e);
       }
     };
     loadSettings();
@@ -193,36 +177,30 @@ export const useAppLogic = () => {
 
   // ==================== TOKEN COUNT ====================
   useEffect(() => {
-    const systemPrompt =
-      characterMgmt.selectedCharacter.systemInstruction || "";
-    const count =
-      countMessagesTokens(messages) +
-      Math.ceil(systemPrompt.length / 4);
+    const systemPrompt = characterMgmt.selectedCharacter.systemInstruction || '';
+    const count = countMessagesTokens(messages) + Math.ceil(systemPrompt.length / 4);
     setTokenCount(count);
   }, [messages, characterMgmt.selectedCharacter.systemInstruction]);
 
   // ==================== BOOKMARKS ====================
   useEffect(() => {
-    if (characterMgmt.selectedCharacter.id !== "default") {
+    if (characterMgmt.selectedCharacter.id !== 'default') {
       setBookmarks(getBookmarks(characterMgmt.selectedCharacter.id));
     }
   }, [characterMgmt.selectedCharacter.id]);
 
   const handleCreateBookmark = async () => {
-    if (
-      !chatPersistence.currentChatFileName ||
-      messages.length === 0
-    ) {
-      toast.error("No messages to bookmark");
+    if (!chatPersistence.currentChatFileName || messages.length === 0) {
+      toast.error('No messages to bookmark');
       return;
     }
 
     const name = await promptDialog({
-      title: "Create bookmark",
-      message: "Give this checkpoint a name so you can find it later.",
+      title: 'Create bookmark',
+      message: 'Give this checkpoint a name so you can find it later.',
       defaultValue: `Checkpoint - ${messages.length} messages`,
-      placeholder: "Bookmark name",
-      confirmLabel: "Create",
+      placeholder: 'Bookmark name',
+      confirmLabel: 'Create',
     });
     if (!name) return;
 
@@ -230,45 +208,42 @@ export const useAppLogic = () => {
       characterMgmt.selectedCharacter.id,
       chatPersistence.currentChatFileName,
       messages,
-      name,
+      name
     );
 
     saveBookmark(bookmark);
     setBookmarks((prev) => [bookmark, ...prev]);
-    toast.success("Bookmark created");
+    toast.success('Bookmark created');
   };
 
   const handleRestoreBookmark = async (bookmark: ChatBookmark) => {
     const ok = await confirmDialog({
-      title: "Restore bookmark?",
+      title: 'Restore bookmark?',
       message: `Restoring to "${bookmark.name}" will replace the current messages in this conversation.`,
-      confirmLabel: "Restore",
-      cancelLabel: "Cancel",
+      confirmLabel: 'Restore',
+      cancelLabel: 'Cancel',
       danger: true,
     });
     if (!ok) return;
 
     setMessages(bookmark.messages);
     setShowBookmarks(false);
-    toast.success("Restored from bookmark");
+    toast.success('Restored from bookmark');
   };
 
-  const handleDeleteBookmark = async (
-    bookmarkId: string,
-    e: React.MouseEvent,
-  ) => {
+  const handleDeleteBookmark = async (bookmarkId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const ok = await confirmDialog({
-      title: "Delete bookmark?",
-      message: "This bookmark will be removed permanently.",
-      confirmLabel: "Delete",
+      title: 'Delete bookmark?',
+      message: 'This bookmark will be removed permanently.',
+      confirmLabel: 'Delete',
       danger: true,
     });
     if (!ok) return;
 
     deleteBookmark(bookmarkId);
     setBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
-    toast.success("Bookmark deleted");
+    toast.success('Bookmark deleted');
   };
 
   // ==================== GROUP CHAT ====================
@@ -279,10 +254,7 @@ export const useAppLogic = () => {
     const newFileName = createNewChatFileName(`Group-${group.name}`);
     chatPersistence.setCurrentChatFileName(newFileName);
 
-    const firstChar = selectNextCharacter(
-      group,
-      characterMgmt.characters,
-    );
+    const firstChar = selectNextCharacter(group, characterMgmt.characters);
     if (firstChar) {
       const greeting: Message = {
         id: generateId(),
@@ -307,7 +279,7 @@ export const useAppLogic = () => {
   const handleExitGroup = () => {
     setActiveGroup(null);
     chatPersistence.startNewChat();
-    toast.success("Exited group chat");
+    toast.success('Exited group chat');
   };
 
   // ==================== IMAGE GENERATION ====================
@@ -319,10 +291,11 @@ export const useAppLogic = () => {
   // ==================== CLEAR CHAT ====================
   const clearChat = async () => {
     const ok = await confirmDialog({
-      title: "Reset conversation?",
-      message: "This will clear the current chat and start a new one with your latest settings. Bookmarks are kept.",
-      confirmLabel: "Reset",
-      cancelLabel: "Cancel",
+      title: 'Reset conversation?',
+      message:
+        'This will clear the current chat and start a new one with your latest settings. Bookmarks are kept.',
+      confirmLabel: 'Reset',
+      cancelLabel: 'Cancel',
       danger: true,
     });
     if (ok) {
@@ -418,8 +391,7 @@ export const useAppLogic = () => {
     handleConfigChange,
 
     // Chat operations
-    handleRestoreChat: () =>
-      chatPersistence.handleRestoreChat(characterMgmt.characters),
+    handleRestoreChat: () => chatPersistence.handleRestoreChat(characterMgmt.characters),
     handleStartFresh: chatPersistence.handleStartFresh,
     startNewChat: chatPersistence.startNewChat,
     handleSendMessage: generation.handleSendMessage,

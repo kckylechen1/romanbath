@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from "react";
-import { Message, Role, Character, TTSConfig, GroupMessage } from "../types";
+import React, { useState, useRef, useEffect } from 'react';
+import { Message, Role, Character, TTSConfig, GroupMessage } from '../types';
 import {
   ChevronLeft,
   ChevronRight,
@@ -14,12 +14,12 @@ import {
   Volume2,
   VolumeX,
   Image,
-} from "lucide-react";
-import MarkdownRenderer from "./MarkdownRenderer";
-import { CharacterAvatar } from "./CharacterAvatar";
-import ToolCallCard from "./chat/ToolCallCard";
-import { speak, stop, isSpeaking } from "../services/ttsService";
-import { extractImagePrompt } from "../services/imageGenService";
+} from 'lucide-react';
+import MarkdownRenderer from './MarkdownRenderer';
+import { CharacterAvatar } from './CharacterAvatar';
+import ToolCallCard from './chat/ToolCallCard';
+import { speak, stop, isSpeaking } from '../services/ttsService';
+import { extractImagePrompt } from '../services/imageGenService';
 
 interface MessageBubbleProps {
   message: Message;
@@ -31,7 +31,7 @@ interface MessageBubbleProps {
   /** 0-based index of this message within its sibling set. */
   branchIndex?: number;
   // Action callbacks
-  onSwipeChange?: (id: string, direction: "left" | "right") => void;
+  onSwipeChange?: (id: string, direction: 'left' | 'right') => void;
   onGenerateSwipe?: (id: string) => void;
   onRegenerate?: (id: string) => void;
   onContinue?: (id: string) => void;
@@ -47,10 +47,7 @@ interface MessageBubbleProps {
 // that may produce fresh refs. We compare only the data fields that actually
 // affect the bubble's rendered output, and trust callbacks to be stable
 // enough that identity changes between renders don't matter.
-const messageBubblePropsEqual = (
-  prev: MessageBubbleProps,
-  next: MessageBubbleProps,
-): boolean => {
+const messageBubblePropsEqual = (prev: MessageBubbleProps, next: MessageBubbleProps): boolean => {
   if (prev.isLastMessage !== next.isLastMessage) return false;
   if (prev.isGenerating !== next.isGenerating) return false;
   if (prev.userName !== next.userName) return false;
@@ -95,9 +92,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   // Auto-resize textarea
   useEffect(() => {
     if (isEditing && textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height =
-        textareaRef.current.scrollHeight + "px";
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
       textareaRef.current.focus();
     }
   }, [isEditing, editContent]);
@@ -133,23 +129,28 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   const displayName = groupExtra?.characterName || character.name;
   const avatarForDisplay =
     groupExtra?.characterName && groupExtra.characterName !== character.name
-      ? ""
+      ? ''
       : character.avatar;
 
   return (
     <div
-      className={`flex w-full mb-6 ${isUser ? "justify-end" : "justify-start"} animate-message-in`}
-      style={{ contain: "layout" }}
+      className={`flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'} animate-message-in`}
+      style={{ contain: 'layout' }}
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
     >
       <div
-        className={`flex max-w-[85%] md:max-w-[75%] gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+        className={`flex max-w-[85%] md:max-w-[75%] gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
       >
         {/* Avatar */}
         <div className="shrink-0 flex flex-col items-center gap-1">
           {isUser ? (
-            <CharacterAvatar name={userName || "You"} variant="user" size="md" ringClassName="ring-white/5" />
+            <CharacterAvatar
+              name={userName || 'You'}
+              variant="user"
+              size="md"
+              ringClassName="ring-white/5"
+            />
           ) : (
             <CharacterAvatar
               name={displayName}
@@ -161,13 +162,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         </div>
 
         {/* Bubble */}
-        <div
-          className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
-        >
+        <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
           <span className="text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-1 px-1">
-            {isUser
-              ? userName || "You"
-              : displayName}
+            {isUser ? userName || 'You' : displayName}
           </span>
 
           {/* Edit Mode */}
@@ -204,8 +201,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 className={`relative px-5 py-3 text-sm md:text-base leading-[1.75] shadow-sm backdrop-blur-md
                   ${
                     isUser
-                      ? "bg-bath-950/30 text-stone-100 rounded-3xl rounded-tr-sm border border-bath-500/10"
-                      : "bg-stone-900/60 text-stone-200 rounded-3xl rounded-tl-sm border border-white/5 border-l-2 border-l-bath-500/30"
+                      ? 'bg-bath-950/30 text-stone-100 rounded-3xl rounded-tr-sm border border-bath-500/10'
+                      : 'bg-stone-900/60 text-stone-200 rounded-3xl rounded-tl-sm border border-white/5 border-l-2 border-l-bath-500/30'
                   }
                 `}
               >
@@ -236,7 +233,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
               {hasBranches && (
                 <div className="flex items-center gap-2 mt-2 text-xs text-stone-500">
                   <button
-                    onClick={() => onSwipeChange?.(message.id, "left")}
+                    onClick={() => onSwipeChange?.(message.id, 'left')}
                     className="p-1 hover:bg-white/10 rounded transition-colors"
                     disabled={isGenerating}
                     aria-label="Previous branch"
@@ -248,7 +245,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                     {branchIndex + 1} / {branchCount}
                   </span>
                   <button
-                    onClick={() => onSwipeChange?.(message.id, "right")}
+                    onClick={() => onSwipeChange?.(message.id, 'right')}
                     className="p-1 hover:bg-white/10 rounded transition-colors"
                     disabled={isGenerating}
                     aria-label="Next branch"
@@ -291,7 +288,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                       <button
                         onClick={() => {
                           const extracted = extractImagePrompt(message.content);
-                          onGenerateImage?.(extracted || "");
+                          onGenerateImage?.(extracted || '');
                         }}
                         className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-purple-400 transition-colors"
                         aria-label="Generate image"
@@ -316,11 +313,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                           title="Read aloud"
                           disabled={isGenerating}
                         >
-                          {isSpeaking() ? (
-                            <VolumeX size={14} />
-                          ) : (
-                            <Volume2 size={14} />
-                          )}
+                          {isSpeaking() ? <VolumeX size={14} /> : <Volume2 size={14} />}
                         </button>
                       )}
 

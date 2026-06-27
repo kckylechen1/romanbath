@@ -42,7 +42,8 @@ const blankEntry = (): CharacterBookEntry => ({
 const isTempId = (id: string | undefined): boolean =>
   typeof id === 'string' && id.startsWith(TEMP_ID_PREFIX);
 
-const makeTempId = (): string => `${TEMP_ID_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const makeTempId = (): string =>
+  `${TEMP_ID_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const cloneBook = (book: CharacterBook | null): CharacterBook => ({
   name: book?.name ?? '',
@@ -138,9 +139,7 @@ const EntryPanel: React.FC<{
             <input
               type="text"
               value={secondaryText}
-              onChange={(e) =>
-                onChange({ ...entry, secondaryKeys: chipsToList(e.target.value) })
-              }
+              onChange={(e) => onChange({ ...entry, secondaryKeys: chipsToList(e.target.value) })}
               placeholder="drink, alcohol"
               className="w-full bg-stone-900/60 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50"
             />
@@ -379,11 +378,7 @@ const LorebookEditor: React.FC<LorebookEditorProps> = ({
       // Revert.
       setLocalBook((curr) => ({
         ...curr,
-        entries: [
-          ...curr.entries.slice(0, index),
-          target,
-          ...curr.entries.slice(index),
-        ],
+        entries: [...curr.entries.slice(0, index), target, ...curr.entries.slice(index)],
       }));
     });
   };

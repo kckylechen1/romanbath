@@ -1,14 +1,14 @@
 export enum Role {
-  User = "user",
-  Model = "model",
+  User = 'user',
+  Model = 'model',
 }
 
 export interface ToolCallInfo {
   toolName: string;
-  status: "running" | "done" | "error";
+  status: 'running' | 'done' | 'error';
   output?: string;
   mediaUrl?: string;
-  mediaType?: "image" | "audio" | "video";
+  mediaType?: 'image' | 'audio' | 'video';
 }
 
 export interface Message {
@@ -78,7 +78,7 @@ export interface GroupChat {
   id: string;
   name: string;
   characterIds: string[]; // IDs of characters in the group
-  activationMode: "round-robin" | "random" | "natural"; // How to select next speaker
+  activationMode: 'round-robin' | 'random' | 'natural'; // How to select next speaker
   createdAt: number;
   updatedAt: number;
   lastActiveCharacterId?: string; // Track who spoke last
@@ -91,7 +91,7 @@ export interface GroupMessage extends Message {
 }
 
 export interface TTSConfig {
-  provider: "browser" | "grok";
+  provider: 'browser' | 'grok';
   enabled: boolean;
   voice: string;
   rate: number;
@@ -135,7 +135,7 @@ export interface AppSettings {
   autoRestoreChat: boolean;
   showPersonaSwitchNotification: boolean;
   activePersonaId: string | null;
-  language: "en" | "zh-CN" | "zh-TW";
+  language: 'en' | 'zh-CN' | 'zh-TW';
 }
 
 // ── ChatConfig sub-types ──
@@ -166,7 +166,7 @@ export interface PromptConfig {
   systemPromptOverride: string;
   authorsNote: string;
   authorsNoteDepth: number;
-  promptOrder: "default" | "style_first" | "scenario_last";
+  promptOrder: 'default' | 'style_first' | 'scenario_last';
   negativePrompt: string;
 }
 
@@ -182,11 +182,8 @@ export interface InterfaceConfig {
 }
 
 export interface ChatConfig
-  extends GenerationConfig,
-    PromptConfig,
-    FormattingConfig,
-    InterfaceConfig {
-  responseStyle: "natural" | "sexy" | "flirty" | "horny" | "custom";
+  extends GenerationConfig, PromptConfig, FormattingConfig, InterfaceConfig {
+  responseStyle: 'natural' | 'sexy' | 'flirty' | 'horny' | 'custom';
   tts: TTSConfig;
   promptTemplate?: string;
   sceneMode: boolean;

@@ -27,7 +27,7 @@ const TABS = [
   { id: 'advanced', label: 'Advanced' },
 ] as const;
 
-type TabId = typeof TABS[number]['id'];
+type TabId = (typeof TABS)[number]['id'];
 
 const emptyForm = (): CharacterFormData => ({
   name: '',
@@ -55,11 +55,25 @@ const emptyForm = (): CharacterFormData => ({
 
 const isEqualForm = (a: CharacterFormData, b: CharacterFormData): boolean => {
   const keys: (keyof CharacterFormData)[] = [
-    'name', 'description', 'personality', 'scenario', 'firstMessage',
-    'exampleDialogue', 'systemPrompt', 'postHistoryInstructions',
-    'creatorNotes', 'tags', 'creator', 'characterVersion', 'nickname',
-    'groupOnlyGreetings', 'source', 'characterBook', 'extensions',
-    'avatarFile', 'removeAvatar',
+    'name',
+    'description',
+    'personality',
+    'scenario',
+    'firstMessage',
+    'exampleDialogue',
+    'systemPrompt',
+    'postHistoryInstructions',
+    'creatorNotes',
+    'tags',
+    'creator',
+    'characterVersion',
+    'nickname',
+    'groupOnlyGreetings',
+    'source',
+    'characterBook',
+    'extensions',
+    'avatarFile',
+    'removeAvatar',
   ];
   for (const key of keys) {
     const av = a[key];
@@ -86,7 +100,7 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
   onSave,
   onDelete,
   onClose,
-  isOpen
+  isOpen,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('basic');
   const [isLoading, setIsLoading] = useState(false);
@@ -104,7 +118,7 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
     if (isOpen && characterId) {
       setIsLoading(true);
       setAvatarPreview(null);
-      getCharacterDetails(characterId).then(data => {
+      getCharacterDetails(characterId).then((data) => {
         if (data) {
           const initial = { ...emptyForm(), ...data, avatarFile: null, removeAvatar: false };
           setFormData(initial);
@@ -127,14 +141,17 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
     }
   }, [isOpen, characterId]);
 
-  const handleChange = (field: keyof CharacterFormData, value: CharacterFormData[keyof CharacterFormData]) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+  const handleChange = (
+    field: keyof CharacterFormData,
+    value: CharacterFormData[keyof CharacterFormData]
+  ) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setFormData(prev => ({ ...prev, avatarFile: file, removeAvatar: false }));
+      setFormData((prev) => ({ ...prev, avatarFile: file, removeAvatar: false }));
       const reader = new FileReader();
       reader.onload = () => {
         setAvatarPreview(reader.result as string);
@@ -144,7 +161,7 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
   };
 
   const clearAvatar = () => {
-    setFormData(prev => ({ ...prev, avatarFile: null, removeAvatar: true }));
+    setFormData((prev) => ({ ...prev, avatarFile: null, removeAvatar: true }));
     setAvatarPreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -276,14 +293,12 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
             {/* Tabs */}
             <div className="border-b border-white/10 px-6 shrink-0">
               <div className="flex gap-1">
-                {TABS.map(tab => (
+                {TABS.map((tab) => (
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     className={`px-4 py-3 text-sm font-medium transition-colors relative ${
-                      activeTab === tab.id
-                        ? 'text-white'
-                        : 'text-stone-500 hover:text-stone-300'
+                      activeTab === tab.id ? 'text-white' : 'text-stone-500 hover:text-stone-300'
                     }`}
                   >
                     {tab.label}
@@ -308,7 +323,11 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                         className="w-32 h-32 rounded-2xl bg-stone-800 border-2 border-dashed border-stone-600 hover:border-bath-500/50 flex items-center justify-center cursor-pointer transition-colors overflow-hidden group"
                       >
                         {avatarPreview ? (
-                          <img src={avatarPreview} alt="Avatar" className="w-full h-full object-cover" />
+                          <img
+                            src={avatarPreview}
+                            alt="Avatar"
+                            className="w-full h-full object-cover"
+                          />
                         ) : (
                           <div className="flex flex-col items-center gap-2 text-stone-500 group-hover:text-bath-400 transition-colors">
                             <Upload size={24} />
@@ -365,7 +384,15 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                         <input
                           type="text"
                           value={formData.tags?.join(', ') || ''}
-                          onChange={(e) => handleChange('tags', e.target.value.split(',').map(t => t.trim()).filter(Boolean))}
+                          onChange={(e) =>
+                            handleChange(
+                              'tags',
+                              e.target.value
+                                .split(',')
+                                .map((t) => t.trim())
+                                .filter(Boolean)
+                            )
+                          }
                           placeholder="fantasy, female, warrior"
                           className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50"
                         />
@@ -432,7 +459,8 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                       First Message / Greeting
                     </label>
                     <p className="text-xs text-stone-500 mb-3">
-                      The character's first message when starting a new chat. Use {"{{user}}"} for the user's name and {"{{char}}"} for the character's name.
+                      The character's first message when starting a new chat. Use {'{{user}}'} for
+                      the user's name and {'{{char}}'} for the character's name.
                     </p>
                     <textarea
                       value={formData.firstMessage}
@@ -449,11 +477,17 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                       Alternate Greetings (one per line)
                     </label>
                     <p className="text-xs text-stone-500 mb-3">
-                      Optional alternative first messages. Each line becomes a separate greeting option.
+                      Optional alternative first messages. Each line becomes a separate greeting
+                      option.
                     </p>
                     <textarea
                       value={formData.alternateGreetings?.join('\n---\n') || ''}
-                      onChange={(e) => handleChange('alternateGreetings', e.target.value.split('\n---\n').filter(Boolean))}
+                      onChange={(e) =>
+                        handleChange(
+                          'alternateGreetings',
+                          e.target.value.split('\n---\n').filter(Boolean)
+                        )
+                      }
                       placeholder="*looks up from reading* Oh, hello there!&#10;---&#10;*busy with something* Hmm? Oh! {{user}}! I didn't see you there."
                       rows={6}
                       className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50 resize-none font-mono text-sm"
@@ -470,7 +504,8 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                       Example Dialogue
                     </label>
                     <p className="text-xs text-stone-500 mb-3">
-                      Example conversations that demonstrate the character's speaking style. Format: {"{{user}}: message"} and {"{{char}}: response"}
+                      Example conversations that demonstrate the character's speaking style. Format:{' '}
+                      {'{{user}}: message'} and {'{{char}}: response'}
                     </p>
                     <textarea
                       value={formData.exampleDialogue}
@@ -481,8 +516,8 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
 {{user}}: What do you like to do for fun?
 {{char}}: Oh, so many things! I love reading, going on adventures, and trying new foods. *eyes light up* Have you ever tried the pastries from the bakery downtown? They're amazing!`}
                       rows={12}
-                       className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50 resize-none font-mono text-sm"
-                     />
+                      className="w-full bg-stone-800/50 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-bath-500/50 resize-none font-mono text-sm"
+                    />
                   </div>
                 </div>
               )}
@@ -491,9 +526,9 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
               {activeTab === 'lorebook' && (
                 <div className="space-y-4">
                   <p className="text-xs text-stone-500">
-                    Lorebook entries inject context into the prompt when their keywords appear
-                    in the conversation. Edits save immediately through the lorebook API;
-                    the rest of the card is persisted on Save Changes.
+                    Lorebook entries inject context into the prompt when their keywords appear in
+                    the conversation. Edits save immediately through the lorebook API; the rest of
+                    the card is persisted on Save Changes.
                   </p>
                   <LorebookEditor
                     characterName={characterId ? formData.name : undefined}
@@ -527,7 +562,8 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                       Post-History Instructions
                     </label>
                     <p className="text-xs text-stone-500 mb-3">
-                      Instructions inserted after the chat history, right before generating a response.
+                      Instructions inserted after the chat history, right before generating a
+                      response.
                     </p>
                     <textarea
                       value={formData.postHistoryInstructions}
@@ -557,15 +593,29 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                       Companion Persona
                     </label>
                     <p className="text-xs text-stone-500 mb-3">
-                      Controls how the affect module modulates this character's emotional
-                      responses. Default is Nurturing.
+                      Controls how the affect module modulates this character's emotional responses.
+                      Default is Nurturing.
                     </p>
                     <div className="grid grid-cols-3 gap-3 mb-4">
-                      {([
-                        { val: 'nurturing', label: 'Nurturing', desc: 'High warmth, calm. Good listener.' },
-                        { val: 'playful', label: 'Playful', desc: 'High energy, lifts your mood.' },
-                        { val: 'steady', label: 'Steady', desc: 'Even keel, undramatic, reliable.' },
-                      ] as const).map(({ val, label, desc }) => (
+                      {(
+                        [
+                          {
+                            val: 'nurturing',
+                            label: 'Nurturing',
+                            desc: 'High warmth, calm. Good listener.',
+                          },
+                          {
+                            val: 'playful',
+                            label: 'Playful',
+                            desc: 'High energy, lifts your mood.',
+                          },
+                          {
+                            val: 'steady',
+                            label: 'Steady',
+                            desc: 'Even keel, undramatic, reliable.',
+                          },
+                        ] as const
+                      ).map(({ val, label, desc }) => (
                         <button
                           key={val}
                           type="button"
@@ -668,7 +718,7 @@ const CharacterEditor: React.FC<CharacterEditorProps> = ({
                   className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-gradient-to-r from-bath-600 to-bath-700 hover:from-bath-500 hover:to-bath-600 rounded-xl shadow-lg shadow-bath-900/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Save size={16} />
-                  {isSaving ? 'Saving...' : (characterId ? 'Save Changes' : 'Create Character')}
+                  {isSaving ? 'Saving...' : characterId ? 'Save Changes' : 'Create Character'}
                 </button>
               </div>
             </div>

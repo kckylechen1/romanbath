@@ -1,5 +1,5 @@
-import React from "react";
-import { Send, Mic } from "lucide-react";
+import React from 'react';
+import { Send, Mic } from 'lucide-react';
 
 interface ChatInputProps {
   inputText: string;
@@ -29,7 +29,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   return (
     <div className="p-4 md:p-8 z-20 bg-gradient-to-t from-[#090b0e] via-[#090b0e]/80 to-transparent bath-reveal bath-reveal-delay-4">
       <div
-        className={`max-w-4xl mx-auto relative group transition-transform ${leftSidebarOpen ? "" : "md:-translate-x-10"}`}
+        className={`max-w-4xl mx-auto relative group transition-transform ${leftSidebarOpen ? '' : 'md:-translate-x-10'}`}
       >
         <div className="relative bg-[#0e1217]/60 backdrop-blur-2xl rounded-2xl p-2 flex items-end gap-2 ring-1 ring-white/5 focus-within:ring-bath-500/30 focus-within:bg-[#0e1217]/80 focus-within:shadow-[0_0_20px_rgba(212,165,116,0.10)] transition-all duration-300 shadow-2xl">
           <textarea
@@ -52,11 +52,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             className={`mb-1.5 p-2.5 rounded-xl transition-all flex-shrink-0 duration-300
                           ${
                             isListening
-                              ? "bg-red-500/10 text-red-400 animate-pulse ring-1 ring-red-500/20"
-                              : "hover:bg-white/5 text-stone-600 hover:text-stone-300"
+                              ? 'bg-red-500/10 text-red-400 animate-pulse ring-1 ring-red-500/20'
+                              : 'hover:bg-white/5 text-stone-600 hover:text-stone-300'
                           }`}
-            aria-label={isListening ? "Stop Listening" : "Voice Input"}
-            title={isListening ? "Stop Listening" : "Voice Input"}
+            aria-label={isListening ? 'Stop Listening' : 'Voice Input'}
+            title={isListening ? 'Stop Listening' : 'Voice Input'}
           >
             <Mic size={18} />
           </button>

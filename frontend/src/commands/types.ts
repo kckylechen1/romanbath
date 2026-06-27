@@ -1,12 +1,7 @@
-import type React from "react";
-import type { LucideIcon } from "lucide-react";
+import type React from 'react';
+import type { LucideIcon } from 'lucide-react';
 
-export type CommandCategory =
-  | "actions"
-  | "navigate"
-  | "characters"
-  | "settings"
-  | "help";
+export type CommandCategory = 'actions' | 'navigate' | 'characters' | 'settings' | 'help';
 
 export interface Command {
   id: string;
@@ -27,24 +22,24 @@ export interface Command {
 }
 
 export const CATEGORY_LABELS: Record<CommandCategory, string> = {
-  actions: "Actions",
-  navigate: "Navigate",
-  characters: "Characters",
-  settings: "Settings",
-  help: "Help",
+  actions: 'Actions',
+  navigate: 'Navigate',
+  characters: 'Characters',
+  settings: 'Settings',
+  help: 'Help',
 };
 
 export const CATEGORY_ORDER: CommandCategory[] = [
-  "actions",
-  "navigate",
-  "characters",
-  "settings",
-  "help",
+  'actions',
+  'navigate',
+  'characters',
+  'settings',
+  'help',
 ];
 
 // Concatenate the searchable fields into one string for uFuzzy.
 export const commandToHaystack = (cmd: Command): string =>
-  [cmd.title, cmd.category, ...(cmd.keywords ?? [])].join(" ").toLowerCase();
+  [cmd.title, cmd.category, ...(cmd.keywords ?? [])].join(' ').toLowerCase();
 
 // Re-exported so consumers don't need to import React types directly.
 export type { React };

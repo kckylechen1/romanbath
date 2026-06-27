@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from "react";
-import { Save } from "lucide-react";
-import { useLanguage } from "../../i18n";
+import React, { useState, useEffect } from 'react';
+import { Save } from 'lucide-react';
+import { useLanguage } from '../../i18n';
 
-interface BufferedInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> {
+interface BufferedInputProps extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  'value' | 'onChange'
+> {
   value: string | number;
   onSave: (val: string | number) => void;
   label?: React.ReactNode;
@@ -13,18 +16,18 @@ export const BufferedInput: React.FC<BufferedInputProps> = ({
   onSave,
   label,
   className,
-  type = "text",
+  type = 'text',
   ...props
 }) => {
   const { t } = useLanguage();
-  const [localValue, setLocalValue] = useState<string | number>(value ?? "");
+  const [localValue, setLocalValue] = useState<string | number>(value ?? '');
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
 
   useEffect(() => {
     if (!isDirty) {
-      setLocalValue(value ?? "");
+      setLocalValue(value ?? '');
     }
   }, [value, isDirty]);
 
@@ -39,9 +42,9 @@ export const BufferedInput: React.FC<BufferedInputProps> = ({
     }
   };
 
-  const isEmpty = localValue === "" || localValue === undefined || localValue === null;
-  const shouldShowAsPassword = type === "password" && (isTyping || !isEmpty);
-  const inputType = shouldShowAsPassword ? "password" : type === "password" ? "text" : type;
+  const isEmpty = localValue === '' || localValue === undefined || localValue === null;
+  const shouldShowAsPassword = type === 'password' && (isTyping || !isEmpty);
+  const inputType = shouldShowAsPassword ? 'password' : type === 'password' ? 'text' : type;
 
   return (
     <div className="space-y-2">
@@ -55,20 +58,20 @@ export const BufferedInput: React.FC<BufferedInputProps> = ({
         type={inputType}
         value={localValue}
         onChange={(e) => {
-          const val = type === "number" ? parseFloat(e.target.value) : e.target.value;
+          const val = type === 'number' ? parseFloat(e.target.value) : e.target.value;
           setLocalValue(val);
           setIsDirty(true);
-          if (type === "password") {
+          if (type === 'password') {
             setIsTyping(true);
           }
         }}
         onFocus={() => {
-          if (type === "password" && !isEmpty) {
+          if (type === 'password' && !isEmpty) {
             setIsTyping(true);
           }
         }}
         onBlur={() => {
-          if (type === "password" && isEmpty) {
+          if (type === 'password' && isEmpty) {
             setIsTyping(false);
           }
         }}
@@ -80,19 +83,22 @@ export const BufferedInput: React.FC<BufferedInputProps> = ({
         className={`w-full flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all
                     ${
                       isDirty
-                        ? "bg-stone-200 text-stone-900 hover:bg-white shadow-sm cursor-pointer"
-                        : "bg-white/5 text-stone-600 cursor-not-allowed"
+                        ? 'bg-stone-200 text-stone-900 hover:bg-white shadow-sm cursor-pointer'
+                        : 'bg-white/5 text-stone-600 cursor-not-allowed'
                     }
                 `}
       >
         <Save size={14} />
-        {isSaving ? t("common.saving") : isDirty ? t("common.save") : t("common.saved")}
+        {isSaving ? t('common.saving') : isDirty ? t('common.save') : t('common.saved')}
       </button>
     </div>
   );
 };
 
-interface BufferedTextAreaProps extends Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> {
+interface BufferedTextAreaProps extends Omit<
+  React.TextareaHTMLAttributes<HTMLTextAreaElement>,
+  'value' | 'onChange'
+> {
   value: string | number;
   onSave: (val: string | number) => void;
   label?: React.ReactNode;
@@ -141,13 +147,13 @@ export const BufferedTextArea: React.FC<BufferedTextAreaProps> = ({
         className={`w-full flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all
                     ${
                       isDirty
-                        ? "bg-stone-200 text-stone-900 hover:bg-white shadow-sm"
-                        : "bg-white/5 text-stone-600 cursor-not-allowed"
+                        ? 'bg-stone-200 text-stone-900 hover:bg-white shadow-sm'
+                        : 'bg-white/5 text-stone-600 cursor-not-allowed'
                     }
                 `}
       >
         <Save size={14} />
-        {isDirty ? t("common.save") : t("common.saved")}
+        {isDirty ? t('common.save') : t('common.saved')}
       </button>
     </div>
   );

@@ -1,14 +1,14 @@
-import { useCallback } from "react";
-import { Message, Role, Character, ChatConfig, GroupChat } from "../types";
-import { generateText } from "../services/zeroclawService";
-import { useChatHelpers, characterNameForMessage } from "./useChatHelpers";
-import type { ToastAPI } from "../components/Toast";
-import { confirm as confirmDialog } from "../services/dialogService";
-import { pathToRoot, indexMessages, deepestLeaf } from "./useMessageTree";
-import { generateId } from "../utils/id";
+import { useCallback } from 'react';
+import { Message, Role, Character, ChatConfig, GroupChat } from '../types';
+import { generateText } from '../services/zeroclawService';
+import { useChatHelpers, characterNameForMessage } from './useChatHelpers';
+import type { ToastAPI } from '../components/Toast';
+import { confirm as confirmDialog } from '../services/dialogService';
+import { pathToRoot, indexMessages, deepestLeaf } from './useMessageTree';
+import { generateId } from '../utils/id';
 
 export interface UseMessageActionsReturn {
-  handleSwipeChange: (messageId: string, direction: "left" | "right") => void;
+  handleSwipeChange: (messageId: string, direction: 'left' | 'right') => void;
   handleGenerateSwipe: (messageId: string) => Promise<void>;
   handleRegenerate: (messageId?: string) => Promise<void>;
   handleContinue: (messageId?: string) => Promise<void>;
@@ -27,10 +27,13 @@ export const useMessageActions = (
   config: ChatConfig,
   activeGroup: GroupChat | null,
   setIsTyping: React.Dispatch<React.SetStateAction<boolean>>,
-  toast: ToastAPI,
+  toast: ToastAPI
 ): UseMessageActionsReturn => {
-  const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } =
-    useChatHelpers(config, activeGroup, characters);
+  const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } = useChatHelpers(
+    config,
+    activeGroup,
+    characters
+  );
 
   // Append `child` to `messages`, recording the back-reference on the
   // parent so childrenIds stays consistent without re-indexing the world.
@@ -49,7 +52,7 @@ export const useMessageActions = (
         return next;
       });
     },
-    [setMessages],
+    [setMessages]
   );
 
   // handleSwipeChange now navigates siblings in the tree. We pick the
@@ -57,7 +60,7 @@ export const useMessageActions = (
   // leaf that sibling currently resolves to and make it the active tip.
   // The name is kept for backwards-compatibility with the message toolbar.
   const handleSwipeChange = useCallback(
-    (messageId: string, direction: "left" | "right") => {
+    (messageId: string, direction: 'left' | 'right') => {
       const target = messages.find((m) => m.id === messageId);
       if (!target) return;
 
@@ -68,7 +71,7 @@ export const useMessageActions = (
 
       const currentIdx = siblings.findIndex((m) => m.id === messageId);
       const nextIdx =
-        direction === "left"
+        direction === 'left'
           ? (currentIdx - 1 + siblings.length) % siblings.length
           : (currentIdx + 1) % siblings.length;
       const nextSibling = siblings[nextIdx];
@@ -78,7 +81,7 @@ export const useMessageActions = (
       if (!newLeaf) return;
       setActiveLeafId(newLeaf.id);
     },
-    [messages, setActiveLeafId],
+    [messages, setActiveLeafId]
   );
 
   // Shared branch-creation helper for swipe and regenerate. Both flows
@@ -90,14 +93,16 @@ export const useMessageActions = (
       target: Message,
       rollbackLeafId: string,
       successToast: string,
-      errorToast: string,
+      errorToast: string
     ): Promise<void> => {
-      const parent = target.parentId ? messages.find((m) => m.id === target.parentId) ?? null : null;
+      const parent = target.parentId
+        ? (messages.find((m) => m.id === target.parentId) ?? null)
+        : null;
       const contextMessages = pathToRoot(indexMessages(messages), target.parentId ?? null);
 
       const respondingCharacter =
         characters.find(
-          (char) => char.name === characterNameForMessage(target, selectedCharacter),
+          (char) => char.name === characterNameForMessage(target, selectedCharacter)
         ) ?? selectedCharacter;
 
       const placeholderId = generateId();
@@ -105,7 +110,7 @@ export const useMessageActions = (
       appendChild(parent, {
         id: placeholderId,
         role: Role.Model,
-        content: "",
+        content: '',
         timestamp: Date.now(),
         isThinking: true,
         childrenIds: [],
@@ -117,15 +122,15 @@ export const useMessageActions = (
         const chatMessages = buildChatMessagesForContext(contextMessages, respondingCharacter.name);
         const responseText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
-          buildChatOptions(),
+          buildChatOptions()
         );
 
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === placeholderId
               ? { ...msg, content: responseText, isThinking: false, timestamp: Date.now() }
-              : msg,
-          ),
+              : msg
+          )
         );
         toast.success(successToast);
       } catch (error: unknown) {
@@ -133,10 +138,7 @@ export const useMessageActions = (
         // leave a dangling thinking bubble on the active path.
         setMessages((prev) => prev.filter((m) => m.id !== placeholderId));
         setActiveLeafId(rollbackLeafId);
-        toast.error(
-          errorToast,
-          error instanceof Error ? error.message : "Unknown error",
-        );
+        toast.error(errorToast, error instanceof Error ? error.message : 'Unknown error');
       } finally {
         setIsTyping(false);
       }
@@ -153,16 +155,21 @@ export const useMessageActions = (
       buildChatOptions,
       buildChatRequest,
       buildChatMessagesForContext,
-    ],
+    ]
   );
 
   const handleGenerateSwipe = useCallback(
     async (messageId: string) => {
       const target = messages.find((m) => m.id === messageId);
       if (!target || target.role !== Role.Model) return;
-      await appendModelBranch(target, target.id, "New branch generated", "Failed to generate branch");
+      await appendModelBranch(
+        target,
+        target.id,
+        'New branch generated',
+        'Failed to generate branch'
+      );
     },
-    [messages, appendModelBranch],
+    [messages, appendModelBranch]
   );
 
   const handleRegenerate = useCallback(
@@ -184,11 +191,11 @@ export const useMessageActions = (
       await appendModelBranch(
         target,
         activeLeafId ?? target.id,
-        "Branch regenerated",
-        "Regeneration failed",
+        'Branch regenerated',
+        'Regeneration failed'
       );
     },
-    [messages, activePath, activeLeafId, appendModelBranch],
+    [messages, activePath, activeLeafId, appendModelBranch]
   );
 
   const handleContinue = useCallback(
@@ -216,18 +223,18 @@ export const useMessageActions = (
         const contextMessages = activePath.slice(0, targetIndex + 1);
         const respondingCharacter =
           characters.find(
-            (char) => char.name === characterNameForMessage(target, selectedCharacter),
+            (char) => char.name === characterNameForMessage(target, selectedCharacter)
           ) ?? selectedCharacter;
         const chatMessages = buildChatMessagesForContext(contextMessages, respondingCharacter.name);
         chatMessages.push({
-          role: "user",
+          role: 'user',
           content:
-            "[Continue your response naturally without repeating yourself. Do not acknowledge this instruction.]",
+            '[Continue your response naturally without repeating yourself. Do not acknowledge this instruction.]',
         });
 
         const continuationText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
-          buildChatOptions(),
+          buildChatOptions()
         );
 
         // Continue appends to the active branch's content in place. This
@@ -235,17 +242,12 @@ export const useMessageActions = (
         // answer is a correction, not an exploration.
         setMessages((prev) =>
           prev.map((msg) =>
-            msg.id === targetId
-              ? { ...msg, content: `${msg.content} ${continuationText}` }
-              : msg,
-          ),
+            msg.id === targetId ? { ...msg, content: `${msg.content} ${continuationText}` } : msg
+          )
         );
-        toast.success("Message continued");
+        toast.success('Message continued');
       } catch (error: unknown) {
-        toast.error(
-          "Continue failed",
-          error instanceof Error ? error.message : "Unknown error",
-        );
+        toast.error('Continue failed', error instanceof Error ? error.message : 'Unknown error');
       } finally {
         setIsTyping(false);
       }
@@ -261,7 +263,7 @@ export const useMessageActions = (
       buildChatOptions,
       buildChatRequest,
       buildChatMessagesForContext,
-    ],
+    ]
   );
 
   // Edit stays in-place for MVP. The user uses edit to fix typos, not to
@@ -270,19 +272,19 @@ export const useMessageActions = (
   const handleEditMessage = useCallback(
     (messageId: string, newContent: string) => {
       setMessages((prev) =>
-        prev.map((msg) => (msg.id === messageId ? { ...msg, content: newContent } : msg)),
+        prev.map((msg) => (msg.id === messageId ? { ...msg, content: newContent } : msg))
       );
-      toast.success("Message edited");
+      toast.success('Message edited');
     },
-    [setMessages, toast],
+    [setMessages, toast]
   );
 
   const handleDeleteMessage = useCallback(
     async (messageId: string) => {
       const ok = await confirmDialog({
-        title: "Delete message?",
-        message: "This message and any branches below it will be removed from the conversation.",
-        confirmLabel: "Delete",
+        title: 'Delete message?',
+        message: 'This message and any branches below it will be removed from the conversation.',
+        confirmLabel: 'Delete',
         danger: true,
       });
       if (!ok) return;
@@ -292,7 +294,7 @@ export const useMessageActions = (
       // cleans them all.
       const childrenOf = new Map<string, string[]>();
       for (const msg of messages) {
-        const parent = msg.parentId ?? "";
+        const parent = msg.parentId ?? '';
         const list = childrenOf.get(parent) ?? [];
         list.push(msg.id);
         childrenOf.set(parent, list);
@@ -335,9 +337,9 @@ export const useMessageActions = (
       if (activeLeafId && toRemove.has(activeLeafId)) {
         setActiveLeafId(targetParentId);
       }
-      toast.success("Message deleted");
+      toast.success('Message deleted');
     },
-    [messages, activeLeafId, setMessages, setActiveLeafId, toast],
+    [messages, activeLeafId, setMessages, setActiveLeafId, toast]
   );
 
   return {

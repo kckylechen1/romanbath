@@ -47,11 +47,7 @@ vi.mock('idb-keyval', async (importOriginal) => {
   const actual = await importOriginal<typeof import('idb-keyval')>();
   return {
     ...actual,
-    set: async (
-      key: IDBValidKey,
-      value: unknown,
-      store?: import('idb-keyval').UseStore,
-    ) => {
+    set: async (key: IDBValidKey, value: unknown, store?: import('idb-keyval').UseStore) => {
       if (quotaShouldThrow()) {
         throw new DOMException('synthetic quota', 'QuotaExceededError');
       }
@@ -241,10 +237,7 @@ describe('chatService', () => {
 
     // NeedsMigration landed; AlreadyThere is preserved untouched.
     const list = await getChatList('char-1');
-    expect(list.map((c) => c.file_name).sort()).toEqual([
-      'AlreadyThere',
-      'NeedsMigration',
-    ]);
+    expect(list.map((c) => c.file_name).sort()).toEqual(['AlreadyThere', 'NeedsMigration']);
     expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
   });
 
@@ -276,9 +269,7 @@ describe('chatService', () => {
 
     // Chat 2 (the failed record) is missing; the rest landed.
     let list = await getChatList('char-1');
-    expect(list.map((c) => c.file_name).sort()).toEqual(
-      ['Chat 0', 'Chat 1', 'Chat 3', 'Chat 4'],
-    );
+    expect(list.map((c) => c.file_name).sort()).toEqual(['Chat 0', 'Chat 1', 'Chat 3', 'Chat 4']);
 
     // Clear the predicate so the second run can write Chat 2.
     setKeyFailurePredicate(null);
@@ -359,11 +350,7 @@ describe('chatService', () => {
     await saveChat('char-1', 'Old C', createMessages(), 'User', 'Char');
 
     const beforeList = await getChatList('char-1');
-    expect(beforeList.map((c) => c.file_name).sort()).toEqual([
-      'Old A',
-      'Old B',
-      'Old C',
-    ]);
+    expect(beforeList.map((c) => c.file_name).sort()).toEqual(['Old A', 'Old B', 'Old C']);
 
     // Arm the idb-keyval mock so the next set() call inside the production
     // storageSetChat throws QuotaExceededError. The retry after eviction

@@ -353,7 +353,7 @@ const mapSummaryToCharacter = (char: CharacterSummary): Character => {
 };
 
 const parseCompanionConfig = (
-  extensions: Record<string, unknown>,
+  extensions: Record<string, unknown>
 ): CompanionPersonaConfig | null => {
   const raw = extensions.companion;
   if (!raw || typeof raw !== 'object') return null;
@@ -370,7 +370,7 @@ const parseCompanionConfig = (
 };
 
 const serializeCompanionConfig = (
-  companion: CompanionPersonaConfig | null | undefined,
+  companion: CompanionPersonaConfig | null | undefined
 ): Record<string, unknown> | null => {
   if (!companion) return null;
   return {
@@ -470,13 +470,14 @@ export const buildOptionsBody = (options: ChatOptions): Record<string, unknown> 
     body.authors_note = options.authorsNote;
   }
   if (
-    isNonEmptyString(options.authorsNote)
-    && options.authorsNoteDepth !== null
-    && options.authorsNoteDepth !== undefined
+    isNonEmptyString(options.authorsNote) &&
+    options.authorsNoteDepth !== null &&
+    options.authorsNoteDepth !== undefined
   ) {
     body.authors_note_depth = options.authorsNoteDepth;
   }
-  if (options.promptOrder && options.promptOrder !== 'default') body.prompt_order = options.promptOrder;
+  if (options.promptOrder && options.promptOrder !== 'default')
+    body.prompt_order = options.promptOrder;
   if (isNonEmptyString(options.userPrefix)) body.user_prefix = options.userPrefix;
   if (isNonEmptyString(options.modelPrefix)) body.model_prefix = options.modelPrefix;
   if (isNonEmptyString(options.contextTemplate)) body.context_template = options.contextTemplate;
@@ -536,7 +537,7 @@ export const getCharacters = async (opts?: GetCharactersOptions): Promise<Charac
 export const getSettings = async (): Promise<Record<string, unknown>> => ({});
 
 export const getCharacterDetails = async (
-  characterId: string,
+  characterId: string
 ): Promise<CharacterFormData | null> => {
   try {
     await ensurePairing();
@@ -555,7 +556,7 @@ export const getCharacterDetails = async (
 const MAX_IMPORT_SIZE = 10 * 1024 * 1024; // 10MB
 
 export const importCharacterCard = async (
-  file: File,
+  file: File
 ): Promise<{ success: boolean; fileName?: string; error?: string }> => {
   const extension = file.name.split('.').pop()?.toLowerCase() || '';
   const supportedFormats = ['png', 'json', 'webp'];
@@ -595,14 +596,14 @@ export const importCharacterCard = async (
 };
 
 export const duplicateCharacter = async (
-  characterId: string,
+  characterId: string
 ): Promise<{ success: boolean; fileName?: string; error?: string }> => {
   try {
     await ensurePairing();
-    const res = await fetch(
-      `/api/characters/${encodeURIComponent(characterId)}/duplicate`,
-      { method: 'POST', headers: jsonHeaders() },
-    );
+    const res = await fetch(`/api/characters/${encodeURIComponent(characterId)}/duplicate`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+    });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       return { success: false, error: err.error || 'Duplicate failed' };
@@ -620,10 +621,9 @@ export const duplicateCharacter = async (
 export const exportCharacter = async (characterId: string): Promise<Blob | null> => {
   try {
     await ensurePairing();
-    const res = await fetch(
-      `/api/characters/${encodeURIComponent(characterId)}/export`,
-      { headers: jsonHeaders() },
-    );
+    const res = await fetch(`/api/characters/${encodeURIComponent(characterId)}/export`, {
+      headers: jsonHeaders(),
+    });
     if (!res.ok) return null;
     return res.blob();
   } catch {
@@ -633,19 +633,16 @@ export const exportCharacter = async (characterId: string): Promise<Blob | null>
 
 export const uploadCharacterAvatar = async (
   characterName: string,
-  file: File,
+  file: File
 ): Promise<{ success: boolean; error?: string }> => {
   try {
     await ensurePairing();
     const data_base64 = await fileToBase64(file);
-    const res = await fetch(
-      `/api/characters/${encodeURIComponent(characterName)}/avatar`,
-      {
-        method: 'POST',
-        headers: jsonHeaders(),
-        body: JSON.stringify({ data_base64 }),
-      },
-    );
+    const res = await fetch(`/api/characters/${encodeURIComponent(characterName)}/avatar`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ data_base64 }),
+    });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       return { success: false, error: err.error || 'Avatar upload failed' };
@@ -671,7 +668,7 @@ export const hasCharacterAvatar = async (characterName: string): Promise<boolean
 };
 
 export const deleteCharacterAvatar = async (
-  characterName: string,
+  characterName: string
 ): Promise<{ success: boolean; error?: string }> => {
   try {
     await ensurePairing();
@@ -694,7 +691,7 @@ export const deleteCharacterAvatar = async (
 };
 
 export const createCharacter = async (
-  data: CharacterFormData,
+  data: CharacterFormData
 ): Promise<{ success: boolean; error: string; fileName?: string }> => {
   try {
     await ensurePairing();
@@ -719,7 +716,7 @@ export const createCharacter = async (
 
 export const updateCharacter = async (
   id: string,
-  data: CharacterFormData,
+  data: CharacterFormData
 ): Promise<{ success: boolean; error: string }> => {
   try {
     await ensurePairing();
@@ -741,9 +738,7 @@ export const updateCharacter = async (
   }
 };
 
-export const deleteCharacter = async (
-  id: string,
-): Promise<{ success: boolean; error: string }> => {
+export const deleteCharacter = async (id: string): Promise<{ success: boolean; error: string }> => {
   try {
     await ensurePairing();
     const res = await fetch(`/api/characters/${encodeURIComponent(id)}`, {
@@ -774,11 +769,7 @@ const mapBookEntryResponse = (entry: unknown): CharacterBookEntry => {
   // (raw SillyTavern spec). Normalize defensively like the rest of the
   // service does so the editor never sees an undefined field.
   const e = entry as CharacterBookEntryWire;
-  const id = typeof e.id === 'string' && e.id
-    ? e.id
-    : e.uid != null
-      ? String(e.uid)
-      : '';
+  const id = typeof e.id === 'string' && e.id ? e.id : e.uid != null ? String(e.uid) : '';
   const secondaryKeys = e.secondaryKeys ?? e.secondary_keys ?? [];
   const tokenBudget = e.tokenBudget ?? e.token_budget;
   return {
@@ -822,7 +813,7 @@ export const getCharacterBook = async (name: string): Promise<CharacterBook | nu
 
 export const replaceCharacterBook = async (
   name: string,
-  book: CharacterBook,
+  book: CharacterBook
 ): Promise<CharacterBook> => {
   await ensurePairing();
   const res = await fetch(`/api/characters/${encodeURIComponent(name)}/book`, {
@@ -834,13 +825,14 @@ export const replaceCharacterBook = async (
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || `Replace book failed: ${res.status}`);
   }
-  const data = (await res.json()) as { book: CharacterBook };
+  const data = (await res.json()) as { book: CharacterBook | null };
+  if (!data.book) throw new Error('Replace book failed: server returned empty book');
   return mapBookResponse(data.book);
 };
 
 export const addBookEntry = async (
   name: string,
-  entry: Omit<CharacterBookEntry, 'id'>,
+  entry: Omit<CharacterBookEntry, 'id'>
 ): Promise<CharacterBookEntry> => {
   await ensurePairing();
   // Omit<..., 'id'> is structurally compatible with CharacterBookEntry
@@ -863,7 +855,7 @@ export const addBookEntry = async (
 export const updateBookEntry = async (
   name: string,
   entryId: string,
-  entry: CharacterBookEntry,
+  entry: CharacterBookEntry
 ): Promise<CharacterBookEntry> => {
   await ensurePairing();
   const res = await fetch(
@@ -872,7 +864,7 @@ export const updateBookEntry = async (
       method: 'PUT',
       headers: jsonHeaders(),
       body: JSON.stringify({ entry: mapBookEntryToWire({ ...entry, id: entryId }) }),
-    },
+    }
   );
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -887,7 +879,7 @@ export const deleteBookEntry = async (name: string, entryId: string): Promise<bo
     await ensurePairing();
     const res = await fetch(
       `/api/characters/${encodeURIComponent(name)}/book/entries/${encodeURIComponent(entryId)}`,
-      { method: 'DELETE', headers: jsonHeaders() },
+      { method: 'DELETE', headers: jsonHeaders() }
     );
     // 204 No Content on success.
     return res.ok;
@@ -910,17 +902,14 @@ export const deleteBookEntry = async (name: string, entryId: string): Promise<bo
 // Yields one string per event — the concatenated `data:` payload, or '' for
 // events with no data field (so callers can still observe keep-alives if
 // they care). The caller decides what to do with each payload.
-export async function* parseSseEvents(
-  res: Response,
-): AsyncGenerator<string, void, unknown> {
+export async function* parseSseEvents(res: Response): AsyncGenerator<string, void, unknown> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('No response body');
 
   const decoder = new TextDecoder();
   let buffer = '';
 
-  const normalizeLineEndings = (s: string): string =>
-    s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const normalizeLineEndings = (s: string): string => s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -966,7 +955,7 @@ export async function* parseSseEvents(
 
 const parseSseStream = async (
   res: Response,
-  onToken: (fullText: string) => void,
+  onToken: (fullText: string) => void
 ): Promise<string> => {
   let fullText = '';
 
@@ -1004,7 +993,7 @@ export const generateTextStream = async (
   onChunk: (chunk: string, fullText: string) => void,
   onComplete: (fullText: string) => void,
   onError: (error: Error) => void,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<void> => {
   try {
     await ensurePairing();
@@ -1044,7 +1033,7 @@ export const generateTextStream = async (
 export const generateText = async (
   request: ChatRequestPayload,
   options: ChatOptions,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<string> => {
   await ensurePairing();
 
@@ -1075,7 +1064,7 @@ export const generateText = async (
 
 export const generateImage = async (
   prompt: string,
-  resolution?: string,
+  resolution?: string
 ): Promise<{ url: string }> => {
   await ensurePairing();
 
@@ -1105,7 +1094,7 @@ export const generateImage = async (
 export const generateSpeech = async (
   text: string,
   voiceId?: string,
-  language?: string,
+  language?: string
 ): Promise<ArrayBuffer> => {
   await ensurePairing();
 
@@ -1132,36 +1121,49 @@ export const generateSpeech = async (
 export interface WsChatCallbacks {
   onChunk: (chunk: string, fullText: string) => void;
   onToolCall: (toolName: string) => void;
-  onToolResult: (toolName: string, output: string, mediaUrl?: string, mediaType?: "image" | "audio" | "video") => void;
+  onToolResult: (
+    toolName: string,
+    output: string,
+    mediaUrl?: string,
+    mediaType?: 'image' | 'audio' | 'video'
+  ) => void;
   onDone: (fullText: string) => void;
   onError: (error: string) => void;
   onFirstMessage?: (text: string) => void;
 }
 
-const WS_URL = (agentAlias: string = "default", token?: string) => {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+const WS_URL = (agentAlias: string = 'default', token?: string) => {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const params = new URLSearchParams({ agent: agentAlias });
-  if (token) params.set("token", token);
+  if (token) params.set('token', token);
   return `${proto}//${window.location.host}/ws/chat?${params.toString()}`;
 };
 
-function resolveMediaUrl(toolName: string, output: string): { url: string; type: "image" | "audio" | "video" } | null {
+function resolveMediaUrl(
+  toolName: string,
+  output: string
+): { url: string; type: 'image' | 'audio' | 'video' } | null {
   const isRemoteUrl = (value: string): boolean => /^https?:\/\//i.test(value);
 
   const normalizePath = (value: string): string => {
     const trimmed = value.trim();
-    if (trimmed.startsWith("/api/files/")) {
-      return trimmed.replace(/^\/api\/files\//, "");
+    if (trimmed.startsWith('/api/files/')) {
+      return trimmed.replace(/^\/api\/files\//, '');
     }
-    return trimmed.replace(/^\/+/, "");
+    return trimmed.replace(/^\/+/, '');
   };
 
   const resolveCandidate = (candidate?: unknown): string | null => {
-    if (typeof candidate !== "string") return null;
+    if (typeof candidate !== 'string') return null;
     const value = candidate.trim();
     if (!value) return null;
     if (isRemoteUrl(value)) return value;
-    if (!value.startsWith("images/") && !value.startsWith("audio/") && !value.startsWith("videos/") && !value.startsWith("/api/files/")) {
+    if (
+      !value.startsWith('images/') &&
+      !value.startsWith('audio/') &&
+      !value.startsWith('videos/') &&
+      !value.startsWith('/api/files/')
+    ) {
       return null;
     }
     return `/api/files/${normalizePath(value)}`;
@@ -1169,28 +1171,38 @@ function resolveMediaUrl(toolName: string, output: string): { url: string; type:
 
   try {
     const data = JSON.parse(output);
-    if (toolName.includes("image_gen") || toolName.includes("imagegen") || toolName.includes("photo")) {
-      const filePath = resolveCandidate(data.image || data.image_url || data.imageUrl || data.path || data.output);
-      if (filePath) return { url: filePath, type: "image" };
+    if (
+      toolName.includes('image_gen') ||
+      toolName.includes('imagegen') ||
+      toolName.includes('photo')
+    ) {
+      const filePath = resolveCandidate(
+        data.image || data.image_url || data.imageUrl || data.path || data.output
+      );
+      if (filePath) return { url: filePath, type: 'image' };
     }
-    if (toolName.includes("tts")) {
-      const filePath = resolveCandidate(data.audio || data.audio_file || data.audioFile || data.path || data.output);
-      if (filePath) return { url: filePath, type: "audio" };
+    if (toolName.includes('tts')) {
+      const filePath = resolveCandidate(
+        data.audio || data.audio_file || data.audioFile || data.path || data.output
+      );
+      if (filePath) return { url: filePath, type: 'audio' };
     }
-    if (toolName.includes("video")) {
-      const filePath = resolveCandidate(data.video || data.video_url || data.videoUrl || data.path || data.output);
-      if (filePath) return { url: filePath, type: "video" };
+    if (toolName.includes('video')) {
+      const filePath = resolveCandidate(
+        data.video || data.video_url || data.videoUrl || data.path || data.output
+      );
+      if (filePath) return { url: filePath, type: 'video' };
     }
 
     const genericCandidate = resolveCandidate(
-      data.file || data.file_path || data.filePath || data.url,
+      data.file || data.file_path || data.filePath || data.url
     );
     if (genericCandidate) {
-      const type = genericCandidate.includes("/audio/")
-        ? ("audio" as const)
-        : genericCandidate.includes("/videos/")
-          ? ("video" as const)
-          : ("image" as const);
+      const type = genericCandidate.includes('/audio/')
+        ? ('audio' as const)
+        : genericCandidate.includes('/videos/')
+          ? ('video' as const)
+          : ('image' as const);
       return { url: genericCandidate, type };
     }
 
@@ -1198,18 +1210,28 @@ function resolveMediaUrl(toolName: string, output: string): { url: string; type:
     const pathMatch = output.match(/"(images\/[^"]+|audio\/[^"]+|videos\/[^"]+)"/);
     if (pathMatch) {
       const path = pathMatch[1];
-      const type = path.startsWith("images/") ? "image" as const : path.startsWith("audio/") ? "audio" as const : "video" as const;
+      const type = path.startsWith('images/')
+        ? ('image' as const)
+        : path.startsWith('audio/')
+          ? ('audio' as const)
+          : ('video' as const);
       return { url: `/api/files/${path}`, type };
     }
-  } catch { /* not JSON */ }
+  } catch {
+    /* not JSON */
+  }
 
   const fallbackMatch = output.match(/(\bapi\/files\/[^"]+|\b(images|audio|videos)\/[^"]+)/);
   if (fallbackMatch) {
     const normalized = normalizePath(fallbackMatch[0]);
-    const path = normalized.startsWith("api/files/")
-      ? normalized.replace(/^api\/files\//, "")
+    const path = normalized.startsWith('api/files/')
+      ? normalized.replace(/^api\/files\//, '')
       : normalized;
-    const type = path.startsWith("audio/") ? ("audio" as const) : path.startsWith("videos/") ? ("video" as const) : ("image" as const);
+    const type = path.startsWith('audio/')
+      ? ('audio' as const)
+      : path.startsWith('videos/')
+        ? ('video' as const)
+        : ('image' as const);
     return { url: `/api/files/${path}`, type };
   }
 
@@ -1219,32 +1241,37 @@ function resolveMediaUrl(toolName: string, output: string): { url: string; type:
 export class WsChatConnection {
   private ws: WebSocket | null = null;
   private callbacks: WsChatCallbacks;
-  private fullText = "";
+  private fullText = '';
   private token: string;
 
   constructor(callbacks: WsChatCallbacks) {
     this.callbacks = callbacks;
-    this.token = getToken() || "";
+    this.token = getToken() || '';
   }
 
-  connect(characterName: string, mode?: string, userName?: string, agentAlias?: string): Promise<void> {
+  connect(
+    characterName: string,
+    mode?: string,
+    userName?: string,
+    agentAlias?: string
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(WS_URL(agentAlias, this.token));
-      this.fullText = "";
+      this.fullText = '';
 
       const timer = setTimeout(() => {
         if (this.ws?.readyState !== WebSocket.OPEN) {
-          reject(new Error("WebSocket connection timeout"));
+          reject(new Error('WebSocket connection timeout'));
           this.ws?.close();
         }
       }, 10000);
 
       this.ws.onopen = () => {
         const connectFrame: Record<string, unknown> = {
-          type: "connect",
+          type: 'connect',
           character_name: characterName,
-          character_mode: mode || "play",
-          user_name: userName || "User",
+          character_mode: mode || 'play',
+          user_name: userName || 'User',
         };
         this.ws!.send(JSON.stringify(connectFrame));
       };
@@ -1254,57 +1281,65 @@ export class WsChatConnection {
           const frame = JSON.parse(event.data);
 
           switch (frame.type) {
-            case "connected":
+            case 'connected':
               clearTimeout(timer);
               resolve();
               break;
-            case "chunk":
-              this.fullText += frame.content || "";
-              this.callbacks.onChunk(frame.content || "", this.fullText);
+            case 'chunk':
+              this.fullText += frame.content || '';
+              this.callbacks.onChunk(frame.content || '', this.fullText);
               break;
-            case "tool_call": {
-              const toolName = frame.name || frame.tool_name || "unknown";
+            case 'tool_call': {
+              const toolName = frame.name || frame.tool_name || 'unknown';
               this.callbacks.onToolCall(toolName);
               break;
             }
-            case "tool_result": {
-              const toolName = frame.name || frame.tool_name || "unknown";
-              const output = frame.output || "";
-              const media = resolveMediaUrl(toolName, typeof output === "string" ? output : JSON.stringify(output));
+            case 'tool_result': {
+              const toolName = frame.name || frame.tool_name || 'unknown';
+              const output = frame.output || '';
+              const media = resolveMediaUrl(
+                toolName,
+                typeof output === 'string' ? output : JSON.stringify(output)
+              );
               this.callbacks.onToolResult(
                 toolName,
-                typeof output === "string" ? output : JSON.stringify(output),
+                typeof output === 'string' ? output : JSON.stringify(output),
                 media?.url,
-                media?.type,
+                media?.type
               );
               break;
             }
-            case "done":
-              this.callbacks.onDone(this.fullText || frame.full_response || "");
+            case 'done':
+              this.callbacks.onDone(this.fullText || frame.full_response || '');
               break;
-            case "error":
-              this.callbacks.onError(frame.message || frame.error || "Unknown error");
+            case 'error':
+              this.callbacks.onError(frame.message || frame.error || 'Unknown error');
               break;
             default:
               // Ignore unknown frame types (connected acks, etc.)
               break;
           }
         } catch (e) {
-          console.warn("Failed to parse WS frame:", e);
+          console.warn('Failed to parse WS frame:', e);
         }
       };
 
-      this.ws.onerror = () => { clearTimeout(timer); reject(new Error("WebSocket connection failed")); };
-      this.ws.onclose = () => { clearTimeout(timer); };
+      this.ws.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error('WebSocket connection failed'));
+      };
+      this.ws.onclose = () => {
+        clearTimeout(timer);
+      };
     });
   }
 
   send(content: string): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket not connected");
+      throw new Error('WebSocket not connected');
     }
-    this.ws.send(JSON.stringify({ type: "message", content }));
-    this.fullText = "";
+    this.ws.send(JSON.stringify({ type: 'message', content }));
+    this.fullText = '';
   }
 
   close(): void {
@@ -1348,11 +1383,7 @@ export class ChatPushSubscriber {
   private shouldReconnect = true;
   private static RECONNECT_DELAY_MS = 5000;
 
-  constructor(
-    agentAlias: string,
-    callbacks: ChatPushCallbacks,
-    characterName?: string,
-  ) {
+  constructor(agentAlias: string, callbacks: ChatPushCallbacks, characterName?: string) {
     this.agentAlias = agentAlias;
     this.characterName = characterName;
     this.callbacks = callbacks;
@@ -1395,7 +1426,7 @@ export class ChatPushSubscriber {
       if (this.shouldReconnect) {
         this.reconnectTimer = setTimeout(
           () => this.connect(),
-          ChatPushSubscriber.RECONNECT_DELAY_MS,
+          ChatPushSubscriber.RECONNECT_DELAY_MS
         );
       }
     };

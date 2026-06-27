@@ -146,7 +146,6 @@ romanbath/
 │   └── scripts/dev-full.mjs  # npm start — gateway + vite
 ├── zeroclaw/                 # ZeroClaw (Rust) — gateway & runtime
 ├── characters/               # Example character cards
-├── backend/SillyTavern/      # Legacy submodule (optional, not used by default)
 └── .env.example
 ```
 

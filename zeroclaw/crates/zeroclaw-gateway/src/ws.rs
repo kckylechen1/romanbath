@@ -600,10 +600,15 @@ async fn handle_socket(
     // ── Character card injection ─────────────────────────────────────
     let memory_context = if let Some(char_name) = character_name.clone() {
         let data_dir = config.data_dir.clone();
+        let conv_text = stored_messages
+            .iter()
+            .map(|m| format!("{}: {}", m.role, m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
         tokio::task::spawn_blocking(move || {
             let mem_store =
                 zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
-            mem_store.inject_memories_into_prompt(&char_name, "")
+            mem_store.inject_memories_into_prompt(&char_name, &conv_text)
         })
         .await
         .unwrap_or_default()

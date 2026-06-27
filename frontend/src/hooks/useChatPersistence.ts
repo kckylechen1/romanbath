@@ -1,22 +1,22 @@
-import { useState, useRef, useCallback, useEffect } from "react";
-import type React from "react";
-import { Character, Message, ChatConfig } from "../types";
-import type { ChatInfo } from "../services/chatService";
+import { useState, useRef, useCallback, useEffect } from 'react';
+import type React from 'react';
+import { Character, Message, ChatConfig } from '../types';
+import type { ChatInfo } from '../services/chatService';
 import {
   getAppSettings,
   saveLastSession,
   loadLastSession,
   clearLastSession,
-} from "../services/chatPersistenceService";
+} from '../services/chatPersistenceService';
 import {
   saveChat,
   loadChat,
   getChatList,
   createNewChatFileName,
   stripChatExtension,
-} from "../services/chatService";
-import { generateId } from "../utils/id";
-import { Role } from "../types";
+} from '../services/chatService';
+import { generateId } from '../utils/id';
+import { Role } from '../types';
 
 export interface UseChatPersistenceReturn {
   currentChatFileName: string | null;
@@ -41,54 +41,69 @@ export const useChatPersistence = (
   config: ChatConfig,
   characters: Character[],
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>,
-  setSelectedCharacter: React.Dispatch<React.SetStateAction<Character>>,
+  setSelectedCharacter: React.Dispatch<React.SetStateAction<Character>>
 ): UseChatPersistenceReturn => {
   const [currentChatFileName, setCurrentChatFileName] = useState<string | null>(null);
   const [chatHistory, setChatHistory] = useState<ChatInfo[]>([]);
   const [showChatHistory, setShowChatHistory] = useState(false);
   const [isSavingChat, setIsSavingChat] = useState(false);
   const [showRestorePrompt, setShowRestorePrompt] = useState(false);
-  const [savedChatCharacterName, setSavedChatCharacterName] = useState<string>("");
+  const [savedChatCharacterName, setSavedChatCharacterName] = useState<string>('');
 
   const appSettings = getAppSettings();
   const hasInitializedRef = useRef(false);
   const restoreInProgressRef = useRef(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastLoadedCharacterIdRef = useRef<string | null>(null);
+  // Tracks which character load is authoritative. Updated synchronously at the
+  // start of each effect so concurrent async loads from prior characters bail out.
+  const activeLoadIdRef = useRef<string | null>(null);
+  // Ref-based snapshot of messages so debouncedSaveToBackend does not recreate
+  // on every streaming token (mirrors the messagesRef pattern in useChatGeneration).
+  const messagesRef = useRef(messages);
 
   const loadChatHistory = useCallback(async () => {
-    if (selectedCharacter.id === "default") return;
+    if (selectedCharacter.id === 'default') return;
     const history = await getChatList(selectedCharacter.id);
     setChatHistory(history);
   }, [selectedCharacter.id]);
 
-  // Auto-save chat to backend (debounced)
+  // Keep messagesRef current without adding messages to useCallback deps.
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Auto-save chat to backend (debounced).
+  // messages is intentionally absent from the dep array — accessed via messagesRef
+  // so this callback is not recreated on every streaming token.
   const debouncedSaveToBackend = useCallback(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
 
     saveTimeoutRef.current = setTimeout(async () => {
-      if (
-        messages.length > 0 &&
-        selectedCharacter.id !== "default" &&
-        currentChatFileName
-      ) {
+      const msgs = messagesRef.current;
+      if (msgs.length > 0 && selectedCharacter.id !== 'default' && currentChatFileName) {
         setIsSavingChat(true);
         const success = await saveChat(
           selectedCharacter.id,
           currentChatFileName,
-          messages,
+          msgs,
           config.userName,
-          selectedCharacter.name,
+          selectedCharacter.name
         );
         setIsSavingChat(false);
         if (success) {
-          console.log("Chat saved:", currentChatFileName);
+          console.log('Chat saved:', currentChatFileName);
         }
       }
     }, 2000);
-  }, [messages, selectedCharacter.id, selectedCharacter.name, currentChatFileName, config.userName]);
+  }, [
+    selectedCharacter.id,
+    selectedCharacter.name,
+    currentChatFileName,
+    config.userName,
+  ]);
 
   // Auto-save when messages change
   useEffect(() => {
@@ -98,19 +113,21 @@ export const useChatPersistence = (
     // Persist a tiny last-session pointer so the boot-time restore
     // prompt knows which character + chat to offer. The messages
     // themselves live only in IndexedDB (single source of truth).
-    if (
-      messages.length > 0 &&
-      selectedCharacter.id !== "default" &&
-      appSettings.autoRestoreChat
-    ) {
+    if (messages.length > 0 && selectedCharacter.id !== 'default' && appSettings.autoRestoreChat) {
       saveLastSession({
         characterId: selectedCharacter.id,
-        chatFileName: currentChatFileName ?? "",
+        chatFileName: currentChatFileName ?? '',
         messageCount: messages.length,
         lastUpdated: Date.now(),
       });
     }
-  }, [messages, currentChatFileName, debouncedSaveToBackend, selectedCharacter.id, appSettings.autoRestoreChat]);
+  }, [
+    messages,
+    currentChatFileName,
+    debouncedSaveToBackend,
+    selectedCharacter.id,
+    appSettings.autoRestoreChat,
+  ]);
 
   // Load chat history when character changes
   useEffect(() => {
@@ -121,13 +138,17 @@ export const useChatPersistence = (
   useEffect(() => {
     const loadRecentChat = async () => {
       if (
-        selectedCharacter.id === "default" ||
+        selectedCharacter.id === 'default' ||
         !hasInitializedRef.current ||
         restoreInProgressRef.current
       )
         return;
 
       const currentCharacterId = selectedCharacter.id;
+      // Mark this invocation as the authoritative load. A concurrent load from
+      // a prior character will see its expectedId !== activeLoadIdRef.current
+      // and bail out, preventing stale data from overwriting the current character.
+      activeLoadIdRef.current = currentCharacterId;
 
       // Clear messages immediately to show we're switching
       setMessages([]);
@@ -137,8 +158,8 @@ export const useChatPersistence = (
         const history = await getChatList(selectedCharacter.id);
         setChatHistory(history);
 
-        // Check if character changed during async load
-        if (currentCharacterId !== selectedCharacter.id) {
+        // Check if a newer character-load has superseded this one.
+        if (activeLoadIdRef.current !== currentCharacterId) {
           return;
         }
 
@@ -147,12 +168,9 @@ export const useChatPersistence = (
           const mostRecent = history[0];
           const fileName = stripChatExtension(mostRecent.file_name);
 
-          const { messages: loadedMessages } = await loadChat(
-            selectedCharacter.id,
-            fileName,
-          );
+          const { messages: loadedMessages } = await loadChat(selectedCharacter.id, fileName);
 
-          if (currentCharacterId !== selectedCharacter.id) {
+          if (activeLoadIdRef.current !== currentCharacterId) {
             return;
           }
 
@@ -165,7 +183,7 @@ export const useChatPersistence = (
         }
 
         // No existing chat, create new one
-        if (currentCharacterId !== selectedCharacter.id) {
+        if (activeLoadIdRef.current !== currentCharacterId) {
           return;
         }
 
@@ -184,7 +202,7 @@ export const useChatPersistence = (
         // Refresh chat history
         loadChatHistory();
       } catch (error) {
-        console.error("Error loading chat for character:", currentCharacterId, error);
+        console.error('Error loading chat for character:', currentCharacterId, error);
         // Even on error, create a new chat so the user can still interact
         const newFileName = createNewChatFileName(selectedCharacter.name);
         setCurrentChatFileName(newFileName);
@@ -200,7 +218,7 @@ export const useChatPersistence = (
       }
     };
 
-    if (hasInitializedRef.current && selectedCharacter.id !== "default") {
+    if (hasInitializedRef.current && selectedCharacter.id !== 'default') {
       loadRecentChat();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -218,9 +236,7 @@ export const useChatPersistence = (
 
     const lastSession = loadLastSession();
     if (lastSession && appSettings.autoRestoreChat && characters.length > 0) {
-      const savedCharacter = characters.find(
-        (c) => c.id === lastSession.characterId,
-      );
+      const savedCharacter = characters.find((c) => c.id === lastSession.characterId);
       if (savedCharacter && lastSession.messageCount > 1) {
         setSavedChatCharacterName(savedCharacter.name);
         setShowRestorePrompt(true);
@@ -235,25 +251,20 @@ export const useChatPersistence = (
   const handleRestoreChat = async (characters: Character[]) => {
     const lastSession = loadLastSession();
     if (lastSession) {
-      const savedCharacter = characters.find(
-        (c) => c.id === lastSession.characterId,
-      );
+      const savedCharacter = characters.find((c) => c.id === lastSession.characterId);
       if (savedCharacter) {
         restoreInProgressRef.current = true;
         setSelectedCharacter(savedCharacter);
         // Pull the canonical messages from IndexedDB — the localStorage
         // pointer only carries metadata, never the messages themselves.
         try {
-          const { messages: loaded } = await loadChat(
-            savedCharacter.id,
-            lastSession.chatFileName,
-          );
+          const { messages: loaded } = await loadChat(savedCharacter.id, lastSession.chatFileName);
           setMessages(loaded.length > 0 ? loaded : []);
         } catch {
           setMessages([]);
         }
         setCurrentChatFileName(
-          lastSession.chatFileName || createNewChatFileName(savedCharacter.name),
+          lastSession.chatFileName || createNewChatFileName(savedCharacter.name)
         );
       }
     }

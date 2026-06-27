@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type React from "react";
-import { importCharacterCard } from "../services/zeroclawService";
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import { importCharacterCard } from '../services/zeroclawService';
 
 export interface UseCharacterImportDropOptions {
   onImported?: (fileName: string) => void;
@@ -16,10 +16,10 @@ export interface UseCharacterImportDropReturn {
   };
 }
 
-const SUPPORTED_EXTENSIONS = [".png", ".json", ".webp"];
+const SUPPORTED_EXTENSIONS = ['.png', '.json', '.webp'];
 
 const hasFiles = (e: React.DragEvent): boolean =>
-  Array.from(e.dataTransfer.types).includes("Files");
+  Array.from(e.dataTransfer.types).includes('Files');
 
 const isSupportedFile = (file: File): boolean => {
   const name = file.name.toLowerCase();
@@ -27,7 +27,7 @@ const isSupportedFile = (file: File): boolean => {
 };
 
 export const useCharacterImportDrop = (
-  opts: UseCharacterImportDropOptions,
+  opts: UseCharacterImportDropOptions
 ): UseCharacterImportDropReturn => {
   const [isDragging, setIsDragging] = useState(false);
   const optsRef = useRef(opts);
@@ -39,12 +39,15 @@ export const useCharacterImportDrop = (
   // only clear when depth hits zero (i.e. pointer truly left the window).
   const depthRef = useRef(0);
 
-  const onDragOver = useCallback((e: React.DragEvent) => {
-    if (!hasFiles(e)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-    if (!isDragging) setIsDragging(true);
-  }, [isDragging]);
+  const onDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      if (!isDragging) setIsDragging(true);
+    },
+    [isDragging]
+  );
 
   const onDragLeave = useCallback((e: React.DragEvent) => {
     if (!hasFiles(e)) return;
@@ -64,9 +67,7 @@ export const useCharacterImportDrop = (
 
     const files = Array.from(e.dataTransfer.files).filter(isSupportedFile);
     if (files.length === 0) {
-      optsRef.current.onError?.(
-        "No supported files. Use PNG, JSON, or WebP character cards.",
-      );
+      optsRef.current.onError?.('No supported files. Use PNG, JSON, or WebP character cards.');
       return;
     }
 
@@ -77,19 +78,17 @@ export const useCharacterImportDrop = (
       if (result.success) {
         successes.push(result.fileName ?? file.name);
       } else {
-        failures.push(`${file.name}: ${result.error ?? "import failed"}`);
+        failures.push(`${file.name}: ${result.error ?? 'import failed'}`);
       }
     }
 
     if (successes.length > 0) {
       const label =
-        successes.length === 1
-          ? successes[0] ?? "character"
-          : `${successes.length} characters`;
+        successes.length === 1 ? (successes[0] ?? 'character') : `${successes.length} characters`;
       optsRef.current.onImported?.(label);
     }
     if (failures.length > 0) {
-      optsRef.current.onError?.(failures.join("\n"));
+      optsRef.current.onError?.(failures.join('\n'));
     }
   }, []);
 

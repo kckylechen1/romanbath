@@ -4,22 +4,9 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import {
-  Users,
-  Plus,
-  Trash2,
-  X,
-  Check,
-  Shuffle,
-  RotateCcw,
-  Sparkles,
-} from 'lucide-react';
+import { Users, Plus, Trash2, X, Check, Shuffle, RotateCcw, Sparkles } from 'lucide-react';
 import { GroupChat, Character } from '../types';
-import {
-  getGroupChats,
-  createGroupChat,
-  deleteGroupChat,
-} from '../services/groupChatService';
+import { getGroupChats, createGroupChat, deleteGroupChat } from '../services/groupChatService';
 import { useLanguage } from '../i18n';
 import { CharacterAvatar } from './CharacterAvatar';
 import { confirm as confirmDialog } from '../services/dialogService';
@@ -69,7 +56,8 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
   const handleDeleteGroup = async (id: string) => {
     const ok = await confirmDialog({
       title: 'Delete group chat?',
-      message: 'The group will be removed. Characters themselves are not affected and their individual chats are kept.',
+      message:
+        'The group will be removed. Characters themselves are not affected and their individual chats are kept.',
       confirmLabel: 'Delete',
       danger: true,
     });
@@ -79,15 +67,13 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
   };
 
   const toggleCharacterSelection = (charId: string) => {
-    setSelectedCharacterIds(prev =>
-      prev.includes(charId)
-        ? prev.filter(id => id !== charId)
-        : [...prev, charId]
+    setSelectedCharacterIds((prev) =>
+      prev.includes(charId) ? prev.filter((id) => id !== charId) : [...prev, charId]
     );
   };
 
   const getCharacterById = (id: string): Character | undefined => {
-    return characters.find(c => c.id === id);
+    return characters.find((c) => c.id === id);
   };
 
   const getModeIcon = (mode: GroupChat['activationMode']) => {
@@ -304,7 +290,10 @@ const GroupChatManager: React.FC<GroupChatManagerProps> = ({
                           </span>
                         </div>
                         <p className="text-xs text-stone-500 mt-0.5">
-                          {group.characterIds.map(id => getCharacterById(id)?.name).filter(Boolean).join(', ')}
+                          {group.characterIds
+                            .map((id) => getCharacterById(id)?.name)
+                            .filter(Boolean)
+                            .join(', ')}
                         </p>
                       </div>
 

@@ -180,7 +180,7 @@ impl Default for HybridWeights {
             fts: 0.25,
             symbolic: 0.20,
             decay: 0.20,
-            use_rrf: true,
+            use_rrf: false,
         }
     }
 }

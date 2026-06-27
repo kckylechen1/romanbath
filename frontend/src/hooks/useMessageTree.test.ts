@@ -7,7 +7,7 @@ const mk = (
   id: string,
   parentId: string | null,
   childrenIds: string[] = [],
-  timestamp = 0,
+  timestamp = 0
 ): Message => ({
   id,
   role: Role.User,
@@ -27,11 +27,7 @@ describe('deepestLeaf', () => {
   });
 
   it('descends through children to the leaf', () => {
-    const tree = indexMessages([
-      mk('a', null, ['b']),
-      mk('b', 'a', ['c']),
-      mk('c', 'b', []),
-    ]);
+    const tree = indexMessages([mk('a', null, ['b']), mk('b', 'a', ['c']), mk('c', 'b', [])]);
     expect(deepestLeaf(tree, 'a')?.id).toBe('c');
   });
 });

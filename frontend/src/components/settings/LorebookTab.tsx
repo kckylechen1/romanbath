@@ -1,12 +1,7 @@
-import React from "react";
-import { ChatConfig, LorebookEntry } from "../../types";
-import { generateId } from "../../utils/id";
-import {
-  Plus,
-  Trash2,
-  ToggleLeft,
-  ToggleRight,
-} from "lucide-react";
+import React from 'react';
+import { ChatConfig, LorebookEntry } from '../../types';
+import { generateId } from '../../utils/id';
+import { Plus, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
 
 interface LorebookTabProps {
   config: ChatConfig;
@@ -14,41 +9,36 @@ interface LorebookTabProps {
 }
 
 const LorebookTab: React.FC<LorebookTabProps> = ({ config, handleChange }) => {
-
   const addLorebookEntry = () => {
     const newEntry: LorebookEntry = {
       id: generateId(),
       keys: [],
-      content: "",
+      content: '',
       enabled: true,
     };
-    handleChange("lorebook", [...config.lorebook, newEntry]);
+    handleChange('lorebook', [...config.lorebook, newEntry]);
   };
 
-  const updateLorebookEntry = (
-    id: string,
-    field: keyof LorebookEntry,
-    value: unknown,
-  ) => {
+  const updateLorebookEntry = (id: string, field: keyof LorebookEntry, value: unknown) => {
     const updated = config.lorebook.map((entry) => {
       if (entry.id === id) {
-        if (field === "keys" && typeof value === "string") {
+        if (field === 'keys' && typeof value === 'string') {
           return {
             ...entry,
-            keys: value.split(",").map((k: string) => k.trim()),
+            keys: value.split(',').map((k: string) => k.trim()),
           };
         }
         return { ...entry, [field]: value };
       }
       return entry;
     });
-    handleChange("lorebook", updated);
+    handleChange('lorebook', updated);
   };
 
   const deleteLorebookEntry = (id: string) => {
     handleChange(
-      "lorebook",
-      config.lorebook.filter((e) => e.id !== id),
+      'lorebook',
+      config.lorebook.filter((e) => e.id !== id)
     );
   };
 
@@ -83,13 +73,7 @@ const LorebookTab: React.FC<LorebookTabProps> = ({ config, handleChange }) => {
           >
             <div className="flex items-center gap-3">
               <button
-                onClick={() =>
-                  updateLorebookEntry(
-                    entry.id,
-                    "enabled",
-                    !entry.enabled,
-                  )
-                }
+                onClick={() => updateLorebookEntry(entry.id, 'enabled', !entry.enabled)}
                 className="text-gray-400 hover:text-white"
               >
                 {entry.enabled ? (
@@ -101,10 +85,8 @@ const LorebookTab: React.FC<LorebookTabProps> = ({ config, handleChange }) => {
               <input
                 type="text"
                 placeholder="Keywords (comma separated)"
-                value={entry.keys.join(", ")}
-                onChange={(e) =>
-                  updateLorebookEntry(entry.id, "keys", e.target.value)
-                }
+                value={entry.keys.join(', ')}
+                onChange={(e) => updateLorebookEntry(entry.id, 'keys', e.target.value)}
                 className="flex-1 bg-black/30 border border-white/10 rounded-lg px-3 py-1.5 text-sm focus:border-stone-500/40 outline-none"
               />
               <button
@@ -117,9 +99,7 @@ const LorebookTab: React.FC<LorebookTabProps> = ({ config, handleChange }) => {
             <textarea
               placeholder="Context to inject..."
               value={entry.content}
-              onChange={(e) =>
-                updateLorebookEntry(entry.id, "content", e.target.value)
-              }
+              onChange={(e) => updateLorebookEntry(entry.id, 'content', e.target.value)}
               className="w-full h-24 bg-black/30 border border-white/10 rounded-lg p-3 text-sm text-gray-300 focus:outline-none focus:border-stone-500/40 resize-none font-sans"
             />
           </div>

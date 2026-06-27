@@ -26,12 +26,11 @@ export interface StoredChat {
   updatedAt: number;
 }
 
-const buildKey = (characterId: string, fileName: string): string =>
-  `${characterId}/${fileName}`;
+const buildKey = (characterId: string, fileName: string): string => `${characterId}/${fileName}`;
 
 export const storageGetChat = async (
   characterId: string,
-  fileName: string,
+  fileName: string
 ): Promise<StoredChat | undefined> => {
   const value = await get<StoredChat>(buildKey(characterId, fileName), store);
   return value;
@@ -72,16 +71,11 @@ export const _evictOldestAcrossCharacters = async (): Promise<boolean> => {
   return victims.length > 0;
 };
 
-export const storageDeleteChat = async (
-  characterId: string,
-  fileName: string,
-): Promise<void> => {
+export const storageDeleteChat = async (characterId: string, fileName: string): Promise<void> => {
   await del(buildKey(characterId, fileName), store);
 };
 
-export const storageListChats = async (
-  characterId: string,
-): Promise<StoredChat[]> => {
+export const storageListChats = async (characterId: string): Promise<StoredChat[]> => {
   const allKeys = await keys<string>(store);
   const prefix = `${characterId}/`;
   const matching = allKeys.filter((k) => typeof k === 'string' && k.startsWith(prefix));
