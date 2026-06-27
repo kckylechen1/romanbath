@@ -8,6 +8,7 @@ import {
   type AffectState,
   type WsChatCallbacks,
   type WsSendIds,
+  type TurnContext,
 } from '../services/zeroclawService';
 import {
   buildCharacterPhotoPrompt,
@@ -42,6 +43,12 @@ export interface UseChatGenerationReturn {
   /** Persist deleted node ids (the delete handler + broadcast reconciler call
    *  this) so a later hydration never resurrects them. */
   recordTombstones: (ids: string[]) => void;
+  /** Resolved system prompt for the current session (Studio inspector). Set on
+   *  connect via the context_meta frame; null until a companion chat connects. */
+  systemPrompt: string | null;
+  /** Last turn's recalled memories + token/cost accounting (Studio inspector).
+   *  Set on each done frame; null before the first turn / after a chat switch. */
+  turnContext: TurnContext | null;
 }
 
 export const useChatGeneration = (
@@ -61,6 +68,12 @@ export const useChatGeneration = (
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [currentAffect, setCurrentAffect] = useState<AffectState | null>(null);
+  // Studio inspector state: the resolved system prompt (from the connect-time
+  // context_meta frame) and the latest turn's recalled-memory + token/cost
+  // accounting (from each done frame). Both reset on chat switch below so stale
+  // context never bleeds across conversations.
+  const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
+  const [turnContext, setTurnContext] = useState<TurnContext | null>(null);
   // Chats already reconciled with the server snapshot this session (keyed by
   // character+chat), so the per-message connection's repeated snapshots merge
   // only once — see onHistory.
@@ -173,6 +186,10 @@ export const useChatGeneration = (
     // switching away and back — or reconnecting — reconciles with the server
     // tree again instead of trusting a possibly-stale local snapshot.
     hydratedChatsRef.current.clear();
+    // Drop the previous conversation's resolved prompt + turn accounting so the
+    // Studio inspector doesn't show stale context while the new session connects.
+    setSystemPrompt(null);
+    setTurnContext(null);
     // Load this chat's tombstones before hydration so the merge can skip
     // resurrecting deleted nodes (IndexedDB read; usually resolves before the
     // server snapshot arrives over the network).
@@ -231,6 +248,8 @@ export const useChatGeneration = (
       },
       onNodeEdited: applyNodeEdited,
       onNodeDeleted: applyNodeDeleted,
+      onContextMeta: (prompt) => setSystemPrompt(prompt),
+      onTurnContext: (ctx) => setTurnContext(ctx),
     });
     ws.connect(
       selectedCharacter.name,
@@ -339,6 +358,8 @@ export const useChatGeneration = (
       },
       onNodeEdited: applyNodeEdited,
       onNodeDeleted: applyNodeDeleted,
+      onContextMeta: (prompt) => setSystemPrompt(prompt),
+      onTurnContext: (ctx) => setTurnContext(ctx),
     }),
     [
       setMessages,
@@ -761,5 +782,7 @@ export const useChatGeneration = (
     currentAffect,
     regenerateAssistant,
     recordTombstones,
+    systemPrompt,
+    turnContext,
   };
 };

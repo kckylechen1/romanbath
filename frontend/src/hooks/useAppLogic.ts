@@ -24,6 +24,7 @@ import { useMessageActions } from './useMessageActions';
 import { useChatPush } from './useChatPush';
 import { confirm as confirmDialog, prompt as promptDialog } from '../services/dialogService';
 import { indexMessages, pathToRoot } from './useMessageTree';
+import type { StudioTab } from '../components/StudioRail';
 
 export const useAppLogic = () => {
   const { t, language, setLanguage } = useLanguage();
@@ -73,6 +74,11 @@ export const useAppLogic = () => {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
+  // ==================== STUDIO RAIL STATE ====================
+  // The right-rail "Studio" drawer (Context / Tree / Memory inspector). Shares
+  // the right edge with Settings, so the App keeps them mutually exclusive.
+  const [studioOpen, setStudioOpen] = useState(false);
+  const [studioTab, setStudioTab] = useState<StudioTab>('context');
 
   // ==================== BOOKMARK STATE ====================
   const [bookmarks, setBookmarks] = useState<ChatBookmark[]>([]);
@@ -357,6 +363,14 @@ export const useAppLogic = () => {
     setMobileMenuOpen,
     mobileSettingsOpen,
     setMobileSettingsOpen,
+    studioOpen,
+    setStudioOpen,
+    studioTab,
+    setStudioTab,
+
+    // Studio inspector context (resolved system prompt + per-turn accounting)
+    systemPrompt: generation.systemPrompt,
+    turnContext: generation.turnContext,
 
     // Persistence
     showRestorePrompt: chatPersistence.showRestorePrompt,

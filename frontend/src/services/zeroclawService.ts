@@ -1183,6 +1183,39 @@ export interface WsHistoryNode {
   timestamp?: string | null;
 }
 
+/** Per-turn context surfaced to the Studio inspector from a `done` frame:
+ *  the memories injected THIS turn plus the turn's token/cost accounting.
+ *  Numeric fields are null when the gateway didn't report them. */
+export interface TurnContext {
+  /** Memories injected this turn (empty string when none). */
+  recalledMemories: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  tokensUsed: number | null;
+  costUsd: number | null;
+  model: string | null;
+  provider: string | null;
+}
+
+const finiteOrNull = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+const nonEmptyOrNull = (v: unknown): string | null =>
+  typeof v === 'string' && v.length > 0 ? v : null;
+
+/** Pure parse of a `done` frame into a TurnContext. Exported for unit tests —
+ *  tolerates missing/malformed fields (numbers fall back to null, recalled
+ *  memories to ''), so a sparse gateway frame never throws into the WS loop. */
+export const parseTurnContext = (frame: Record<string, unknown>): TurnContext => ({
+  recalledMemories: typeof frame.recalled_memories === 'string' ? frame.recalled_memories : '',
+  inputTokens: finiteOrNull(frame.input_tokens),
+  outputTokens: finiteOrNull(frame.output_tokens),
+  tokensUsed: finiteOrNull(frame.tokens_used),
+  costUsd: finiteOrNull(frame.cost_usd),
+  model: nonEmptyOrNull(frame.model),
+  provider: nonEmptyOrNull(frame.provider),
+});
+
 export interface WsChatCallbacks {
   onChunk: (chunk: string, fullText: string) => void;
   onToolCall: (toolName: string) => void;
@@ -1208,6 +1241,12 @@ export interface WsChatCallbacks {
    *  deleted node id (the target + its descendants). Must be idempotent with
    *  the optimistic local delete. */
   onNodeDeleted?: (msgId: string, removed: string[]) => void;
+  /** Fired on connect with the resolved system prompt (card + tools + injected
+   *  lorebook/world-info + connect-time memory), for the Studio inspector. */
+  onContextMeta?: (systemPrompt: string) => void;
+  /** Fired when a `done` frame arrives, carrying this turn's recalled memories
+   *  and token/cost accounting, for the Studio inspector. */
+  onTurnContext?: (ctx: TurnContext) => void;
 }
 
 /** Client-minted node ids for a turn, sent on the message frame so the server
@@ -1414,6 +1453,12 @@ export class WsChatConnection {
               clearTimeout(timer);
               resolve();
               break;
+            case 'context_meta':
+              // Resolved system prompt for this session (Studio inspector).
+              this.callbacks.onContextMeta?.(
+                typeof frame.system_prompt === 'string' ? frame.system_prompt : ''
+              );
+              break;
             case 'chunk':
               this.fullText += frame.content || '';
               this.callbacks.onChunk(frame.content || '', this.fullText);
@@ -1463,6 +1508,9 @@ export class WsChatConnection {
               if (this.callbacks.onAffect && 'affect' in frame) {
                 this.callbacks.onAffect((frame.affect as AffectState | null) ?? null);
               }
+              // Per-turn context for the Studio inspector: recalled memories +
+              // token/cost accounting carried on the same done frame.
+              this.callbacks.onTurnContext?.(parseTurnContext(frame));
               this.callbacks.onDone(this.fullText || frame.full_response || '');
               break;
             case 'error':

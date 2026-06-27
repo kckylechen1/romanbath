@@ -15,6 +15,7 @@ import {
   X,
   Trash2,
   Settings as SettingsIcon,
+  Gauge,
 } from 'lucide-react';
 import { useLanguage } from '../../i18n';
 import type { MessageTree } from '../../hooks/useMessageTree';
@@ -50,6 +51,8 @@ interface ChatHeaderProps {
   rightSidebarOpen: boolean;
   setRightSidebarOpen: (open: boolean) => void;
   setMobileSettingsOpen: (open: boolean) => void;
+  studioOpen: boolean;
+  onToggleStudio: () => void;
   messages: Message[];
   messageTree: MessageTree;
   activeLeafId: string | null;
@@ -85,6 +88,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   rightSidebarOpen,
   setRightSidebarOpen,
   setMobileSettingsOpen,
+  studioOpen,
+  onToggleStudio,
   messages,
   messageTree,
   activeLeafId,
@@ -378,6 +383,25 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <span>{t('app.reset')}</span>
           </button>
           <div className="w-px h-6 bg-white/5 mx-2 hidden md:block"></div>
+          {/* Studio Button — the right-rail instrument panel (Cmd+J) */}
+          <button
+            onClick={onToggleStudio}
+            className={`p-2.5 rounded-lg border transition-all duration-300 hidden md:flex items-center justify-center
+                      ${studioOpen ? 'bg-bath-900/50 text-bath-200 border-bath-700/50 shadow-lg' : 'text-stone-500 border-white/5 hover:bg-white/5 hover:text-stone-100'}
+                  `}
+            aria-label="Studio"
+            title="Studio (Cmd+J)"
+          >
+            <Gauge size={20} />
+          </button>
+          {/* Mobile Studio Button */}
+          <button
+            onClick={onToggleStudio}
+            className="md:hidden p-2 text-stone-400 hover:text-stone-100"
+            aria-label="Studio"
+          >
+            <Gauge size={20} />
+          </button>
           {/* Settings Button */}
           <button
             onClick={() => setRightSidebarOpen(!rightSidebarOpen)}

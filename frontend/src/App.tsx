@@ -24,6 +24,9 @@ import { useToast } from './components/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import DialogHost from './components/DialogHost';
 import { MemoryPanel } from './components/MemoryPanel';
+import StudioRail from './components/StudioRail';
+import { ContextInspector } from './components/studio/ContextInspector';
+import { BranchMiniMap } from './components/chat/BranchMiniMap';
 
 // Command palette
 import { buildCommands } from './commands/buildCommands';
@@ -52,9 +55,17 @@ const AppContent: React.FC = () => {
 
   const commands = useMemo(() => buildCommands(logic), [logic]);
 
-  // Global hotkeys: ⌘K command palette, ⌘\ toggle left sidebar, ⌘. toggle right.
-  // These are chord bindings, so they're safe to fire even when an input
-  // has focus — the browser doesn't bind them by default.
+  // Studio and Settings share the right edge — opening one closes the other so
+  // they never stack awkwardly (mirrors the app's single-right-panel layout).
+  const toggleStudio = (): void => {
+    const opening = !logic.studioOpen;
+    logic.setStudioOpen(opening);
+    if (opening) logic.setRightSidebarOpen(false);
+  };
+
+  // Global hotkeys: ⌘K command palette, ⌘\ toggle left sidebar, ⌘. toggle
+  // settings, ⌘J toggle Studio. These are chord bindings, so they're safe to
+  // fire even when an input has focus — the browser doesn't bind them by default.
   useEffect(() => {
     const isMod = (e: KeyboardEvent): boolean => e.metaKey || e.ctrlKey;
     const onKey = (e: KeyboardEvent): void => {
@@ -69,6 +80,12 @@ const AppContent: React.FC = () => {
       } else if (key === '.') {
         e.preventDefault();
         logic.setRightSidebarOpen(!logic.rightSidebarOpen);
+        if (!logic.rightSidebarOpen) logic.setStudioOpen(false);
+      } else if (key === 'j') {
+        e.preventDefault();
+        const opening = !logic.studioOpen;
+        logic.setStudioOpen(opening);
+        if (opening) logic.setRightSidebarOpen(false);
       }
     };
     document.addEventListener('keydown', onKey);
@@ -79,6 +96,7 @@ const AppContent: React.FC = () => {
   useEscapeKey(() => logic.setMobileMenuOpen(false), logic.mobileMenuOpen);
   useEscapeKey(() => logic.setMobileSettingsOpen(false), logic.mobileSettingsOpen);
   useEscapeKey(() => logic.setRightSidebarOpen(false), logic.rightSidebarOpen);
+  useEscapeKey(() => logic.setStudioOpen(false), logic.studioOpen);
   useEscapeKey(() => logic.setShowGroupManager(false), logic.showGroupManager);
   useEscapeKey(() => logic.setShowImageGen(false), logic.showImageGen);
   useEscapeKey(() => logic.setShowCharacterEditor(false), logic.showCharacterEditor);
@@ -240,8 +258,13 @@ const AppContent: React.FC = () => {
             isSavingChat={logic.isSavingChat}
             clearChat={logic.clearChat}
             rightSidebarOpen={logic.rightSidebarOpen}
-            setRightSidebarOpen={logic.setRightSidebarOpen}
+            setRightSidebarOpen={(open) => {
+              logic.setRightSidebarOpen(open);
+              if (open) logic.setStudioOpen(false);
+            }}
             setMobileSettingsOpen={logic.setMobileSettingsOpen}
+            studioOpen={logic.studioOpen}
+            onToggleStudio={toggleStudio}
             messages={logic.messages}
             messageTree={logic.messageTree}
             activeLeafId={logic.activeLeafId}
@@ -382,6 +405,39 @@ const AppContent: React.FC = () => {
             </div>
           </>
         )}
+
+        {/* Right-rail Studio (Context / Tree / Memory inspector). Shares the
+            right edge with Settings; the toggle handlers keep them exclusive. */}
+        <StudioRail
+          isOpen={logic.studioOpen}
+          onClose={() => logic.setStudioOpen(false)}
+          activeTab={logic.studioTab}
+          onTabChange={logic.setStudioTab}
+          treeCount={
+            logic.messages.filter((m) => !(m.childrenIds && m.childrenIds.length > 0)).length
+          }
+          contextPanel={
+            <ContextInspector
+              systemPrompt={logic.systemPrompt}
+              turnContext={logic.turnContext}
+            />
+          }
+          treePanel={
+            <BranchMiniMap
+              messages={logic.messages}
+              messageTree={logic.messageTree}
+              activeLeafId={logic.activeLeafId}
+              onSelectLeaf={logic.setActiveLeafId}
+            />
+          }
+          memoryPanel={
+            <MemoryPanel
+              characterName={logic.selectedCharacter.name}
+              isOpen={true}
+              onClose={() => logic.setStudioOpen(false)}
+            />
+          }
+        />
       </div>
 
       {/* Group Chat Manager Modal */}
