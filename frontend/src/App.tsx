@@ -23,7 +23,7 @@ import CommandPalette from './components/CommandPalette';
 import { useToast } from './components/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import DialogHost from './components/DialogHost';
-import { MemoryPanel } from './components/MemoryPanel';
+import MemoryControls from './components/studio/MemoryControls';
 import StudioRail from './components/StudioRail';
 import { ContextInspector } from './components/studio/ContextInspector';
 import { ConversationTree } from './components/studio/ConversationTree';
@@ -51,7 +51,13 @@ const AppContent: React.FC = () => {
   const logic = useAppLogic();
   const toast = useToast();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+
+  // Avatar tap opens the labeled Studio Memory tab (not an unlabeled modal).
+  const openMemoryStudio = () => {
+    logic.setRightSidebarOpen(false);
+    logic.setStudioTab('memory');
+    logic.setStudioOpen(true);
+  };
 
   const commands = useMemo(() => buildCommands(logic), [logic]);
 
@@ -281,8 +287,8 @@ const AppContent: React.FC = () => {
                 <div className="flex flex-col items-center pt-8 pb-4 bath-reveal bath-reveal-delay-2">
                   <button
                     className="relative cursor-pointer group"
-                    onClick={() => setMemoryPanelOpen((v) => !v)}
-                    aria-label="Toggle memories"
+                    onClick={openMemoryStudio}
+                    aria-label="Open memories"
                   >
                     <div
                       className="affect-glow avatar-breathe rounded-full transition-all duration-1000"
@@ -309,12 +315,6 @@ const AppContent: React.FC = () => {
                     {(logic.selectedCharacter.description?.length ?? 0) > 80 ? '…' : ''}
                   </p>
                 </div>
-
-                <MemoryPanel
-                  characterName={logic.selectedCharacter.name}
-                  isOpen={memoryPanelOpen}
-                  onClose={() => setMemoryPanelOpen(false)}
-                />
               </>
             )}
 
@@ -432,11 +432,7 @@ const AppContent: React.FC = () => {
             />
           }
           memoryPanel={
-            <MemoryPanel
-              characterName={logic.selectedCharacter.name}
-              isOpen={true}
-              onClose={() => logic.setStudioOpen(false)}
-            />
+            <MemoryControls characterName={logic.selectedCharacter.name} />
           }
         />
       </div>

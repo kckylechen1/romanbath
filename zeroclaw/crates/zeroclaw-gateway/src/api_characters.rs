@@ -456,6 +456,101 @@ pub async fn handle_character_memories(
     }
 }
 
+/// DELETE /api/characters/{name}/memories/{id} — hard-delete one memory.
+///
+/// User-initiated and confirmed in the UI. Mirrors
+/// [`handle_character_memories`] for store construction and error handling;
+/// returns `{ ok: bool }` (false if the id was not present).
+pub async fn handle_delete_character_memory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((name, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+
+    let data_dir = state.config.read().data_dir.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let store =
+            zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+        store.delete_memory(&name, &id)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(ok)) => (StatusCode::OK, Json(serde_json::json!({ "ok": ok }))).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("memory task failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UpdateMemoryBody {
+    /// Replace the memory text (summary is recomputed from it).
+    pub text: Option<String>,
+    /// Set the category (fact|decision|experience|preference|entity|other).
+    pub category: Option<String>,
+    /// Pin (true → retention_policy "pinned", GC-exempt) or unpin (false → "durable").
+    pub pinned: Option<bool>,
+}
+
+/// PATCH /api/characters/{name}/memories/{id} — edit/pin one memory.
+///
+/// Body `{ text?, category?, pinned? }`; absent fields are left untouched.
+/// Returns `{ entry: MemoryEntry }` with the re-read (normalized) row, or 404
+/// if the id is unknown. Mirrors [`handle_character_memories`] for store and
+/// error handling.
+pub async fn handle_patch_character_memory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((name, id)): Path<(String, String)>,
+    Json(body): Json<UpdateMemoryBody>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(&state, &headers) {
+        return resp.into_response();
+    }
+
+    let data_dir = state.config.read().data_dir.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let store =
+            zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+        store.update_memory(&name, &id, body.text, body.category, body.pinned)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(Some(entry))) => {
+            (StatusCode::OK, Json(serde_json::json!({ "entry": entry }))).into_response()
+        }
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "memory not found" })),
+        )
+            .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("memory task failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
 // ── Per-character companion settings ──────────────────────────────────
 //
 // Server-owned store so a thin client (web today, native later) persists its

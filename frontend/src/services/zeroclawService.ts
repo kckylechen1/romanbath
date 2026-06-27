@@ -108,6 +108,10 @@ export interface MemoryEntry {
   tier: string;
   keywords: string[];
   entities: string[];
+  /** Retention policy from the store; "pinned" means GC-exempt. The UI derives
+   *  the pin state from this (pinned = retention_policy === 'pinned'). Matches
+   *  the snake_case field the gateway serializes from MemoryEntry. */
+  retention_policy?: string | null;
 }
 
 export interface ChatMessage {
@@ -924,6 +928,49 @@ export const getCharacterMemories = async (characterName: string): Promise<Memor
   } catch (e) {
     console.error('Error fetching character memories:', e);
     return [];
+  }
+};
+
+/** Hard-delete one memory (user-initiated, confirmed in the UI). Returns true
+ *  when the gateway reports the row was removed. */
+export const deleteCharacterMemory = async (
+  characterName: string,
+  id: string
+): Promise<boolean> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(characterName)}/memories/${encodeURIComponent(id)}`,
+      { method: 'DELETE', headers: jsonHeaders() }
+    );
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data?.ok === true;
+  } catch (e) {
+    console.error('Error deleting character memory:', e);
+    return false;
+  }
+};
+
+/** Edit/pin one memory. `text` recomputes the summary server-side; `pinned`
+ *  maps to retention_policy. Returns the updated entry, or null on failure. */
+export const updateCharacterMemory = async (
+  characterName: string,
+  id: string,
+  patch: { text?: string; category?: string; pinned?: boolean }
+): Promise<MemoryEntry | null> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(characterName)}/memories/${encodeURIComponent(id)}`,
+      { method: 'PATCH', headers: jsonHeaders(), body: JSON.stringify(patch) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data?.entry as MemoryEntry) ?? null;
+  } catch (e) {
+    console.error('Error updating character memory:', e);
+    return null;
   }
 };
 

@@ -196,6 +196,60 @@ impl ChatMemoryStore {
         memory_crud::list_by_path(&conn, &path_prefix, limit)
     }
 
+    /// Hard-delete a single memory by id from this character's store.
+    ///
+    /// User-initiated and explicit (gated behind a UI confirm) — unlike the
+    /// `archived` soft-delete the GC uses, this removes the row, its FTS mirror,
+    /// edges, and access history. Returns `true` if a row was found and deleted.
+    /// Opens the same per-character connection [`list_memories`](Self::list_memories)
+    /// reads from, so the model and the UI agree on what is gone.
+    pub fn delete_memory(
+        &self,
+        character_name: &str,
+        id: &str,
+    ) -> Result<bool, MemoryError> {
+        let mut conn = self.open_mut(character_name)?;
+        memory_crud::delete(&mut conn, id)
+    }
+
+    /// Apply a user edit to one memory: replace `text` (and recompute the
+    /// summary as its first ~100 chars), set `category`, and/or pin it.
+    /// `None` fields are left untouched. Pinning sets `retention_policy` to
+    /// `"pinned"` (GC-exempt); unpinning sets it to `"durable"`.
+    ///
+    /// Returns the re-read entry (so the caller sees normalized/clamped values
+    /// from `upsert`), or `None` if no memory with that id exists. Opens the
+    /// per-character connection exactly like [`list_memories`](Self::list_memories).
+    pub fn update_memory(
+        &self,
+        character_name: &str,
+        id: &str,
+        text: Option<String>,
+        category: Option<String>,
+        pinned: Option<bool>,
+    ) -> Result<Option<MemoryEntry>, MemoryError> {
+        let mut conn = self.open_mut(character_name)?;
+        let mut entry = match memory_crud::get_by_id(&conn, id)? {
+            Some(e) => e,
+            None => return Ok(None),
+        };
+
+        if let Some(t) = text {
+            entry.summary = t.chars().take(100).collect();
+            entry.text = t;
+        }
+        if let Some(c) = category {
+            entry.category = c;
+        }
+        if let Some(p) = pinned {
+            entry.retention_policy =
+                Some(if p { "pinned".to_string() } else { "durable".to_string() });
+        }
+
+        memory_crud::upsert(&mut conn, &entry)?;
+        memory_crud::get_by_id(&conn, id)
+    }
+
     /// Move a character's memory when the card is renamed, so a rename doesn't
     /// orphan everything the companion has learned. No-op if the source DB
     /// doesn't exist yet or the names collide.
@@ -570,6 +624,68 @@ mod tests {
         let entry = &memories[0].entry;
         assert_eq!(entry.text, "I like using Rust for coding");
         assert!(!entry.text.contains("<think>"));
+    }
+
+    #[test]
+    fn delete_memory_removes_from_list() {
+        let (_dir, store) = temp_store();
+        let id = store
+            .save_chat_memory("del", "Alice", "user", "I prefer dark mode for everything always")
+            .unwrap()
+            .expect("not noise");
+        assert_eq!(store.list_memories("del", 200).unwrap().len(), 1);
+
+        let deleted = store.delete_memory("del", &id).unwrap();
+        assert!(deleted, "delete_memory returns true when a row is removed");
+        assert!(
+            store.list_memories("del", 200).unwrap().is_empty(),
+            "deleted memory must not appear in list_memories"
+        );
+
+        // Deleting a non-existent id is a harmless false.
+        assert!(!store.delete_memory("del", "nope").unwrap());
+    }
+
+    #[test]
+    fn update_memory_edits_text_category_and_pins() {
+        let (_dir, store) = temp_store();
+        let id = store
+            .save_chat_memory("upd", "Alice", "user", "I prefer dark mode for everything always")
+            .unwrap()
+            .expect("not noise");
+
+        let updated = store
+            .update_memory(
+                "upd",
+                &id,
+                Some("I actually love light mode in the mornings now".to_string()),
+                Some("fact".to_string()),
+                Some(true),
+            )
+            .unwrap()
+            .expect("entry exists");
+
+        assert_eq!(updated.text, "I actually love light mode in the mornings now");
+        assert_eq!(updated.summary, "I actually love light mode in the mornings now");
+        assert_eq!(updated.category, "fact");
+        assert_eq!(updated.retention_policy.as_deref(), Some("pinned"));
+
+        // The change is durable in the store and visible to the read path.
+        let listed = store.list_memories("upd", 200).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].text, "I actually love light mode in the mornings now");
+        assert_eq!(listed[0].retention_policy.as_deref(), Some("pinned"));
+
+        // Unpin flips retention_policy to durable; None fields stay untouched.
+        let unpinned = store
+            .update_memory("upd", &id, None, None, Some(false))
+            .unwrap()
+            .expect("entry exists");
+        assert_eq!(unpinned.retention_policy.as_deref(), Some("durable"));
+        assert_eq!(unpinned.category, "fact", "category untouched when None");
+
+        // Updating a missing id yields None, not an error.
+        assert!(store.update_memory("upd", "nope", None, None, Some(true)).unwrap().is_none());
     }
 
     /// Seed a pattern memory under /user/patterns/ directly for testing.
