@@ -9,12 +9,8 @@ import {
   type WsChatCallbacks,
   type WsSendIds,
   type TurnContext,
+  type WsHistoryNode,
 } from '../services/zeroclawService';
-import {
-  buildCharacterPhotoPrompt,
-  generateImage,
-  isPhotoRequest,
-} from '../services/imageGenService';
 import { selectNextCharacter, updateGroupChat } from '../services/groupChatService';
 import { getTombstones, addTombstones } from '../services/tombstoneStore';
 import { useChatHelpers } from './useChatHelpers';
@@ -22,6 +18,7 @@ import { mergeServerNodes, shouldAdoptServerLeaf } from './useMessageTree';
 import { generateId } from '../utils/id';
 import type { ToastAPI } from '../components/Toast';
 import { expandMacros, type MacroContext } from '../services/macroService';
+import { appFeatures } from '../config/features';
 
 export interface UseChatGenerationReturn {
   inputText: string;
@@ -82,6 +79,8 @@ export const useChatGeneration = (
   // to mergeServerNodes so a delete that didn't reach the server can't be
   // resurrected by a later hydration (survives reload). See tombstoneStore.
   const tombstonesRef = useRef<Set<string>>(new Set());
+  const tombstoneLoadRef = useRef<Promise<void>>(Promise.resolve());
+  const tombstoneLoadSeqRef = useRef(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const wsChatRef = useRef<WsChatConnection | null>(null);
@@ -190,14 +189,53 @@ export const useChatGeneration = (
     // Studio inspector doesn't show stale context while the new session connects.
     setSystemPrompt(null);
     setTurnContext(null);
-    // Load this chat's tombstones before hydration so the merge can skip
-    // resurrecting deleted nodes (IndexedDB read; usually resolves before the
-    // server snapshot arrives over the network).
+    // Load this chat's tombstones before any history_snapshot merge is allowed
+    // to run. The server sends history_snapshot before the connect ack, so the
+    // merge path awaits tombstoneLoadRef instead of racing IndexedDB.
+    const loadSeq = tombstoneLoadSeqRef.current + 1;
+    tombstoneLoadSeqRef.current = loadSeq;
     tombstonesRef.current = new Set();
-    void getTombstones(selectedCharacter.id, currentChatFileName ?? 'default').then((ids) => {
-      tombstonesRef.current = new Set(ids);
-    });
+    tombstoneLoadRef.current = getTombstones(selectedCharacter.id, currentChatFileName ?? 'default')
+      .then((ids) => {
+        if (tombstoneLoadSeqRef.current === loadSeq) {
+          tombstonesRef.current = new Set(ids);
+        }
+      })
+      .catch(() => {
+        if (tombstoneLoadSeqRef.current === loadSeq) {
+          tombstonesRef.current = new Set();
+        }
+      });
+    return () => {
+      if (tombstoneLoadSeqRef.current === loadSeq) {
+        tombstoneLoadSeqRef.current += 1;
+      }
+    };
   }, [selectedCharacter.id, currentChatFileName]);
+
+  const hydrateHistoryOnce = useCallback(
+    (chatKey: string, nodes: WsHistoryNode[], activeLeaf?: string | null, adoptLeaf = false) => {
+      if (nodes.length === 0) return;
+      const loadSeq = tombstoneLoadSeqRef.current;
+      void tombstoneLoadRef.current.then(() => {
+        if (tombstoneLoadSeqRef.current !== loadSeq) return;
+        if (hydratedChatsRef.current.has(chatKey)) return;
+        hydratedChatsRef.current.add(chatKey);
+        setMessages((prev) => {
+          const merged = mergeServerNodes(prev, nodes, tombstonesRef.current);
+          if (adoptLeaf) {
+            const localIds = new Set(prev.map((m) => m.id));
+            const mergedIds = new Set(merged.map((m) => m.id));
+            if (shouldAdoptServerLeaf(localIds, mergedIds, activeLeaf)) {
+              setActiveLeafId(activeLeaf);
+            }
+          }
+          return merged;
+        });
+      });
+    },
+    [setMessages, setActiveLeafId]
+  );
 
   // Connect-on-load: open the persistent socket when a chat WITH HISTORY is
   // selected — not just on first send — so the server tree is hydrated and the
@@ -222,8 +260,6 @@ export const useChatGeneration = (
       onError: () => {},
       onAffect: (affect) => setCurrentAffect(affect),
       onHistory: (nodes, activeLeaf) => {
-        if (hydratedChatsRef.current.has(chatKey)) return;
-        hydratedChatsRef.current.add(chatKey);
         // X3 (re-enabled in inc 3b): adopt the server's active_leaf on FIRST
         // hydration. Regenerate/swipe/delete are now server-synced (alternate
         // turns + delete frames), so the server's active_leaf is no longer
@@ -233,18 +269,7 @@ export const useChatGeneration = (
         // offline) is not resurrected by mergeServerNodes here beyond the union,
         // and we never point the active branch at a node absent from the merged
         // tree — so X3 can't yank the user into a vanished subtree.
-        setMessages((prev) => {
-          const merged = mergeServerNodes(prev, nodes, tombstonesRef.current);
-          // Adopt the server's active branch only when SAFE (see
-          // shouldAdoptServerLeaf): never yank the user onto a node the
-          // union-merge resurrected from the server but the client had deleted.
-          const localIds = new Set(prev.map((m) => m.id));
-          const mergedIds = new Set(merged.map((m) => m.id));
-          if (shouldAdoptServerLeaf(localIds, mergedIds, activeLeaf)) {
-            setActiveLeafId(activeLeaf);
-          }
-          return merged;
-        });
+        hydrateHistoryOnce(chatKey, nodes, activeLeaf, true);
       },
       onNodeEdited: applyNodeEdited,
       onNodeDeleted: applyNodeDeleted,
@@ -280,6 +305,7 @@ export const useChatGeneration = (
     setActiveLeafId,
     applyNodeEdited,
     applyNodeDeleted,
+    hydrateHistoryOnce,
   ]);
 
   // Shared per-turn WS callbacks: stream chunks/tools into the assistant
@@ -352,9 +378,7 @@ export const useChatGeneration = (
         // Reconcile with the server-authoritative tree ONCE per chat
         // (cross-device / fresh client). Union by id keeps local nodes.
         const chatKey = `${selectedCharacter.id}:${currentChatFileName ?? 'default'}`;
-        if (hydratedChatsRef.current.has(chatKey)) return;
-        hydratedChatsRef.current.add(chatKey);
-        setMessages((prev) => mergeServerNodes(prev, nodes, tombstonesRef.current));
+        hydrateHistoryOnce(chatKey, nodes);
       },
       onNodeEdited: applyNodeEdited,
       onNodeDeleted: applyNodeDeleted,
@@ -369,6 +393,7 @@ export const useChatGeneration = (
       currentChatFileName,
       applyNodeEdited,
       applyNodeDeleted,
+      hydrateHistoryOnce,
     ]
   );
 
@@ -399,7 +424,13 @@ export const useChatGeneration = (
         ws.send(content, sendIds);
       }
     },
-    [selectedCharacter.id, selectedCharacter.name, currentChatFileName, config.userName, config.userDescription]
+    [
+      selectedCharacter.id,
+      selectedCharacter.name,
+      currentChatFileName,
+      config.userName,
+      config.userDescription,
+    ]
   );
 
   const handleSendMessage = useCallback(async () => {
@@ -514,49 +545,53 @@ export const useChatGeneration = (
     let usedWs = false;
 
     try {
-      if (isPhotoRequest(expandedInput)) {
-        const toolName = 'xai_image_gen';
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === botMsgId
-              ? {
-                  ...msg,
-                  isThinking: false,
-                  toolCalls: [{ toolName, status: 'running' }],
-                }
-              : msg
-          )
-        );
+      if (appFeatures.imageGeneration) {
+        const { buildCharacterPhotoPrompt, generateImage, isPhotoRequest } =
+          await import('../services/imageGenService');
+        if (isPhotoRequest(expandedInput)) {
+          const toolName = 'xai_image_gen';
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === botMsgId
+                ? {
+                    ...msg,
+                    isThinking: false,
+                    toolCalls: [{ toolName, status: 'running' }],
+                  }
+                : msg
+            )
+          );
 
-        const details = await getCharacterDetails(respondingCharacter.name);
-        const prompt = buildCharacterPhotoPrompt(expandedInput, respondingCharacter, details);
-        const result = await generateImage({ prompt, resolution: '1k' });
+          const details = await getCharacterDetails(respondingCharacter.name);
+          const prompt = buildCharacterPhotoPrompt(expandedInput, respondingCharacter, details);
+          const result = await generateImage({ prompt, resolution: '1k' });
 
-        if (!result.success || !result.image_data_url) {
-          throw new Error(result.error || 'Image generation failed');
+          if (!result.success || !result.image_data_url) {
+            throw new Error(result.error || 'Image generation failed');
+          }
+
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === botMsgId
+                ? {
+                    ...msg,
+                    content: '',
+                    isThinking: false,
+                    toolCalls: [
+                      {
+                        toolName,
+                        status: 'done',
+                        output: JSON.stringify({ prompt }),
+                        mediaUrl: result.image_data_url,
+                        mediaType: 'image',
+                      },
+                    ],
+                  }
+                : msg
+            )
+          );
+          return;
         }
-
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === botMsgId
-              ? {
-                  ...msg,
-                  content: '',
-                  isThinking: false,
-                  toolCalls: [
-                    {
-                      toolName,
-                      status: 'done',
-                      output: JSON.stringify({ prompt }),
-                      mediaUrl: result.image_data_url,
-                      mediaType: 'image',
-                    },
-                  ],
-                }
-              : msg
-          )
-        );
-        return;
       }
 
       if (useWs) {
@@ -678,7 +713,6 @@ export const useChatGeneration = (
     buildChatOptions,
     buildChatRequest,
     buildChatMessagesForContext,
-    currentChatFileName,
     setActiveGroup,
     buildTurnCallbacks,
     connectOrReuseAndSend,
@@ -692,9 +726,7 @@ export const useChatGeneration = (
   const regenerateAssistant = useCallback(
     async (target: Message): Promise<boolean> => {
       const all = messagesRef.current;
-      const userNode = target.parentId
-        ? (all.find((m) => m.id === target.parentId) ?? null)
-        : null;
+      const userNode = target.parentId ? (all.find((m) => m.id === target.parentId) ?? null) : null;
       // No user turn to reuse (e.g. the greeting / a root assistant) — nothing to
       // regenerate against on the server. Decline so the caller falls back to the
       // REST branch helper.

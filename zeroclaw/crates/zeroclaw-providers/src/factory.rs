@@ -147,6 +147,9 @@ pub fn apply_compat_options(
     if let Some(mt) = opts.provider_max_tokens {
         p = p.with_max_tokens(Some(mt));
     }
+    if opts.replay_assistant_reasoning == Some(false) {
+        p = p.without_assistant_reasoning_replay();
+    }
     Box::new(p)
 }
 

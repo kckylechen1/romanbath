@@ -22,7 +22,9 @@ import LorebookTab from './settings/LorebookTab';
 import CharacterTab from './settings/CharacterTab';
 import FormattingTab from './settings/FormattingTab';
 import InterfaceTab from './settings/InterfaceTab';
-import TTSTab from './settings/TTSTab';
+import { appFeatures } from '../config/features';
+
+const TTSTab = React.lazy(() => import('./settings/TTSTab'));
 
 interface SettingsPanelProps {
   config: ChatConfig;
@@ -110,10 +112,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <Palette size={18} />
             <span className="hidden md:inline">{t('tab.interface')}</span>
           </button>
-          <button onClick={() => setActiveTab('tts')} className={navItemClass('tts')}>
-            <Volume2 size={18} />
-            <span className="hidden md:inline">Voice</span>
-          </button>
+          {appFeatures.tts && (
+            <button onClick={() => setActiveTab('tts')} className={navItemClass('tts')}>
+              <Volume2 size={18} />
+              <span className="hidden md:inline">Voice</span>
+            </button>
+          )}
         </nav>
 
         <div className="p-4 border-t border-white/5 hidden md:block">
@@ -145,7 +149,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             {activeTab === 'persona' && t('settings.panelTitle.persona')}
             {activeTab === 'formatting' && t('settings.panelTitle.formatting')}
             {activeTab === 'interface' && t('settings.panelTitle.interface')}
-            {activeTab === 'tts' && 'Voice / TTS'}
+            {appFeatures.tts && activeTab === 'tts' && 'Voice / TTS'}
           </span>
           <button
             onClick={onClose}
@@ -178,7 +182,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           {activeTab === 'interface' && (
             <InterfaceTab config={config} handleChange={handleChange} />
           )}
-          {activeTab === 'tts' && <TTSTab config={config} handleChange={handleChange} />}
+          {appFeatures.tts && activeTab === 'tts' && (
+            <React.Suspense fallback={null}>
+              <TTSTab config={config} handleChange={handleChange} />
+            </React.Suspense>
+          )}
         </div>
       </div>
     </div>

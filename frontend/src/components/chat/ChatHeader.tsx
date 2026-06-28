@@ -20,6 +20,7 @@ import {
 import { useLanguage } from '../../i18n';
 import type { MessageTree } from '../../hooks/useMessageTree';
 import { BranchMiniMap } from './BranchMiniMap';
+import type { AppFeatureFlags } from '../../config/features';
 
 interface ChatHeaderProps {
   selectedCharacter: Character;
@@ -57,6 +58,7 @@ interface ChatHeaderProps {
   messageTree: MessageTree;
   activeLeafId: string | null;
   setActiveLeafId: (id: string) => void;
+  features: AppFeatureFlags;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -94,6 +96,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   messageTree,
   activeLeafId,
   setActiveLeafId,
+  features,
 }) => {
   const { t } = useLanguage();
 
@@ -185,31 +188,35 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                     <Plus size={16} />
                     <span>New Chat</span>
                   </button>
-                  <button
-                    onClick={() => {
-                      setShowImageGen(true);
-                      setShowMoreMenu(false);
-                    }}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-stone-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-                  >
-                    <Sparkles size={16} />
-                    <span>Image</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowBookmarks(!showBookmarks);
-                      setShowMoreMenu(false);
-                    }}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-stone-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-                  >
-                    <Bookmark size={16} />
-                    <span>Bookmarks</span>
-                    {bookmarks.length > 0 && (
-                      <span className="ml-auto px-1.5 py-0.5 text-[10px] font-bold bg-bath-500/20 text-bath-300 rounded-full">
-                        {bookmarks.length}
-                      </span>
-                    )}
-                  </button>
+                  {features.imageGeneration && (
+                    <button
+                      onClick={() => {
+                        setShowImageGen(true);
+                        setShowMoreMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-stone-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                    >
+                      <Sparkles size={16} />
+                      <span>Image</span>
+                    </button>
+                  )}
+                  {features.bookmarks && (
+                    <button
+                      onClick={() => {
+                        setShowBookmarks(!showBookmarks);
+                        setShowMoreMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-stone-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                    >
+                      <Bookmark size={16} />
+                      <span>Bookmarks</span>
+                      {bookmarks.length > 0 && (
+                        <span className="ml-auto px-1.5 py-0.5 text-[10px] font-bold bg-bath-500/20 text-bath-300 rounded-full">
+                          {bookmarks.length}
+                        </span>
+                      )}
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setShowChatHistory(!showChatHistory);
@@ -225,16 +232,18 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                       </span>
                     )}
                   </button>
-                  <button
-                    onClick={() => {
-                      setShowGroupManager(true);
-                      setShowMoreMenu(false);
-                    }}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-stone-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-                  >
-                    <Users size={16} />
-                    <span>{activeGroup ? activeGroup.name : 'Groups'}</span>
-                  </button>
+                  {features.groupChat && (
+                    <button
+                      onClick={() => {
+                        setShowGroupManager(true);
+                        setShowMoreMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-stone-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                    >
+                      <Users size={16} />
+                      <span>{activeGroup ? activeGroup.name : 'Groups'}</span>
+                    </button>
+                  )}
                   {activeGroup && (
                     <button
                       onClick={() => {
@@ -252,7 +261,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             )}
 
             {/* Bookmarks Dropdown Panel */}
-            {showBookmarks && (
+            {features.bookmarks && showBookmarks && (
               <div className="absolute right-0 top-full mt-2 w-80 max-h-96 overflow-y-auto bg-[#0d0b09] border border-white/10 rounded-xl shadow-2xl z-50 animate-in fade-in slide-in-from-top-2 duration-200">
                 <div className="p-3 border-b border-white/5 flex items-center justify-between">
                   <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
@@ -384,24 +393,28 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </button>
           <div className="w-px h-6 bg-white/5 mx-2 hidden md:block"></div>
           {/* Studio Button — the right-rail instrument panel (Cmd+J) */}
-          <button
-            onClick={onToggleStudio}
-            className={`p-2.5 rounded-lg border transition-all duration-300 hidden md:flex items-center justify-center
-                      ${studioOpen ? 'bg-bath-900/50 text-bath-200 border-bath-700/50 shadow-lg' : 'text-stone-500 border-white/5 hover:bg-white/5 hover:text-stone-100'}
-                  `}
-            aria-label="Studio"
-            title="Studio (Cmd+J)"
-          >
-            <Gauge size={20} />
-          </button>
+          {features.studio && (
+            <button
+              onClick={onToggleStudio}
+              className={`p-2.5 rounded-lg border transition-all duration-300 hidden md:flex items-center justify-center
+                        ${studioOpen ? 'bg-bath-900/50 text-bath-200 border-bath-700/50 shadow-lg' : 'text-stone-500 border-white/5 hover:bg-white/5 hover:text-stone-100'}
+                    `}
+              aria-label="Studio"
+              title="Studio (Cmd+J)"
+            >
+              <Gauge size={20} />
+            </button>
+          )}
           {/* Mobile Studio Button */}
-          <button
-            onClick={onToggleStudio}
-            className="md:hidden p-2 text-stone-400 hover:text-stone-100"
-            aria-label="Studio"
-          >
-            <Gauge size={20} />
-          </button>
+          {features.studio && (
+            <button
+              onClick={onToggleStudio}
+              className="md:hidden p-2 text-stone-400 hover:text-stone-100"
+              aria-label="Studio"
+            >
+              <Gauge size={20} />
+            </button>
+          )}
           {/* Settings Button */}
           <button
             onClick={() => setRightSidebarOpen(!rightSidebarOpen)}

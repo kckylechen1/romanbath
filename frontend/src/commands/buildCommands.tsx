@@ -26,12 +26,14 @@ import {
 } from 'lucide-react';
 import type { Command } from './types';
 import type { useAppLogic } from '../hooks/useAppLogic';
+import type { AppFeatureFlags } from '../config/features';
 
 type Logic = ReturnType<typeof useAppLogic>;
 
 interface BuildOptions {
   /** Preset temperature values surfaced as discrete commands. */
   temperaturePresets?: number[];
+  features?: AppFeatureFlags;
 }
 
 const DEFAULT_TEMPERATURE_PRESETS = [0.4, 0.7, 1.0, 1.3];
@@ -41,6 +43,7 @@ const DEFAULT_TEMPERATURE_PRESETS = [0.4, 0.7, 1.0, 1.3];
 // render without worrying about staleness.
 export const buildCommands = (logic: Logic, opts: BuildOptions = {}): Command[] => {
   const temps = opts.temperaturePresets ?? DEFAULT_TEMPERATURE_PRESETS;
+  const features = opts.features;
   const commands: Command[] = [];
 
   // ── Actions ─────────────────────────────────────────────────────────
@@ -89,22 +92,26 @@ export const buildCommands = (logic: Logic, opts: BuildOptions = {}): Command[] 
     icon: Eraser,
     run: () => logic.clearChat(),
   });
-  commands.push({
-    id: 'action.image-gen',
-    title: 'Generate image…',
-    category: 'actions',
-    keywords: ['picture', 'draw', 'photo', 'stable diffusion'],
-    icon: ImageIcon,
-    run: () => logic.setShowImageGen(true),
-  });
-  commands.push({
-    id: 'action.bookmark-create',
-    title: 'Bookmark this checkpoint',
-    category: 'actions',
-    keywords: ['snapshot', 'save', 'checkpoint'],
-    icon: BookOpen,
-    run: () => logic.handleCreateBookmark(),
-  });
+  if (features?.imageGeneration) {
+    commands.push({
+      id: 'action.image-gen',
+      title: 'Generate image…',
+      category: 'actions',
+      keywords: ['picture', 'draw', 'photo', 'stable diffusion'],
+      icon: ImageIcon,
+      run: () => logic.setShowImageGen(true),
+    });
+  }
+  if (features?.bookmarks) {
+    commands.push({
+      id: 'action.bookmark-create',
+      title: 'Bookmark this checkpoint',
+      category: 'actions',
+      keywords: ['snapshot', 'save', 'checkpoint'],
+      icon: BookOpen,
+      run: () => logic.handleCreateBookmark(),
+    });
+  }
   commands.push({
     id: 'action.history',
     title: 'Browse chat history',
@@ -133,22 +140,26 @@ export const buildCommands = (logic: Logic, opts: BuildOptions = {}): Command[] 
     shortcut: '⌘.',
     run: () => logic.setRightSidebarOpen(!logic.rightSidebarOpen),
   });
-  commands.push({
-    id: 'nav.group-manager',
-    title: 'Open group chat manager',
-    category: 'navigate',
-    keywords: ['multi', 'characters', 'round robin'],
-    icon: Users,
-    run: () => logic.setShowGroupManager(true),
-  });
-  commands.push({
-    id: 'nav.bookmarks',
-    title: 'Open bookmarks',
-    category: 'navigate',
-    keywords: ['checkpoints', 'saved'],
-    icon: BookOpen,
-    run: () => logic.setShowBookmarks(true),
-  });
+  if (features?.groupChat) {
+    commands.push({
+      id: 'nav.group-manager',
+      title: 'Open group chat manager',
+      category: 'navigate',
+      keywords: ['multi', 'characters', 'round robin'],
+      icon: Users,
+      run: () => logic.setShowGroupManager(true),
+    });
+  }
+  if (features?.bookmarks) {
+    commands.push({
+      id: 'nav.bookmarks',
+      title: 'Open bookmarks',
+      category: 'navigate',
+      keywords: ['checkpoints', 'saved'],
+      icon: BookOpen,
+      run: () => logic.setShowBookmarks(true),
+    });
+  }
   commands.push({
     id: 'nav.edit-character',
     title: `Edit "${logic.selectedCharacter.name}"`,
@@ -198,19 +209,21 @@ export const buildCommands = (logic: Logic, opts: BuildOptions = {}): Command[] 
         sceneMode: !logic.config.sceneMode,
       }),
   });
-  commands.push({
-    id: 'set.tts',
-    title: `${logic.config.tts.enabled ? 'Disable' : 'Enable'} text-to-speech`,
-    category: 'settings',
-    keywords: ['voice', 'audio', 'speak', 'tts'],
-    icon: Volume2,
-    hint: logic.config.tts.enabled ? 'on' : 'off',
-    run: () =>
-      logic.handleConfigChange({
-        ...logic.config,
-        tts: { ...logic.config.tts, enabled: !logic.config.tts.enabled },
-      }),
-  });
+  if (features?.tts) {
+    commands.push({
+      id: 'set.tts',
+      title: `${logic.config.tts.enabled ? 'Disable' : 'Enable'} text-to-speech`,
+      category: 'settings',
+      keywords: ['voice', 'audio', 'speak', 'tts'],
+      icon: Volume2,
+      hint: logic.config.tts.enabled ? 'on' : 'off',
+      run: () =>
+        logic.handleConfigChange({
+          ...logic.config,
+          tts: { ...logic.config.tts, enabled: !logic.config.tts.enabled },
+        }),
+    });
+  }
   for (const t of temps) {
     commands.push({
       id: `set.temperature.${t}`,

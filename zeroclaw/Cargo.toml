@@ -22,7 +22,7 @@ zeroclaw-tools = { path = "crates/zeroclaw-tools", version = "0.8.0-beta-1" }
 zeroclaw-runtime = { path = "crates/zeroclaw-runtime", version = "0.8.0-beta-1", default-features = false }
 zeroclaw-tui = { path = "crates/zeroclaw-tui", version = "0.8.0-beta-1" }
 zeroclaw-plugins = { path = "crates/zeroclaw-plugins", version = "0.8.0-beta-1" }
-zeroclaw-gateway = { path = "crates/zeroclaw-gateway", version = "0.8.0-beta-1" }
+zeroclaw-gateway = { path = "crates/zeroclaw-gateway", version = "0.8.0-beta-1", default-features = false }
 zeroclaw-tool-call-parser = { path = "crates/zeroclaw-tool-call-parser", version = "0.8.0-beta-1" }
 zeroclaw-macros = { path = "crates/zeroclaw-macros", version = "0.8.0-beta-1" }
 zeroclaw-cards = { path = "crates/zeroclaw-cards", version = "0.8.0-beta-1" }
@@ -254,7 +254,8 @@ gateway = [
     "dep:mime_guess",
 ]
 tui-onboarding = ["dep:zeroclaw-tui"]
-schema-export = ["zeroclaw-config/schema-export"]
+schema-export = ["zeroclaw-config/schema-export", "zeroclaw-gateway?/schema-export"]
+gateway-channels = ["zeroclaw-gateway/gateway-channels"]
 plugins-wasm = [
     "dep:zeroclaw-plugins",
     "zeroclaw-runtime?/plugins-wasm",
@@ -262,7 +263,7 @@ plugins-wasm = [
 ]
 
 # Channels — each forwards to zeroclaw-channels.
-channel-email = ["zeroclaw-channels/channel-email", "dep:lettre", "dep:mail-parser", "dep:async-imap"]
+channel-email = ["zeroclaw-channels/channel-email", "zeroclaw-gateway?/channel-email", "dep:lettre", "dep:mail-parser", "dep:async-imap"]
 channel-telegram = ["zeroclaw-channels/channel-telegram"]
 channel-lark = ["zeroclaw-channels/channel-lark"]
 channel-matrix = ["zeroclaw-channels/channel-matrix"]
@@ -279,16 +280,16 @@ channel-twitter = ["zeroclaw-channels/channel-twitter"]
 channel-reddit = ["zeroclaw-channels/channel-reddit"]
 channel-notion = ["zeroclaw-channels/channel-notion"]
 channel-mqtt = ["zeroclaw-channels/channel-mqtt"]
-channel-linq = ["zeroclaw-channels/channel-linq"]
-channel-wati = ["zeroclaw-channels/channel-wati"]
-channel-nextcloud = ["zeroclaw-channels/channel-nextcloud"]
+channel-linq = ["zeroclaw-channels/channel-linq", "zeroclaw-gateway?/channel-linq"]
+channel-wati = ["zeroclaw-channels/channel-wati", "zeroclaw-gateway?/channel-wati"]
+channel-nextcloud = ["zeroclaw-channels/channel-nextcloud", "zeroclaw-gateway?/channel-nextcloud"]
 channel-mochat = ["zeroclaw-channels/channel-mochat"]
 channel-wechat = ["zeroclaw-channels/channel-wechat"]
 channel-wecom = ["zeroclaw-channels/channel-wecom"]
 channel-wecom-ws = ["zeroclaw-channels/channel-wecom-ws"]
 channel-clawdtalk = ["zeroclaw-channels/channel-clawdtalk"]
 channel-webhook = ["zeroclaw-channels/channel-webhook"]
-channel-whatsapp-cloud = ["zeroclaw-channels/channel-whatsapp-cloud"]
+channel-whatsapp-cloud = ["zeroclaw-channels/channel-whatsapp-cloud", "zeroclaw-gateway?/channel-whatsapp-cloud"]
 channel-line = ["zeroclaw-channels/channel-line"]
 channel-feishu = ["channel-lark"]
 memory-postgres = ["zeroclaw-memory/memory-postgres"]

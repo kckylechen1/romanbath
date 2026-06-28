@@ -19,8 +19,6 @@ import {
 import MarkdownRenderer from './MarkdownRenderer';
 
 import ToolCallCard from './chat/ToolCallCard';
-import { speak, stop, isSpeaking } from '../services/ttsService';
-import { extractImagePrompt } from '../services/imageGenService';
 
 interface MessageBubbleProps {
   message: Message;
@@ -94,6 +92,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   const showActions = hovered || toggled || alwaysShow;
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
+  const [ttsSpeaking, setTtsSpeaking] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-resize textarea
@@ -144,7 +143,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       >
         {/* Bubble */}
         <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
-
           {/* Edit Mode */}
           {isEditing ? (
             <div className="w-full">
@@ -281,27 +279,36 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   {!isUser && (
                     <>
                       {/* Image Gen Button */}
-                      <button
-                        onClick={() => {
-                          const extracted = extractImagePrompt(message.content);
-                          onGenerateImage?.(extracted || '');
-                        }}
-                        className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-accent transition-colors"
-                        aria-label="Generate image"
-                        title="Generate image"
-                        disabled={isGenerating}
-                      >
-                        <Image size={14} />
-                      </button>
+                      {onGenerateImage && (
+                        <button
+                          onClick={async () => {
+                            const { extractImagePrompt } =
+                              await import('../services/imageGenService');
+                            const extracted = extractImagePrompt(message.content);
+                            onGenerateImage(extracted || '');
+                          }}
+                          className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-accent transition-colors"
+                          aria-label="Generate image"
+                          title="Generate image"
+                          disabled={isGenerating}
+                        >
+                          <Image size={14} />
+                        </button>
+                      )}
 
                       {/* TTS Button */}
                       {ttsConfig && (
                         <button
-                          onClick={() => {
-                            if (isSpeaking()) {
-                              stop();
+                          onClick={async () => {
+                            const tts = await import('../services/ttsService');
+                            if (tts.isSpeaking()) {
+                              tts.stop();
+                              setTtsSpeaking(false);
                             } else {
-                              speak(message.content, ttsConfig);
+                              setTtsSpeaking(true);
+                              void tts.speak(message.content, ttsConfig).finally(() => {
+                                setTtsSpeaking(false);
+                              });
                             }
                           }}
                           className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-bath-300 transition-colors"
@@ -309,7 +316,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                           title="Read aloud"
                           disabled={isGenerating}
                         >
-                          {isSpeaking() ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                          {ttsSpeaking ? <VolumeX size={14} /> : <Volume2 size={14} />}
                         </button>
                       )}
 

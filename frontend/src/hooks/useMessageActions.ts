@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Message, Role, Character, ChatConfig, GroupChat } from '../types';
 import { generateText, type WsChatConnection } from '../services/zeroclawService';
 import { useChatHelpers, characterNameForMessage } from './useChatHelpers';
@@ -36,6 +36,11 @@ export const useMessageActions = (
   // Persist deleted node ids so a later hydration can't resurrect them.
   recordTombstones: (ids: string[]) => void
 ): UseMessageActionsReturn => {
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } = useChatHelpers(
     config,
     activeGroup,
@@ -262,11 +267,16 @@ export const useMessageActions = (
         // Continue appends to the active branch's content in place. This
         // is intentionally not a new branch — extending a half-finished
         // answer is a correction, not an exploration.
+        const latestTarget = messagesRef.current.find((m) => m.id === targetId) ?? target;
+        const continuedContent = `${latestTarget.content} ${continuationText}`;
         setMessages((prev) =>
           prev.map((msg) =>
-            msg.id === targetId ? { ...msg, content: `${msg.content} ${continuationText}` } : msg
+            msg.id === targetId ? { ...msg, content: continuedContent } : msg
           )
         );
+        if (wsRegenEligible(latestTarget)) {
+          wsChatRef.current?.editNode(targetId, continuedContent);
+        }
         toast.success('Message continued');
       } catch (error: unknown) {
         toast.error('Continue failed', error instanceof Error ? error.message : 'Unknown error');
@@ -281,6 +291,8 @@ export const useMessageActions = (
       selectedCharacter,
       setIsTyping,
       setMessages,
+      wsRegenEligible,
+      wsChatRef,
       toast,
       buildChatOptions,
       buildChatRequest,

@@ -8,6 +8,7 @@ const frontendDir = join(__dirname, '..');
 const repoRoot = join(frontendDir, '..');
 const zeroclawDir = join(repoRoot, 'zeroclaw');
 const port = process.env.VITE_ZEROCLAW_PORT || '42617';
+const zeroclawFeatures = process.env.ZEROCLAW_CARGO_FEATURES || 'gateway,agent-runtime';
 
 let gateway;
 let frontend;
@@ -48,14 +49,30 @@ const startFrontend = () => {
 try {
   if (!existsSync(join(zeroclawDir, 'Cargo.toml'))) {
     console.warn('zeroclaw/ not found — starting Roman Bath frontend only.');
-    console.warn('Run ZeroClaw gateway separately: cd zeroclaw && cargo run -- gateway start');
+    console.warn(
+      'Run ZeroClaw gateway separately: cd zeroclaw && cargo run --no-default-features --features gateway,agent-runtime -- gateway start',
+    );
     startFrontend();
   } else {
     console.log(`Starting ZeroClaw gateway on :${port}…`);
-    gateway = spawn('cargo', ['run', '--', 'gateway', 'start', '-p', port], {
-      cwd: zeroclawDir,
-      stdio: 'inherit',
-    });
+    gateway = spawn(
+      'cargo',
+      [
+        'run',
+        '--no-default-features',
+        '--features',
+        zeroclawFeatures,
+        '--',
+        'gateway',
+        'start',
+        '-p',
+        port,
+      ],
+      {
+        cwd: zeroclawDir,
+        stdio: 'inherit',
+      },
+    );
     gateway.on('exit', (code) => {
       if (typeof code === 'number' && code !== 0) process.exit(code);
     });

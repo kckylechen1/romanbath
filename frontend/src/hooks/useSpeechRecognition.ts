@@ -2,11 +2,18 @@
 import { useState, useEffect, useRef } from 'react';
 import { alert as alertDialog } from '../services/dialogService';
 
-export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
+export const useSpeechRecognition = (onTranscript: (text: string) => void, enabled = true) => {
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
+      setIsListening(false);
+      return;
+    }
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (SpeechRecognition) {
@@ -36,9 +43,11 @@ export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
         setIsListening(false);
       };
     }
-  }, [onTranscript]);
+  }, [onTranscript, enabled]);
 
   const toggleVoiceInput = () => {
+    if (!enabled) return;
+
     if (!recognitionRef.current) {
       void alertDialog({
         title: 'Voice input unavailable',
@@ -65,6 +74,6 @@ export const useSpeechRecognition = (onTranscript: (text: string) => void) => {
   return {
     isListening,
     toggleVoiceInput,
-    isSupported: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+    isSupported: enabled && !!(window.SpeechRecognition || window.webkitSpeechRecognition),
   };
 };

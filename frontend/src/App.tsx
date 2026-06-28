@@ -4,6 +4,7 @@ import { LanguageProvider } from './i18n';
 import { getTimeSinceLastChat } from './services/chatPersistenceService';
 import { Role } from './types';
 import { AFFECT_CONFIDENCE_FLOOR } from './utils/affect';
+import { appFeatures } from './config/features';
 
 // Hooks
 import { useAppLogic } from './hooks/useAppLogic';
@@ -18,22 +19,27 @@ import { CharacterAvatar } from './components/CharacterAvatar';
 import CharacterList from './components/CharacterList';
 import MessageBubble from './components/MessageBubble';
 import SettingsPanel from './components/SettingsPanel';
-import GroupChatManager from './components/GroupChatManager';
-import ImageGenModal from './components/ImageGenModal';
 import CharacterEditor from './components/CharacterEditor';
 import CommandPalette from './components/CommandPalette';
 import { useToast } from './components/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import DialogHost from './components/DialogHost';
-import MemoryControls from './components/studio/MemoryControls';
-import AffectReadout from './components/AffectReadout';
 import GreetingPicker from './components/chat/GreetingPicker';
-import StudioRail from './components/StudioRail';
-import { ContextInspector } from './components/studio/ContextInspector';
-import { ConversationTree } from './components/studio/ConversationTree';
 
 // Command palette
 import { buildCommands } from './commands/buildCommands';
+
+const AffectReadout = React.lazy(() => import('./components/AffectReadout'));
+const GroupChatManager = React.lazy(() => import('./components/GroupChatManager'));
+const ImageGenModal = React.lazy(() => import('./components/ImageGenModal'));
+const MemoryControls = React.lazy(() => import('./components/studio/MemoryControls'));
+const StudioRail = React.lazy(() => import('./components/StudioRail'));
+const ContextInspector = React.lazy(() =>
+  import('./components/studio/ContextInspector').then((module) => ({
+    default: module.ContextInspector,
+  }))
+);
+const ConversationTree = React.lazy(() => import('./components/studio/ConversationTree'));
 
 // Map a perceived affect state to the avatar's mood-glow color. Valence sets
 // the hue (warm amber when positive → cool verdigris when negative), arousal
@@ -46,7 +52,7 @@ const affectToGlowColor = (
   if (!affect || affect.confidence < AFFECT_CONFIDENCE_FLOOR) return DEFAULT_GLOW;
   const v = Math.max(-1, Math.min(1, affect.valence));
   // Hue: ~40° (warm amber) at v=+1 → ~165° (verdigris) at v=-1.
-  const hue = 40 + ((1 - (v + 1) / 2) * (165 - 40));
+  const hue = 40 + (1 - (v + 1) / 2) * (165 - 40);
   const alpha = 0.3 + Math.max(0, Math.min(1, affect.arousal)) * 0.4;
   return `hsla(${Math.round(hue)}, 55%, 60%, ${alpha.toFixed(2)})`;
 };
@@ -58,12 +64,13 @@ const AppContent: React.FC = () => {
 
   // Avatar tap opens the labeled Studio Memory tab (not an unlabeled modal).
   const openMemoryStudio = () => {
+    if (!appFeatures.studio) return;
     logic.setRightSidebarOpen(false);
     logic.setStudioTab('memory');
     logic.setStudioOpen(true);
   };
 
-  const commands = useMemo(() => buildCommands(logic), [logic]);
+  const commands = useMemo(() => buildCommands(logic, { features: appFeatures }), [logic]);
 
   // UX-6: the conversation is "still at its opening greeting" when there is a
   // single Model message and no user turns yet. Alternate greetings are a
@@ -95,6 +102,7 @@ const AppContent: React.FC = () => {
   // Studio and Settings share the right edge — opening one closes the other so
   // they never stack awkwardly (mirrors the app's single-right-panel layout).
   const toggleStudio = (): void => {
+    if (!appFeatures.studio) return;
     const opening = !logic.studioOpen;
     logic.setStudioOpen(opening);
     if (opening) logic.setRightSidebarOpen(false);
@@ -118,7 +126,7 @@ const AppContent: React.FC = () => {
         e.preventDefault();
         logic.setRightSidebarOpen(!logic.rightSidebarOpen);
         if (!logic.rightSidebarOpen) logic.setStudioOpen(false);
-      } else if (key === 'j') {
+      } else if (appFeatures.studio && key === 'j') {
         e.preventDefault();
         const opening = !logic.studioOpen;
         logic.setStudioOpen(opening);
@@ -133,9 +141,15 @@ const AppContent: React.FC = () => {
   useEscapeKey(() => logic.setMobileMenuOpen(false), logic.mobileMenuOpen);
   useEscapeKey(() => logic.setMobileSettingsOpen(false), logic.mobileSettingsOpen);
   useEscapeKey(() => logic.setRightSidebarOpen(false), logic.rightSidebarOpen);
-  useEscapeKey(() => logic.setStudioOpen(false), logic.studioOpen);
-  useEscapeKey(() => logic.setShowGroupManager(false), logic.showGroupManager);
-  useEscapeKey(() => logic.setShowImageGen(false), logic.showImageGen);
+  useEscapeKey(() => logic.setStudioOpen(false), appFeatures.studio && logic.studioOpen);
+  useEscapeKey(
+    () => logic.setShowGroupManager(false),
+    appFeatures.groupChat && logic.showGroupManager
+  );
+  useEscapeKey(
+    () => logic.setShowImageGen(false),
+    appFeatures.imageGeneration && logic.showImageGen
+  );
   useEscapeKey(() => logic.setShowCharacterEditor(false), logic.showCharacterEditor);
   useEscapeKey(logic.handleStartFresh, logic.showRestorePrompt);
 
@@ -302,6 +316,7 @@ const AppContent: React.FC = () => {
             setMobileSettingsOpen={logic.setMobileSettingsOpen}
             studioOpen={logic.studioOpen}
             onToggleStudio={toggleStudio}
+            features={appFeatures}
             messages={logic.messages}
             messageTree={logic.messageTree}
             activeLeafId={logic.activeLeafId}
@@ -309,23 +324,26 @@ const AppContent: React.FC = () => {
           />
 
           {/* Messages */}
-          <div
-            className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar bath-reveal bath-reveal-delay-3"
-          >
+          <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar bath-reveal bath-reveal-delay-3">
             {/* Character Presence */}
             {logic.selectedCharacter.id !== 'default' && (
               <>
                 <div className="flex flex-col items-center pt-8 pb-4 bath-reveal bath-reveal-delay-2">
                   <button
-                    className="relative cursor-pointer group"
+                    className={`relative group ${
+                      appFeatures.studio ? 'cursor-pointer' : 'cursor-default'
+                    }`}
                     onClick={openMemoryStudio}
-                    aria-label="Open memories"
+                    aria-label={appFeatures.studio ? 'Open memories' : undefined}
+                    disabled={!appFeatures.studio}
                   >
                     <div
                       className="affect-glow avatar-breathe rounded-full transition-all duration-1000"
                       style={
                         {
-                          '--affect-color': affectToGlowColor(logic.currentAffect),
+                          '--affect-color': affectToGlowColor(
+                            appFeatures.affect ? logic.currentAffect : null
+                          ),
                         } as React.CSSProperties
                       }
                     >
@@ -345,7 +363,11 @@ const AppContent: React.FC = () => {
                     {logic.selectedCharacter.description?.slice(0, 80)}
                     {(logic.selectedCharacter.description?.length ?? 0) > 80 ? '…' : ''}
                   </p>
-                  <AffectReadout affect={logic.currentAffect} />
+                  {appFeatures.affect && (
+                    <React.Suspense fallback={null}>
+                      <AffectReadout affect={logic.currentAffect} />
+                    </React.Suspense>
+                  )}
                 </div>
               </>
             )}
@@ -362,7 +384,7 @@ const AppContent: React.FC = () => {
                     message={msg}
                     character={logic.selectedCharacter}
                     userName={logic.config.userName}
-                    ttsConfig={logic.config.tts}
+                    ttsConfig={appFeatures.tts ? logic.config.tts : undefined}
                     branchCount={siblings.length}
                     branchIndex={branchIndex >= 0 ? branchIndex : 0}
                     onSwipeChange={logic.handleSwipeChange}
@@ -371,7 +393,9 @@ const AppContent: React.FC = () => {
                     onContinue={logic.handleContinue}
                     onEdit={logic.handleEditMessage}
                     onDelete={logic.handleDeleteMessage}
-                    onGenerateImage={logic.handleGenerateImage}
+                    onGenerateImage={
+                      appFeatures.imageGeneration ? logic.handleGenerateImage : undefined
+                    }
                     isLastMessage={idx === logic.activePath.length - 1}
                     isGenerating={logic.isTyping}
                   />
@@ -396,6 +420,7 @@ const AppContent: React.FC = () => {
             leftSidebarOpen={logic.leftSidebarOpen}
             isListening={logic.isListening}
             toggleVoiceInput={logic.toggleVoiceInput}
+            voiceInputEnabled={appFeatures.voiceInput}
             isTyping={logic.isTyping}
             handleSendMessage={logic.handleSendMessage}
             handleKeyDown={logic.handleKeyDown}
@@ -447,54 +472,64 @@ const AppContent: React.FC = () => {
 
         {/* Right-rail Studio (Context / Tree / Memory inspector). Shares the
             right edge with Settings; the toggle handlers keep them exclusive. */}
-        <StudioRail
-          isOpen={logic.studioOpen}
-          onClose={() => logic.setStudioOpen(false)}
-          activeTab={logic.studioTab}
-          onTabChange={logic.setStudioTab}
-          treeCount={
-            logic.messages.filter((m) => !(m.childrenIds && m.childrenIds.length > 0)).length
-          }
-          contextPanel={
-            <ContextInspector
-              systemPrompt={logic.systemPrompt}
-              turnContext={logic.turnContext}
+        {appFeatures.studio && (
+          <React.Suspense fallback={null}>
+            <StudioRail
+              isOpen={logic.studioOpen}
+              onClose={() => logic.setStudioOpen(false)}
+              activeTab={logic.studioTab}
+              onTabChange={logic.setStudioTab}
+              treeCount={
+                logic.messages.filter((m) => !(m.childrenIds && m.childrenIds.length > 0)).length
+              }
+              contextPanel={
+                <ContextInspector
+                  systemPrompt={logic.systemPrompt}
+                  turnContext={logic.turnContext}
+                />
+              }
+              treePanel={
+                <ConversationTree
+                  messages={logic.messages}
+                  activeLeafId={logic.activeLeafId}
+                  onSelectLeaf={logic.setActiveLeafId}
+                  characterId={logic.selectedCharacter.id}
+                  chatFileName={logic.currentChatFileName}
+                />
+              }
+              memoryPanel={<MemoryControls characterName={logic.selectedCharacter.name} />}
             />
-          }
-          treePanel={
-            <ConversationTree
-              messages={logic.messages}
-              activeLeafId={logic.activeLeafId}
-              onSelectLeaf={logic.setActiveLeafId}
-              characterId={logic.selectedCharacter.id}
-              chatFileName={logic.currentChatFileName}
-            />
-          }
-          memoryPanel={
-            <MemoryControls characterName={logic.selectedCharacter.name} />
-          }
-        />
+          </React.Suspense>
+        )}
       </div>
 
       {/* Group Chat Manager Modal */}
-      <GroupChatManager
-        characters={logic.characters}
-        onSelectGroup={logic.handleSelectGroup}
-        selectedGroupId={logic.activeGroup?.id}
-        isOpen={logic.showGroupManager}
-        onClose={() => logic.setShowGroupManager(false)}
-      />
+      {appFeatures.groupChat && (
+        <React.Suspense fallback={null}>
+          <GroupChatManager
+            characters={logic.characters}
+            onSelectGroup={logic.handleSelectGroup}
+            selectedGroupId={logic.activeGroup?.id}
+            isOpen={logic.showGroupManager}
+            onClose={() => logic.setShowGroupManager(false)}
+          />
+        </React.Suspense>
+      )}
 
       {/* Image Generation Modal */}
-      <ImageGenModal
-        isOpen={logic.showImageGen}
-        onClose={() => {
-          logic.setShowImageGen(false);
-          logic.setImageGenPrompt(undefined);
-        }}
-        initialPrompt={logic.imageGenPrompt}
-        characterAppearance={logic.selectedCharacter?.description}
-      />
+      {appFeatures.imageGeneration && (
+        <React.Suspense fallback={null}>
+          <ImageGenModal
+            isOpen={logic.showImageGen}
+            onClose={() => {
+              logic.setShowImageGen(false);
+              logic.setImageGenPrompt(undefined);
+            }}
+            initialPrompt={logic.imageGenPrompt}
+            characterAppearance={logic.selectedCharacter?.description}
+          />
+        </React.Suspense>
+      )}
 
       {/* Character Editor Modal */}
       <CharacterEditor

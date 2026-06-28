@@ -17,6 +17,7 @@ import { useToast } from '../components/Toast';
 import { useLanguage } from '../i18n';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { generateId } from '../utils/id';
+import { appFeatures } from '../config/features';
 import { useCharacterManagement } from './useCharacterManagement';
 import { useChatPersistence } from './useChatPersistence';
 import { useChatGeneration } from './useChatGeneration';
@@ -128,7 +129,7 @@ export const useAppLogic = () => {
       const spacer = prev.length > 0 && !prev.endsWith(' ') ? ' ' : '';
       return prev + spacer + newTranscript;
     });
-  });
+  }, appFeatures.voiceInput);
 
   // ==================== MESSAGE ACTIONS ====================
   const messageActions = useMessageActions(
@@ -195,12 +196,19 @@ export const useAppLogic = () => {
 
   // ==================== BOOKMARKS ====================
   useEffect(() => {
-    if (characterMgmt.selectedCharacter.id !== 'default') {
+    if (appFeatures.bookmarks && characterMgmt.selectedCharacter.id !== 'default') {
       setBookmarks(getBookmarks(characterMgmt.selectedCharacter.id));
+    } else {
+      setBookmarks([]);
     }
   }, [characterMgmt.selectedCharacter.id]);
 
   const handleCreateBookmark = async () => {
+    if (!appFeatures.bookmarks) {
+      toast.error('Bookmarks are disabled in this build');
+      return;
+    }
+
     if (!chatPersistence.currentChatFileName || messages.length === 0) {
       toast.error('No messages to bookmark');
       return;
@@ -228,6 +236,8 @@ export const useAppLogic = () => {
   };
 
   const handleRestoreBookmark = async (bookmark: ChatBookmark) => {
+    if (!appFeatures.bookmarks) return;
+
     const ok = await confirmDialog({
       title: 'Restore bookmark?',
       message: `Restoring to "${bookmark.name}" will replace the current messages in this conversation.`,
@@ -244,6 +254,8 @@ export const useAppLogic = () => {
 
   const handleDeleteBookmark = async (bookmarkId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!appFeatures.bookmarks) return;
+
     const ok = await confirmDialog({
       title: 'Delete bookmark?',
       message: 'This bookmark will be removed permanently.',
@@ -259,6 +271,11 @@ export const useAppLogic = () => {
 
   // ==================== GROUP CHAT ====================
   const handleSelectGroup = (group: GroupChat) => {
+    if (!appFeatures.groupChat) {
+      toast.error('Group chat is disabled in this build');
+      return;
+    }
+
     setActiveGroup(group);
     setShowGroupManager(false);
 
@@ -288,6 +305,8 @@ export const useAppLogic = () => {
   };
 
   const handleExitGroup = () => {
+    if (!appFeatures.groupChat) return;
+
     setActiveGroup(null);
     chatPersistence.startNewChat();
     toast.success('Exited group chat');
@@ -295,6 +314,11 @@ export const useAppLogic = () => {
 
   // ==================== IMAGE GENERATION ====================
   const handleGenerateImage = (prompt: string) => {
+    if (!appFeatures.imageGeneration) {
+      toast.error('Image generation is disabled in this build');
+      return;
+    }
+
     setImageGenPrompt(prompt);
     setShowImageGen(true);
   };

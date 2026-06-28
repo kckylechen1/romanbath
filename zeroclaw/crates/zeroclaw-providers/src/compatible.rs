@@ -44,6 +44,9 @@ pub struct OpenAiCompatibleModelProvider {
     extra_headers: std::collections::HashMap<String, String>,
     /// Optional reasoning effort for GPT-5/Codex-compatible backends.
     reasoning_effort: Option<String>,
+    /// Whether stored assistant reasoning should be replayed on outbound
+    /// assistant history messages.
+    replay_assistant_reasoning: bool,
     /// Custom API path suffix (e.g. "/v2/generate").
     /// When set, overrides the default `/chat/completions` path detection.
     api_path: Option<String>,
@@ -87,6 +90,7 @@ impl Clone for OpenAiCompatibleModelProvider {
             timeout_secs: self.timeout_secs,
             extra_headers: self.extra_headers.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
+            replay_assistant_reasoning: self.replay_assistant_reasoning,
             api_path: self.api_path.clone(),
             max_tokens: std::sync::Arc::new(parking_lot::Mutex::new(*self.max_tokens.lock())),
             models_dev_key: self.models_dev_key.clone(),
@@ -304,6 +308,7 @@ impl OpenAiCompatibleModelProvider {
             timeout_secs: 120,
             extra_headers: std::collections::HashMap::new(),
             reasoning_effort: None,
+            replay_assistant_reasoning: true,
             api_path: None,
             max_tokens: std::sync::Arc::new(parking_lot::Mutex::new(None)),
             models_dev_key: None,
@@ -359,6 +364,11 @@ impl OpenAiCompatibleModelProvider {
     /// Set reasoning effort for GPT-5/Codex-compatible chat-completions APIs.
     pub fn with_reasoning_effort(mut self, reasoning_effort: Option<String>) -> Self {
         self.reasoning_effort = reasoning_effort;
+        self
+    }
+
+    pub fn without_assistant_reasoning_replay(mut self) -> Self {
+        self.replay_assistant_reasoning = false;
         self
     }
 
@@ -1813,6 +1823,7 @@ impl OpenAiCompatibleModelProvider {
         let targets_mistral_tool_call_contract = self.targets_mistral_tool_call_contract();
         let mut used_tool_call_ids = std::collections::HashSet::new();
         let mut tool_call_id_map = std::collections::HashMap::new();
+        let mut last_assistant_tool_call_ids: Vec<String> = Vec::new();
 
         messages
             .iter()
@@ -1849,6 +1860,9 @@ impl OpenAiCompatibleModelProvider {
                         })
                         .collect::<Vec<_>>();
 
+                    last_assistant_tool_call_ids =
+                        tool_calls.iter().filter_map(|tc| tc.id.clone()).collect();
+
                     let content = value
                         .get("content")
                         .and_then(serde_json::Value::as_str)
@@ -1856,11 +1870,15 @@ impl OpenAiCompatibleModelProvider {
 
                     // Accept both `reasoning_content` (canonical) and
                     // `reasoning` (OpenRouter / vLLM >= v0.16.0). See #6584.
-                    let reasoning_content = value
-                        .get("reasoning_content")
-                        .or_else(|| value.get("reasoning"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(ToString::to_string);
+                    let reasoning_content = if self.replay_assistant_reasoning {
+                        value
+                            .get("reasoning_content")
+                            .or_else(|| value.get("reasoning"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string)
+                    } else {
+                        None
+                    };
 
                     return NativeMessage {
                         role: "assistant".to_string(),
@@ -1881,9 +1899,11 @@ impl OpenAiCompatibleModelProvider {
                 if message.role == "assistant"
                     && let Ok(value) = serde_json::from_str::<serde_json::Value>(&message.content)
                     && value.get("tool_calls").is_none()
-                    && let Some(reasoning_content) = value
+                    && value
                         .get("reasoning_content")
+                        .or_else(|| value.get("reasoning"))
                         .and_then(serde_json::Value::as_str)
+                        .is_some()
                     && matches!(
                         value.get("content"),
                         None | Some(serde_json::Value::Null | serde_json::Value::String(_))
@@ -1893,20 +1913,29 @@ impl OpenAiCompatibleModelProvider {
                         .get("content")
                         .and_then(serde_json::Value::as_str)
                         .map(|value| MessageContent::Text(value.to_string()));
+                    let reasoning_content = if self.replay_assistant_reasoning {
+                        value
+                            .get("reasoning_content")
+                            .or_else(|| value.get("reasoning"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string)
+                    } else {
+                        None
+                    };
 
                     return NativeMessage {
                         role: "assistant".to_string(),
                         content,
                         tool_call_id: None,
                         tool_calls: None,
-                        reasoning_content: Some(reasoning_content.to_string()),
+                        reasoning_content,
                     };
                 }
 
                 if message.role == "tool"
                     && let Ok(value) = serde_json::from_str::<serde_json::Value>(&message.content)
                 {
-                    let tool_call_id = value
+                    let mut tool_call_id = value
                         .get("tool_call_id")
                         .and_then(serde_json::Value::as_str)
                         .map(|raw_id| {
@@ -1920,6 +1949,12 @@ impl OpenAiCompatibleModelProvider {
                                 normalized_id
                             })
                         });
+                    // If a reconstructed tool result dropped its tool_call_id,
+                    // reuse the first id from the most recent assistant tool call.
+                    // Strict native-tool backends reject a missing/null id here.
+                    if tool_call_id.is_none() && !last_assistant_tool_call_ids.is_empty() {
+                        tool_call_id = last_assistant_tool_call_ids.first().cloned();
+                    }
                     let content = value
                         .get("content")
                         .and_then(serde_json::Value::as_str)
@@ -1967,7 +2002,10 @@ impl OpenAiCompatibleModelProvider {
         if self.native_tool_calling {
             return messages.to_vec();
         }
-        let intermediate = messages.iter().filter_map(|msg| {
+        let intermediate = messages.iter().enumerate().filter_map(|(index, msg)| {
+            if ChatMessage::should_skip_internal_pruning_marker(messages, index) {
+                return None;
+            }
             if msg.role == "tool" {
                 return None;
             }
@@ -1989,20 +2027,22 @@ impl OpenAiCompatibleModelProvider {
             Some(msg.clone())
         });
 
-        // Coalesce adjacent assistant messages.
+        // Coalesce adjacent same-role messages.
         //
-        // A typical trace is:
+        // One common trace is:
         //     user → assistant{content, tool_calls} → tool{result} → assistant{reply}
         // After the filter_map above the `tool` message is gone and the first
         // assistant has been rewritten to plain text, leaving two assistant
-        // messages in a row. Providers targeted by the `native_tool_calling =
+        // messages in a row. A user continuation immediately after a dropped
+        // tool result can also leave two user messages in a row. Providers
+        // targeted by the `native_tool_calling =
         // false` path (Anthropic upstream, MiniMax, and other OpenAI-compat
         // wrappers) reject consecutive same-role messages with HTTP 400, so we
-        // merge them here.
+        // merge adjacent non-system roles here.
         let mut coalesced: Vec<ChatMessage> = Vec::with_capacity(messages.len());
         for msg in intermediate {
             match coalesced.last_mut() {
-                Some(last) if last.role == "assistant" && msg.role == "assistant" => {
+                Some(last) if last.role == msg.role && msg.role != "system" => {
                     if !last.content.is_empty() && !msg.content.is_empty() {
                         last.content.push_str("\n\n");
                     }
@@ -3726,6 +3766,38 @@ mod tests {
     }
 
     #[test]
+    fn convert_messages_for_native_tool_fallbacks_to_last_assistant_tool_call_id() {
+        let provider = make_model_provider("test", "https://example.com", None);
+        let input = vec![
+            ChatMessage::assistant(
+                r#"{"content":null,"tool_calls":[{"id":"fc_123","name":"search","arguments":"{}"}]}"#,
+            ),
+            ChatMessage::tool(r#"{"content":"result"}"#),
+        ];
+
+        let converted = provider.convert_messages_for_native(&input, true);
+        assert_eq!(converted.len(), 2);
+        assert_eq!(converted[1].role, "tool");
+        assert_eq!(converted[1].tool_call_id.as_deref(), Some("fc_123"));
+    }
+
+    #[test]
+    fn convert_messages_for_native_tool_keeps_explicit_id_when_present() {
+        let provider = make_model_provider("test", "https://example.com", None);
+        let input = vec![
+            ChatMessage::assistant(
+                r#"{"content":null,"tool_calls":[{"id":"fc_123","name":"search","arguments":"{}"}]}"#,
+            ),
+            ChatMessage::tool(r#"{"tool_call_id":"fc_456","content":"result"}"#),
+        ];
+
+        let converted = provider.convert_messages_for_native(&input, true);
+        assert_eq!(converted.len(), 2);
+        assert_eq!(converted[1].role, "tool");
+        assert_eq!(converted[1].tool_call_id.as_deref(), Some("fc_456"));
+    }
+
+    #[test]
     fn native_chat_request_mistral_serializes_matching_valid_tool_call_ids() {
         let provider = make_model_provider("Mistral", "https://api.mistral.ai/v1", None);
         let invalid_id = "chatcmpl-tool-abc";
@@ -5003,6 +5075,35 @@ mod tests {
     }
 
     #[test]
+    fn convert_messages_for_native_strips_reasoning_when_replay_disabled() {
+        let provider = make_model_provider("test", "https://example.com", None)
+            .without_assistant_reasoning_replay();
+        let messages = vec![ChatMessage::assistant(
+            r#"{"content":"ok","reasoning_content":"step 1"}"#,
+        )];
+
+        let native = provider.convert_messages_for_native(&messages, true);
+        assert_eq!(native.len(), 1);
+        assert_eq!(native[0].role, "assistant");
+        assert!(matches!(
+            native[0].content.as_ref(),
+            Some(MessageContent::Text(value)) if value == "ok"
+        ));
+        assert_eq!(native[0].reasoning_content, None);
+    }
+
+    #[test]
+    fn convert_messages_for_native_preserves_reasoning_by_default() {
+        let provider = make_model_provider("test", "https://example.com", None);
+        let messages = vec![ChatMessage::assistant(
+            r#"{"content":"ok","reasoning_content":"step 1"}"#,
+        )];
+
+        let native = provider.convert_messages_for_native(&messages, true);
+        assert_eq!(native[0].reasoning_content.as_deref(), Some("step 1"));
+    }
+
+    #[test]
     fn convert_messages_for_native_round_trips_reasoning_content() {
         // Simulate stored assistant history JSON that includes reasoning_content
         let history_json = serde_json::json!({
@@ -5410,6 +5511,63 @@ mod tests {
              got {:?}",
             stripped[1].content
         );
+    }
+
+    #[test]
+    fn strip_native_tool_messages_coalesces_adjacent_users() {
+        let messages = vec![
+            ChatMessage::user("summarize this build output"),
+            ChatMessage::assistant(
+                r#"{"content":"","tool_calls":[{"id":"t1","name":"shell","arguments":"{}"}]}"#,
+            ),
+            ChatMessage::tool(r#"{"tool_call_id":"t1","content":"cargo output"}"#),
+            ChatMessage::user("go on"),
+        ];
+        let p = OpenAiCompatibleModelProvider::new_merge_system_into_user(
+            "test",
+            "Anthropic-compatible",
+            "https://example.test/v1",
+            Some("k"),
+            AuthStyle::Bearer,
+        );
+
+        let stripped = p.strip_native_tool_messages(&messages);
+        let roles: Vec<&str> = stripped.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user"]);
+        assert!(
+            stripped[0].content.contains("summarize this build output")
+                && stripped[0].content.contains("go on"),
+            "merged user message should preserve the original prompt and continuation; got {:?}",
+            stripped[0].content
+        );
+    }
+
+    #[test]
+    fn strip_native_tool_messages_drops_internal_pruning_markers_before_coalescing() {
+        let messages = vec![
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: ChatMessage::pruned_tool_exchange_summary(1),
+            },
+            ChatMessage::pruned_context_separator(),
+            ChatMessage::assistant(
+                r#"{"content":"","tool_calls":[{"id":"t1","name":"shell","arguments":"{}"}]}"#,
+            ),
+            ChatMessage::tool(r#"{"tool_call_id":"t1","content":"cargo output"}"#),
+            ChatMessage::user("go on"),
+        ];
+        let p = OpenAiCompatibleModelProvider::new_merge_system_into_user(
+            "test",
+            "Anthropic-compatible",
+            "https://example.test/v1",
+            Some("k"),
+            AuthStyle::Bearer,
+        );
+
+        let stripped = p.strip_native_tool_messages(&messages);
+        let roles: Vec<&str> = stripped.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user"]);
+        assert_eq!(stripped[0].content, "go on");
     }
 
     /// Complementary regression for #5825: when the narration content is

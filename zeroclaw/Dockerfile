@@ -29,7 +29,7 @@ RUN --mount=type=cache,id=zeroclaw-cargo-registry,target=/usr/local/cargo/regist
 FROM rust:1.94-slim@sha256:da9dab7a6b8dd428e71718402e97207bb3e54167d37b5708616050b1e8f60ed6 AS builder
 
 WORKDIR /app
-ARG ZEROCLAW_CARGO_FEATURES="channel-lark,whatsapp-web"
+ARG ZEROCLAW_CARGO_FEATURES="gateway,agent-runtime"
 
 # Install build dependencies
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -75,7 +75,7 @@ RUN --mount=type=cache,id=zeroclaw-cargo-registry,target=/usr/local/cargo/regist
     --mount=type=cache,id=zeroclaw-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=zeroclaw-target,target=/app/target,sharing=locked \
     if [ -n "$ZEROCLAW_CARGO_FEATURES" ]; then \
-      cargo build --release --locked --features "$ZEROCLAW_CARGO_FEATURES"; \
+      cargo build --release --locked --no-default-features --features "$ZEROCLAW_CARGO_FEATURES"; \
     else \
       cargo build --release --locked; \
     fi
@@ -103,7 +103,7 @@ RUN --mount=type=cache,id=zeroclaw-cargo-registry,target=/usr/local/cargo/regist
            target/release/.fingerprint/fill-translations-* \
            target/release/deps/fill_translations-* && \
     if [ -n "$ZEROCLAW_CARGO_FEATURES" ]; then \
-      cargo build --release --locked --features "$ZEROCLAW_CARGO_FEATURES"; \
+      cargo build --release --locked --no-default-features --features "$ZEROCLAW_CARGO_FEATURES"; \
     else \
       cargo build --release --locked; \
     fi && \
