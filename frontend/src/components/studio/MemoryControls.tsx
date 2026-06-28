@@ -44,6 +44,55 @@ const isPinned = (m: MemoryEntry) => m.retention_policy === 'pinned';
 // flat string key so the chip row stays trivially comparable.
 type FilterKey = 'all' | `tier:${string}` | `cat:${string}`;
 
+// Module-level (not defined during render) so React keeps stable component
+// identity — required by react-hooks/static-components.
+const Chip: React.FC<{ label: string; count: number; active: boolean; onClick: () => void }> = ({
+  label,
+  count,
+  active,
+  onClick,
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-pressed={active}
+    className={`shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] px-2 py-1 rounded-md border transition-colors ${
+      active
+        ? 'bg-primary/15 border-primary/40 text-primary'
+        : 'bg-white/[0.03] border-bath-700/30 text-bath-400 hover:text-bath-200 hover:border-bath-600/40'
+    }`}
+  >
+    {label}
+    <span className="ml-1.5 tabular-nums text-bath-500">{count}</span>
+  </button>
+);
+
+const RowButton: React.FC<{
+  onClick: () => void;
+  label: string;
+  active?: boolean;
+  danger?: boolean;
+  disabled?: boolean;
+  children: React.ReactNode;
+}> = ({ onClick, label, active, danger, disabled, children }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    aria-label={label}
+    title={label}
+    className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-1 focus-visible:ring-bath-400 ${
+      danger
+        ? 'text-bath-500 hover:text-rose-300 hover:bg-rose-500/10'
+        : active
+          ? 'text-primary hover:bg-white/5'
+          : 'text-bath-500 hover:text-bath-200 hover:bg-white/5'
+    }`}
+  >
+    {children}
+  </button>
+);
+
 const tierMarker = (tier: string) => {
   if (tier === 'consolidated') return { icon: Star, color: 'text-bath-300/70', title: 'Consolidated' };
   if (tier === 'pattern') return { icon: Sparkles, color: 'text-amber-400/70', title: 'Pattern' };
@@ -168,55 +217,6 @@ export const MemoryControls: React.FC<MemoryControlsProps> = ({ characterName })
     setBusyId(null);
   };
 
-  const Chip: React.FC<{ value: FilterKey; label: string; count: number }> = ({
-    value,
-    label,
-    count,
-  }) => {
-    const active = filter === value;
-    return (
-      <button
-        type="button"
-        onClick={() => setFilter(value)}
-        aria-pressed={active}
-        className={`shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] px-2 py-1 rounded-md border transition-colors ${
-          active
-            ? 'bg-primary/15 border-primary/40 text-primary'
-            : 'bg-white/[0.03] border-bath-700/30 text-bath-400 hover:text-bath-200 hover:border-bath-600/40'
-        }`}
-      >
-        {label}
-        <span className="ml-1.5 tabular-nums text-bath-500">{count}</span>
-      </button>
-    );
-  };
-
-  const RowButton: React.FC<{
-    onClick: () => void;
-    label: string;
-    active?: boolean;
-    danger?: boolean;
-    disabled?: boolean;
-    children: React.ReactNode;
-  }> = ({ onClick, label, active, danger, disabled, children }) => (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      title={label}
-      className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-1 focus-visible:ring-bath-400 ${
-        danger
-          ? 'text-bath-500 hover:text-rose-300 hover:bg-rose-500/10'
-          : active
-            ? 'text-primary hover:bg-white/5'
-            : 'text-bath-500 hover:text-bath-200 hover:bg-white/5'
-      }`}
-    >
-      {children}
-    </button>
-  );
-
   return (
     <div className="space-y-3">
       {/* Header: label + total count */}
@@ -235,21 +235,28 @@ export const MemoryControls: React.FC<MemoryControlsProps> = ({ characterName })
       {/* Filter chips: All + present tiers + present categories */}
       {memories.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          <Chip value="all" label="All" count={memories.length} />
+          <Chip
+            label="All"
+            count={memories.length}
+            active={filter === 'all'}
+            onClick={() => setFilter('all')}
+          />
           {presentTiers.map((t) => (
             <Chip
               key={`tier:${t}`}
-              value={`tier:${t}`}
               label={t}
               count={memories.filter((m) => m.tier === t).length}
+              active={filter === `tier:${t}`}
+              onClick={() => setFilter(`tier:${t}`)}
             />
           ))}
           {presentCategories.map((c) => (
             <Chip
               key={`cat:${c}`}
-              value={`cat:${c}`}
               label={categoryMeta(c).label}
               count={memories.filter((m) => m.category === c).length}
+              active={filter === `cat:${c}`}
+              onClick={() => setFilter(`cat:${c}`)}
             />
           ))}
         </div>

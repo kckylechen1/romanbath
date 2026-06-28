@@ -203,11 +203,7 @@ impl ChatMemoryStore {
     /// edges, and access history. Returns `true` if a row was found and deleted.
     /// Opens the same per-character connection [`list_memories`](Self::list_memories)
     /// reads from, so the model and the UI agree on what is gone.
-    pub fn delete_memory(
-        &self,
-        character_name: &str,
-        id: &str,
-    ) -> Result<bool, MemoryError> {
+    pub fn delete_memory(&self, character_name: &str, id: &str) -> Result<bool, MemoryError> {
         let mut conn = self.open_mut(character_name)?;
         memory_crud::delete(&mut conn, id)
     }
@@ -242,8 +238,11 @@ impl ChatMemoryStore {
             entry.category = c;
         }
         if let Some(p) = pinned {
-            entry.retention_policy =
-                Some(if p { "pinned".to_string() } else { "durable".to_string() });
+            entry.retention_policy = Some(if p {
+                "pinned".to_string()
+            } else {
+                "durable".to_string()
+            });
         }
 
         memory_crud::upsert(&mut conn, &entry)?;
@@ -276,7 +275,7 @@ impl ChatMemoryStore {
         for suffix in ["-wal", "-shm"] {
             let from = append_suffix(&old_path, suffix);
             if from.exists() {
-                let _ = std::fs::rename(&from, &append_suffix(&new_path, suffix));
+                let _ = std::fs::rename(&from, append_suffix(&new_path, suffix));
             }
         }
 
@@ -377,7 +376,7 @@ impl ChatMemoryStore {
     ) -> Result<Vec<MemoryEntry>, MemoryError> {
         let conn = self.open(character_name)?;
         let mut entries = memory_crud::list_by_path(&conn, "/user/patterns", top_k.max(1))?;
-        entries.sort_by(|a, b| pattern_priority(b).cmp(&pattern_priority(a)));
+        entries.sort_by_key(|e| std::cmp::Reverse(pattern_priority(e)));
         Ok(entries)
     }
 
@@ -530,15 +529,30 @@ mod tests {
     fn list_memories_is_scoped_to_character() {
         let (_dir, store) = temp_store();
         store
-            .save_chat_memory("ada", "Alice", "user", "I prefer using dark mode for everything")
+            .save_chat_memory(
+                "ada",
+                "Alice",
+                "user",
+                "I prefer using dark mode for everything",
+            )
             .unwrap()
             .expect("not noise");
         store
-            .save_chat_memory("ada", "Alice", "assistant", "Noted — I'll keep things in dark mode")
+            .save_chat_memory(
+                "ada",
+                "Alice",
+                "assistant",
+                "Noted — I'll keep things in dark mode",
+            )
             .unwrap()
             .expect("not noise");
         store
-            .save_chat_memory("bob", "Alice", "user", "I take my coffee black, no sugar at all")
+            .save_chat_memory(
+                "bob",
+                "Alice",
+                "user",
+                "I take my coffee black, no sugar at all",
+            )
             .unwrap()
             .expect("not noise");
 
@@ -556,7 +570,12 @@ mod tests {
     fn rename_character_moves_memories() {
         let (_dir, store) = temp_store();
         store
-            .save_chat_memory("ada", "Alice", "user", "I prefer using dark mode for everything")
+            .save_chat_memory(
+                "ada",
+                "Alice",
+                "user",
+                "I prefer using dark mode for everything",
+            )
             .unwrap()
             .expect("not noise");
 
@@ -567,7 +586,9 @@ mod tests {
         assert!(store.list_memories("ada", 200).unwrap().is_empty());
 
         // Renaming a character with no memory DB yet is a harmless no-op.
-        store.rename_character("never_existed", "still_nothing").unwrap();
+        store
+            .rename_character("never_existed", "still_nothing")
+            .unwrap();
     }
 
     #[test]
@@ -630,7 +651,12 @@ mod tests {
     fn delete_memory_removes_from_list() {
         let (_dir, store) = temp_store();
         let id = store
-            .save_chat_memory("del", "Alice", "user", "I prefer dark mode for everything always")
+            .save_chat_memory(
+                "del",
+                "Alice",
+                "user",
+                "I prefer dark mode for everything always",
+            )
             .unwrap()
             .expect("not noise");
         assert_eq!(store.list_memories("del", 200).unwrap().len(), 1);
@@ -650,7 +676,12 @@ mod tests {
     fn update_memory_edits_text_category_and_pins() {
         let (_dir, store) = temp_store();
         let id = store
-            .save_chat_memory("upd", "Alice", "user", "I prefer dark mode for everything always")
+            .save_chat_memory(
+                "upd",
+                "Alice",
+                "user",
+                "I prefer dark mode for everything always",
+            )
             .unwrap()
             .expect("not noise");
 
@@ -665,15 +696,24 @@ mod tests {
             .unwrap()
             .expect("entry exists");
 
-        assert_eq!(updated.text, "I actually love light mode in the mornings now");
-        assert_eq!(updated.summary, "I actually love light mode in the mornings now");
+        assert_eq!(
+            updated.text,
+            "I actually love light mode in the mornings now"
+        );
+        assert_eq!(
+            updated.summary,
+            "I actually love light mode in the mornings now"
+        );
         assert_eq!(updated.category, "fact");
         assert_eq!(updated.retention_policy.as_deref(), Some("pinned"));
 
         // The change is durable in the store and visible to the read path.
         let listed = store.list_memories("upd", 200).unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].text, "I actually love light mode in the mornings now");
+        assert_eq!(
+            listed[0].text,
+            "I actually love light mode in the mornings now"
+        );
         assert_eq!(listed[0].retention_policy.as_deref(), Some("pinned"));
 
         // Unpin flips retention_policy to durable; None fields stay untouched.
@@ -685,7 +725,12 @@ mod tests {
         assert_eq!(unpinned.category, "fact", "category untouched when None");
 
         // Updating a missing id yields None, not an error.
-        assert!(store.update_memory("upd", "nope", None, None, Some(true)).unwrap().is_none());
+        assert!(
+            store
+                .update_memory("upd", "nope", None, None, Some(true))
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Seed a pattern memory under /user/patterns/ directly for testing.
@@ -727,7 +772,12 @@ mod tests {
     fn recall_excludes_projection_paths() {
         let (_dir, store) = temp_store();
         store
-            .save_chat_memory("iso", "Alice", "user", "I prefer dark mode for everything always")
+            .save_chat_memory(
+                "iso",
+                "Alice",
+                "user",
+                "I prefer dark mode for everything always",
+            )
             .unwrap();
         // A projection whose text matches the recall query — must be excluded
         // by the /chat/ path_prefix filter, not by FTS non-match.
@@ -794,11 +844,17 @@ mod tests {
     fn injection_off_excludes_patterns() {
         let (_dir, store) = temp_store();
         store
-            .save_chat_memory("inj", "Alice", "user", "I prefer dark mode everywhere always")
+            .save_chat_memory(
+                "inj",
+                "Alice",
+                "user",
+                "I prefer dark mode everywhere always",
+            )
             .unwrap();
         seed_pattern(&store, "inj", "pat-secret", "pattern", 9);
 
-        let out = store.inject_memories_into_prompt_with("inj", "User: dark mode everywhere", false);
+        let out =
+            store.inject_memories_into_prompt_with("inj", "User: dark mode everywhere", false);
         assert!(out.contains("dark mode"), "chat memory still injected");
         assert!(
             !out.contains("pat-secret"),
@@ -815,13 +871,25 @@ mod tests {
     fn injection_on_appends_pattern_block() {
         let (_dir, store) = temp_store();
         store
-            .save_chat_memory("inj2", "Alice", "user", "I prefer dark mode everywhere always")
+            .save_chat_memory(
+                "inj2",
+                "Alice",
+                "user",
+                "I prefer dark mode everywhere always",
+            )
             .unwrap();
         seed_pattern(&store, "inj2", "pat-on", "pattern", 9);
 
-        let out = store.inject_memories_into_prompt_with("inj2", "User: dark mode everywhere", true);
-        assert!(out.contains("Relevant memories"), "chat block still present");
-        assert!(out.contains("Learned patterns"), "pattern block appended when on");
+        let out =
+            store.inject_memories_into_prompt_with("inj2", "User: dark mode everywhere", true);
+        assert!(
+            out.contains("Relevant memories"),
+            "chat block still present"
+        );
+        assert!(
+            out.contains("Learned patterns"),
+            "pattern block appended when on"
+        );
         assert!(out.contains("pat-on"), "pattern content present when on");
     }
 }

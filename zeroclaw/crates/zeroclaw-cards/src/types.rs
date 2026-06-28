@@ -644,10 +644,11 @@ mod tests {
             .iter()
             .any(|f| f.content.contains("night-shift nurse who loves jazz"));
         assert!(has_persona, "persona text must appear when provided");
-        let labels_user = with
-            .iter()
-            .any(|f| f.content.contains("[Alex's persona]"));
-        assert!(labels_user, "persona block should be attributed to the user");
+        let labels_user = with.iter().any(|f| f.content.contains("[Alex's persona]"));
+        assert!(
+            labels_user,
+            "persona block should be attributed to the user"
+        );
 
         let without = card.build_prompt("play", "Alex", "hello there friend", None);
         let fabricated = without.iter().any(|f| f.content.contains("persona]"));

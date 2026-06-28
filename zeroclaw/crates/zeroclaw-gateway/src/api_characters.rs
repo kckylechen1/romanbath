@@ -433,16 +433,17 @@ pub async fn handle_character_memories(
     let limit = params.limit.unwrap_or(200).min(1000);
 
     let result = tokio::task::spawn_blocking(move || {
-        let store =
-            zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+        let store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
         store.list_memories(&name, limit)
     })
     .await;
 
     match result {
-        Ok(Ok(entries)) => {
-            (StatusCode::OK, Json(serde_json::json!({ "entries": entries }))).into_response()
-        }
+        Ok(Ok(entries)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "entries": entries })),
+        )
+            .into_response(),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -473,8 +474,7 @@ pub async fn handle_delete_character_memory(
     let data_dir = state.config.read().data_dir.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let store =
-            zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+        let store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
         store.delete_memory(&name, &id)
     })
     .await;
@@ -523,8 +523,7 @@ pub async fn handle_patch_character_memory(
     let data_dir = state.config.read().data_dir.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let store =
-            zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+        let store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
         store.update_memory(&name, &id, body.text, body.category, body.pinned)
     })
     .await;
@@ -586,7 +585,10 @@ fn write_companion_settings(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, serde_json::to_vec_pretty(settings).unwrap_or_default())
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(settings).unwrap_or_default(),
+    )
 }
 
 /// Move a character's settings sidecar on rename (best-effort; no-op if absent).

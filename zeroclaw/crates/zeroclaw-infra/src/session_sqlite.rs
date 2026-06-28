@@ -186,10 +186,22 @@ impl SqliteSessionBackend {
         // FTS rowid and sibling tie-break).
         for (column, ddl) in [
             ("msg_id", "ALTER TABLE sessions ADD COLUMN msg_id TEXT"),
-            ("parent_id", "ALTER TABLE sessions ADD COLUMN parent_id TEXT"),
-            ("author_id", "ALTER TABLE sessions ADD COLUMN author_id TEXT"),
-            ("node_status", "ALTER TABLE sessions ADD COLUMN node_status TEXT"),
-            ("node_meta", "ALTER TABLE sessions ADD COLUMN node_meta TEXT"),
+            (
+                "parent_id",
+                "ALTER TABLE sessions ADD COLUMN parent_id TEXT",
+            ),
+            (
+                "author_id",
+                "ALTER TABLE sessions ADD COLUMN author_id TEXT",
+            ),
+            (
+                "node_status",
+                "ALTER TABLE sessions ADD COLUMN node_status TEXT",
+            ),
+            (
+                "node_meta",
+                "ALTER TABLE sessions ADD COLUMN node_meta TEXT",
+            ),
         ] {
             let present: bool = conn
                 .query_row(
@@ -964,7 +976,14 @@ impl SessionBackend for SqliteSessionBackend {
         conn.execute(
             "UPDATE sessions SET role = ?1, content = ?2, node_status = ?3, node_meta = ?4
              WHERE session_key = ?5 AND msg_id = ?6",
-            params![node.role, node.content, node.status, meta_str, session_key, node.msg_id],
+            params![
+                node.role,
+                node.content,
+                node.status,
+                meta_str,
+                session_key,
+                node.msg_id
+            ],
         )
         .map_err(std::io::Error::other)?;
         let mut changed = conn.changes() > 0;
@@ -974,13 +993,18 @@ impl SessionBackend for SqliteSessionBackend {
         // ONLY on a real miss and ONLY against NULL-msg_id rows, so a genuine
         // client id literally equal to "lin-7" stays matched by the msg_id path
         // and is never shadowed by this fallback.
-        if !changed
-            && let Some(rowid) = parse_lin_rowid(&node.msg_id)
-        {
+        if !changed && let Some(rowid) = parse_lin_rowid(&node.msg_id) {
             conn.execute(
                 "UPDATE sessions SET role = ?1, content = ?2, node_status = ?3, node_meta = ?4
                  WHERE session_key = ?5 AND id = ?6 AND msg_id IS NULL",
-                params![node.role, node.content, node.status, meta_str, session_key, rowid],
+                params![
+                    node.role,
+                    node.content,
+                    node.status,
+                    meta_str,
+                    session_key,
+                    rowid
+                ],
             )
             .map_err(std::io::Error::other)?;
             changed = conn.changes() > 0;
@@ -1014,7 +1038,17 @@ impl SessionBackend for SqliteSessionBackend {
             let author_id: Option<String> = row.get(6)?;
             let status: Option<String> = row.get(7)?;
             let meta_raw: Option<String> = row.get(8)?;
-            Ok((id, role, content, created_raw, msg_id, parent_id, author_id, status, meta_raw))
+            Ok((
+                id,
+                role,
+                content,
+                created_raw,
+                msg_id,
+                parent_id,
+                author_id,
+                status,
+                meta_raw,
+            ))
         }) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
@@ -1026,7 +1060,17 @@ impl SessionBackend for SqliteSessionBackend {
         let mut prev_synth: Option<String> = None;
         let mut out = Vec::new();
         for r in rows.flatten() {
-            let (id, role, content, created_raw, msg_id_opt, parent_opt, author_id, status, meta_raw) = r;
+            let (
+                id,
+                role,
+                content,
+                created_raw,
+                msg_id_opt,
+                parent_opt,
+                author_id,
+                status,
+                meta_raw,
+            ) = r;
             let created_at = created_raw
                 .as_deref()
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
@@ -1217,13 +1261,19 @@ fn flatten_active_path(nodes: &[ConversationNode], active_leaf: Option<&str>) ->
 /// most-recently-created child each step. Input is ordered by rowid ASC, so the
 /// LAST child/root in iteration order is the most recent (rowid is monotonic
 /// with insertion).
-fn deepest_leaf(nodes: &[ConversationNode], by_id: &HashMap<&str, &ConversationNode>) -> Option<String> {
+fn deepest_leaf(
+    nodes: &[ConversationNode],
+    by_id: &HashMap<&str, &ConversationNode>,
+) -> Option<String> {
     let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
     let mut roots: Vec<&str> = Vec::new();
     for n in nodes {
         match &n.parent_id {
             Some(p) if by_id.contains_key(p.as_str()) => {
-                children.entry(p.as_str()).or_default().push(n.msg_id.as_str());
+                children
+                    .entry(p.as_str())
+                    .or_default()
+                    .push(n.msg_id.as_str());
             }
             _ => roots.push(n.msg_id.as_str()),
         }
@@ -1863,15 +1913,26 @@ mod tests {
         let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
 
         // root user → two assistant swipes (siblings) → continue under swipe B.
-        backend.append_node("c", &node("u1", None, "user", "hi")).unwrap();
-        backend.append_node("c", &node("aA", Some("u1"), "assistant", "reply A")).unwrap();
-        backend.append_node("c", &node("aB", Some("u1"), "assistant", "reply B")).unwrap();
-        backend.append_node("c", &node("u2", Some("aB"), "user", "go on")).unwrap();
+        backend
+            .append_node("c", &node("u1", None, "user", "hi"))
+            .unwrap();
+        backend
+            .append_node("c", &node("aA", Some("u1"), "assistant", "reply A"))
+            .unwrap();
+        backend
+            .append_node("c", &node("aB", Some("u1"), "assistant", "reply B"))
+            .unwrap();
+        backend
+            .append_node("c", &node("u2", Some("aB"), "user", "go on"))
+            .unwrap();
 
         // No active leaf set → deepest leaf = most-recent descendant = u2 under aB.
         let deepest = backend.load_active_path("c");
         assert_eq!(
-            deepest.iter().map(|m| m.content.clone()).collect::<Vec<_>>(),
+            deepest
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>(),
             vec!["hi".to_string(), "reply B".to_string(), "go on".to_string()]
         );
 
@@ -1879,7 +1940,10 @@ mod tests {
         backend.set_active_leaf("c", "aA").unwrap();
         let selected = backend.load_active_path("c");
         assert_eq!(
-            selected.iter().map(|m| m.content.clone()).collect::<Vec<_>>(),
+            selected
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>(),
             vec!["hi".to_string(), "reply A".to_string()]
         );
 
@@ -1892,7 +1956,9 @@ mod tests {
     fn update_node_targets_by_msg_id_and_syncs_fts() {
         let tmp = TempDir::new().unwrap();
         let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
-        backend.append_node("c", &node("u1", None, "user", "question")).unwrap();
+        backend
+            .append_node("c", &node("u1", None, "user", "question"))
+            .unwrap();
         backend
             .append_node("c", &node("a1", Some("u1"), "assistant", "draft"))
             .unwrap();
@@ -1901,7 +1967,11 @@ mod tests {
         let mut finalized = node("a1", Some("u1"), "assistant", "polished final answer");
         finalized.status = Some("complete".into());
         assert!(backend.update_node("c", &finalized).unwrap());
-        assert!(!backend.update_node("c", &node("nope", None, "assistant", "x")).unwrap());
+        assert!(
+            !backend
+                .update_node("c", &node("nope", None, "assistant", "x"))
+                .unwrap()
+        );
 
         let tree = backend.load_tree("c");
         let a1 = tree.iter().find(|n| n.msg_id == "a1").unwrap();
@@ -1910,9 +1980,15 @@ mod tests {
 
         // FTS reflects the update (the new word matches, the old does not):
         // the UPDATE fires sessions_au, re-indexing the row.
-        let hit = backend.search(&SessionQuery { keyword: Some("polished".into()), limit: Some(10) });
+        let hit = backend.search(&SessionQuery {
+            keyword: Some("polished".into()),
+            limit: Some(10),
+        });
         assert_eq!(hit.len(), 1);
-        let stale = backend.search(&SessionQuery { keyword: Some("draft".into()), limit: Some(10) });
+        let stale = backend.search(&SessionQuery {
+            keyword: Some("draft".into()),
+            limit: Some(10),
+        });
         assert!(stale.is_empty());
     }
 
@@ -1920,19 +1996,35 @@ mod tests {
     fn delete_subtree_removes_node_and_descendants_only() {
         let tmp = TempDir::new().unwrap();
         let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
-        backend.append_node("c", &node("u1", None, "user", "hi")).unwrap();
-        backend.append_node("c", &node("aA", Some("u1"), "assistant", "A")).unwrap();
-        backend.append_node("c", &node("aB", Some("u1"), "assistant", "B")).unwrap();
-        backend.append_node("c", &node("u2", Some("aB"), "user", "under B")).unwrap();
+        backend
+            .append_node("c", &node("u1", None, "user", "hi"))
+            .unwrap();
+        backend
+            .append_node("c", &node("aA", Some("u1"), "assistant", "A"))
+            .unwrap();
+        backend
+            .append_node("c", &node("aB", Some("u1"), "assistant", "B"))
+            .unwrap();
+        backend
+            .append_node("c", &node("u2", Some("aB"), "user", "under B"))
+            .unwrap();
 
         // Delete swipe B's subtree (aB + u2); swipe A and the root survive.
         let removed = backend.delete_subtree("c", "aB").unwrap();
-        assert_eq!(removed.iter().cloned().collect::<HashSet<_>>(),
-                   ["aB".to_string(), "u2".to_string()].into_iter().collect());
+        assert_eq!(
+            removed.iter().cloned().collect::<HashSet<_>>(),
+            ["aB".to_string(), "u2".to_string()].into_iter().collect()
+        );
 
-        let surviving: HashSet<String> =
-            backend.load_tree("c").into_iter().map(|n| n.msg_id).collect();
-        assert_eq!(surviving, ["u1".to_string(), "aA".to_string()].into_iter().collect());
+        let surviving: HashSet<String> = backend
+            .load_tree("c")
+            .into_iter()
+            .map(|n| n.msg_id)
+            .collect();
+        assert_eq!(
+            surviving,
+            ["u1".to_string(), "aA".to_string()].into_iter().collect()
+        );
 
         // Deleting a non-existent node is a no-op.
         assert!(backend.delete_subtree("c", "ghost").unwrap().is_empty());
@@ -1946,8 +2038,12 @@ mod tests {
         // and node_exists reports the dangling ref as absent.
         let tmp = TempDir::new().unwrap();
         let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
-        backend.append_node("c", &node("u1", None, "user", "hi")).unwrap();
-        backend.append_node("c", &node("a1", Some("u1"), "assistant", "hello")).unwrap();
+        backend
+            .append_node("c", &node("u1", None, "user", "hi"))
+            .unwrap();
+        backend
+            .append_node("c", &node("a1", Some("u1"), "assistant", "hello"))
+            .unwrap();
 
         // Point active_leaf at a node that doesn't exist.
         backend.set_active_leaf("c", "ghost").unwrap();
@@ -1955,9 +2051,23 @@ mod tests {
         // Tip ignores the dangling leaf and returns the real deepest leaf.
         assert_eq!(backend.conversation_tip("c").as_deref(), Some("a1"));
         // So a new turn still attaches to real history (no orphaning).
-        backend.append_node("c", &node("u2", backend.conversation_tip("c").as_deref(), "user", "again")).unwrap();
+        backend
+            .append_node(
+                "c",
+                &node(
+                    "u2",
+                    backend.conversation_tip("c").as_deref(),
+                    "user",
+                    "again",
+                ),
+            )
+            .unwrap();
         let path = backend.load_active_path("c");
-        assert_eq!(path.len(), 3, "full history preserved despite the dangling leaf");
+        assert_eq!(
+            path.len(),
+            3,
+            "full history preserved despite the dangling leaf"
+        );
     }
 
     #[test]
@@ -1994,8 +2104,12 @@ mod tests {
         let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
 
         // Legacy linear history (the old append path).
-        backend.append("c", &ChatMessage::user("legacy one")).unwrap();
-        backend.append("c", &ChatMessage::assistant("legacy two")).unwrap();
+        backend
+            .append("c", &ChatMessage::user("legacy one"))
+            .unwrap();
+        backend
+            .append("c", &ChatMessage::assistant("legacy two"))
+            .unwrap();
 
         // New turn attaches at the resolved tip.
         let tip = backend.conversation_tip("c");
@@ -2004,7 +2118,10 @@ mod tests {
             .append_node("c", &node("u_new", tip.as_deref(), "user", "new question"))
             .unwrap();
         backend
-            .append_node("c", &node("a_new", Some("u_new"), "assistant", "new answer"))
+            .append_node(
+                "c",
+                &node("a_new", Some("u_new"), "assistant", "new answer"),
+            )
             .unwrap();
 
         // Full history survives, in order — nothing orphaned.
@@ -2061,13 +2178,18 @@ mod tests {
         backend.append("c", &ChatMessage::user("one")).unwrap();
         backend.append("c", &ChatMessage::assistant("two")).unwrap();
         backend.append("c", &ChatMessage::user("three")).unwrap();
-        backend.append("c", &ChatMessage::assistant("four")).unwrap();
+        backend
+            .append("c", &ChatMessage::assistant("four"))
+            .unwrap();
         assert_eq!(session_row_count(&backend, "c"), 4);
 
         // load_tree synthesizes the lin-{rowid} ids + parent chain.
         let tree = backend.load_tree("c");
         assert_eq!(tree.len(), 4);
-        assert!(parse_lin_rowid(&tree[1].msg_id).is_some(), "legacy ids surface as lin-*");
+        assert!(
+            parse_lin_rowid(&tree[1].msg_id).is_some(),
+            "legacy ids surface as lin-*"
+        );
         // Delete the 2nd (non-leaf) node's subtree: it + every descendant.
         let target = tree[1].msg_id.clone();
         let expected: HashSet<String> = tree[1..].iter().map(|n| n.msg_id.clone()).collect();
@@ -2085,13 +2207,25 @@ mod tests {
         // in sync.
         let tmp = TempDir::new().unwrap();
         let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
-        backend.append("c", &ChatMessage::user("alpha question")).unwrap();
-        backend.append("c", &ChatMessage::assistant("beta draft")).unwrap();
+        backend
+            .append("c", &ChatMessage::user("alpha question"))
+            .unwrap();
+        backend
+            .append("c", &ChatMessage::assistant("beta draft"))
+            .unwrap();
 
         let tree = backend.load_tree("c");
         let lin_id = tree[1].msg_id.clone();
-        assert!(parse_lin_rowid(&lin_id).is_some(), "legacy row surfaces as lin-*");
-        let updated = node(&lin_id, tree[1].parent_id.as_deref(), "assistant", "gamma revised");
+        assert!(
+            parse_lin_rowid(&lin_id).is_some(),
+            "legacy row surfaces as lin-*"
+        );
+        let updated = node(
+            &lin_id,
+            tree[1].parent_id.as_deref(),
+            "assistant",
+            "gamma revised",
+        );
         assert!(backend.update_node("c", &updated).unwrap());
 
         let tree2 = backend.load_tree("c");
@@ -2099,10 +2233,16 @@ mod tests {
         assert_eq!(n.content, "gamma revised");
 
         // FTS reflects the update: the new word matches, the replaced one does not.
-        let hit = backend.search(&SessionQuery { keyword: Some("gamma".into()), limit: Some(10) });
+        let hit = backend.search(&SessionQuery {
+            keyword: Some("gamma".into()),
+            limit: Some(10),
+        });
         assert_eq!(hit.len(), 1);
         assert_eq!(hit[0].key, "c");
-        let stale = backend.search(&SessionQuery { keyword: Some("beta".into()), limit: Some(10) });
+        let stale = backend.search(&SessionQuery {
+            keyword: Some("beta".into()),
+            limit: Some(10),
+        });
         assert!(stale.is_empty());
     }
 
@@ -2120,9 +2260,13 @@ mod tests {
             .unwrap();
         // Six linear (NULL-msg_id) rows -> the 6th lands at rowid 7.
         for i in 2..=6 {
-            backend.append("c", &ChatMessage::user(format!("filler {i}"))).unwrap();
+            backend
+                .append("c", &ChatMessage::user(format!("filler {i}")))
+                .unwrap();
         }
-        backend.append("c", &ChatMessage::user("untouched legacy seven")).unwrap();
+        backend
+            .append("c", &ChatMessage::user("untouched legacy seven"))
+            .unwrap();
         // Confirm the rowid-7 row is the NULL legacy row we expect.
         {
             let conn = backend.conn.lock();
@@ -2138,9 +2282,11 @@ mod tests {
         }
 
         // Update by the real msg_id "lin-7": must hit the real node, NOT rowid 7.
-        assert!(backend
-            .update_node("c", &node("lin-7", None, "user", "updated real content"))
-            .unwrap());
+        assert!(
+            backend
+                .update_node("c", &node("lin-7", None, "user", "updated real content"))
+                .unwrap()
+        );
 
         let conn = backend.conn.lock();
         let real: String = conn
@@ -2150,7 +2296,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(real, "updated real content", "msg_id path updated the real node");
+        assert_eq!(
+            real, "updated real content",
+            "msg_id path updated the real node"
+        );
         let legacy7: String = conn
             .query_row(
                 "SELECT content FROM sessions WHERE id = 7 AND msg_id IS NULL",
@@ -2158,6 +2307,9 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(legacy7, "untouched legacy seven", "rowid-7 row was NOT shadowed");
+        assert_eq!(
+            legacy7, "untouched legacy seven",
+            "rowid-7 row was NOT shadowed"
+        );
     }
 }

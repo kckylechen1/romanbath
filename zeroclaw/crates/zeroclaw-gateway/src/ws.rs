@@ -497,7 +497,9 @@ async fn handle_socket(
                 "nodes": node_json,
                 "active_leaf": active_leaf,
             });
-            let _ = sender.send(Message::Text(snapshot.to_string().into())).await;
+            let _ = sender
+                .send(Message::Text(snapshot.to_string().into()))
+                .await;
         }
     }
 
@@ -729,7 +731,9 @@ async fn handle_socket(
             "type": "context_meta",
             "system_prompt": system_prompt,
         });
-        let _ = sender.send(Message::Text(context_meta.to_string().into())).await;
+        let _ = sender
+            .send(Message::Text(context_meta.to_string().into()))
+            .await;
     }
 
     // ── Tool-approval back-channel ─────────────────────────────────
@@ -1436,7 +1440,9 @@ fn apply_delete(
     else {
         return Vec::new();
     };
-    let removed = backend.delete_subtree(session_key, msg_id).unwrap_or_default();
+    let removed = backend
+        .delete_subtree(session_key, msg_id)
+        .unwrap_or_default();
     if let Some(leaf) = backend.get_active_leaf(session_key)
         && removed.contains(&leaf)
         && let Some(parent_id) = parent
@@ -1458,7 +1464,11 @@ fn inject_character_card(
     user_name: Option<&str>,
     user_description: Option<&str>,
     memory_context: &str,
-) -> anyhow::Result<(Option<String>, Option<zeroclaw_affect::CompanionPersona>, String)> {
+) -> anyhow::Result<(
+    Option<String>,
+    Option<zeroclaw_affect::CompanionPersona>,
+    String,
+)> {
     let mgr = zeroclaw_cards::CardManager::default()?;
     let card = mgr
         .load(character_name)
@@ -1473,7 +1483,12 @@ fn inject_character_card(
     // talking to — same input the SSE path feeds build_prompt_with_order.
     // Previously the WS path passed None here, so the main companion never saw
     // the user's self-description.
-    let fragments = card.build_prompt(char_mode, uname, "", user_description.filter(|d| !d.is_empty()));
+    let fragments = card.build_prompt(
+        char_mode,
+        uname,
+        "",
+        user_description.filter(|d| !d.is_empty()),
+    );
 
     let card_prompt = fragments
         .iter()
@@ -1739,8 +1754,7 @@ async fn process_chat_message(
         let char_name = char_name.clone();
         let query = format!("User: {content}");
         tokio::task::spawn_blocking(move || {
-            let store =
-                zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+            let store = zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
             store.inject_memories_into_prompt(&char_name, &query)
         })
         .await
@@ -2754,7 +2768,10 @@ mod tests {
             .map(|n| n.content.clone())
             .collect();
         asst_children.sort();
-        assert_eq!(asst_children, vec!["A1 answer".to_string(), "A2 answer".to_string()]);
+        assert_eq!(
+            asst_children,
+            vec!["A1 answer".to_string(), "A2 answer".to_string()]
+        );
     }
 
     #[test]
@@ -2783,7 +2800,10 @@ mod tests {
         let tree = backend.load_tree("s");
         let a: Vec<_> = tree.iter().filter(|n| n.msg_id == "A").collect();
         assert_eq!(a.len(), 1, "still exactly one assistant node A");
-        assert_eq!(a[0].content, "second", "reused id UPSERTs content, not dropped");
+        assert_eq!(
+            a[0].content, "second",
+            "reused id UPSERTs content, not dropped"
+        );
     }
 
     #[test]
@@ -2815,7 +2835,10 @@ mod tests {
         let leaf = persist_turn_as_nodes(&backend, "s", "Q2", "second answer", "complete", &ids2);
 
         let tree = backend.load_tree("s");
-        let u = tree.iter().find(|n| n.msg_id == "U").expect("node U survives");
+        let u = tree
+            .iter()
+            .find(|n| n.msg_id == "U")
+            .expect("node U survives");
         assert_eq!(u.role, "user", "U is NOT flipped to assistant");
         assert_eq!(u.content, "Q1", "U content NOT clobbered");
         // The fresh assistant carries the new content under the new user node.
@@ -2823,9 +2846,16 @@ mod tests {
             .iter()
             .find(|n| n.role == "assistant" && n.content == "second answer")
             .expect("a fresh assistant node was minted");
-        assert_ne!(fresh.msg_id, "U", "minted a fresh id, not the colliding one");
+        assert_ne!(
+            fresh.msg_id, "U",
+            "minted a fresh id, not the colliding one"
+        );
         assert_eq!(fresh.parent_id.as_deref(), Some("U2"));
-        assert_eq!(leaf.as_deref(), Some(fresh.msg_id.as_str()), "active leaf = fresh node");
+        assert_eq!(
+            leaf.as_deref(),
+            Some(fresh.msg_id.as_str()),
+            "active leaf = fresh node"
+        );
     }
 
     #[test]
@@ -2854,15 +2884,24 @@ mod tests {
         persist_turn_as_nodes(&backend, "s", "Q2", "ans2", "complete", &ids2);
 
         let tree = backend.load_tree("s");
-        let a1 = tree.iter().find(|n| n.msg_id == "A1").expect("node A1 survives");
+        let a1 = tree
+            .iter()
+            .find(|n| n.msg_id == "A1")
+            .expect("node A1 survives");
         assert_eq!(a1.role, "assistant", "A1 is NOT flipped to user");
         assert_eq!(a1.content, "ans1", "A1 content NOT clobbered");
         let fresh_user = tree
             .iter()
             .find(|n| n.role == "user" && n.content == "Q2")
             .expect("a fresh user node was minted");
-        assert_ne!(fresh_user.msg_id, "A1", "minted a fresh user id, not the colliding one");
-        let a2 = tree.iter().find(|n| n.msg_id == "A2").expect("assistant A2 exists");
+        assert_ne!(
+            fresh_user.msg_id, "A1",
+            "minted a fresh user id, not the colliding one"
+        );
+        let a2 = tree
+            .iter()
+            .find(|n| n.msg_id == "A2")
+            .expect("assistant A2 exists");
         assert_eq!(
             a2.parent_id.as_deref(),
             Some(fresh_user.msg_id.as_str()),
@@ -2890,10 +2929,17 @@ mod tests {
         assert!(apply_edit(&backend, "s", "A", "edited ans"));
 
         let tree = backend.load_tree("s");
-        let a = tree.iter().find(|n| n.msg_id == "A").expect("node A exists");
+        let a = tree
+            .iter()
+            .find(|n| n.msg_id == "A")
+            .expect("node A exists");
         assert_eq!(a.content, "edited ans");
         assert_eq!(a.role, "assistant", "role preserved");
-        assert_eq!(a.parent_id.as_deref(), Some("U"), "parent unchanged (in-place)");
+        assert_eq!(
+            a.parent_id.as_deref(),
+            Some("U"),
+            "parent unchanged (in-place)"
+        );
     }
 
     #[test]
@@ -2948,7 +2994,10 @@ mod tests {
         assert!(apply_edit(&backend, "s", &lin_id, "edited hello"));
 
         let tree = backend.load_tree("s");
-        assert_eq!(tree[0].content, "edited hello", "legacy row edited by rowid");
+        assert_eq!(
+            tree[0].content, "edited hello",
+            "legacy row edited by rowid"
+        );
     }
 
     #[test]
@@ -2978,7 +3027,10 @@ mod tests {
         assert_eq!(removed, vec!["A2".to_string(), "U2".to_string()]);
 
         let tree = backend.load_tree("s");
-        assert!(!tree.iter().any(|n| n.msg_id == "U2" || n.msg_id == "A2"), "subtree gone");
+        assert!(
+            !tree.iter().any(|n| n.msg_id == "U2" || n.msg_id == "A2"),
+            "subtree gone"
+        );
         assert!(tree.iter().any(|n| n.msg_id == "U"), "U remains");
         assert!(tree.iter().any(|n| n.msg_id == "A"), "A remains");
     }
@@ -2996,25 +3048,56 @@ mod tests {
         // U has two assistant siblings A1 and A2 (regenerate); A2 is continued
         // with U2 -> A2b. Deleting A1 (a leaf sibling) must spare everything else.
         persist_turn_as_nodes(
-            &backend, "s", "Q", "ans1", "complete",
-            &TurnNodeIds { parent_id: None, user_msg_id: Some("U".into()), assistant_msg_id: Some("A1".into()) },
+            &backend,
+            "s",
+            "Q",
+            "ans1",
+            "complete",
+            &TurnNodeIds {
+                parent_id: None,
+                user_msg_id: Some("U".into()),
+                assistant_msg_id: Some("A1".into()),
+            },
         );
         persist_turn_as_nodes(
-            &backend, "s", "Q", "ans2", "complete",
-            &TurnNodeIds { parent_id: None, user_msg_id: Some("U".into()), assistant_msg_id: Some("A2".into()) },
+            &backend,
+            "s",
+            "Q",
+            "ans2",
+            "complete",
+            &TurnNodeIds {
+                parent_id: None,
+                user_msg_id: Some("U".into()),
+                assistant_msg_id: Some("A2".into()),
+            },
         );
         persist_turn_as_nodes(
-            &backend, "s", "Q2", "ans2b", "complete",
-            &TurnNodeIds { parent_id: Some("A2".into()), user_msg_id: Some("U2".into()), assistant_msg_id: Some("A2b".into()) },
+            &backend,
+            "s",
+            "Q2",
+            "ans2b",
+            "complete",
+            &TurnNodeIds {
+                parent_id: Some("A2".into()),
+                user_msg_id: Some("U2".into()),
+                assistant_msg_id: Some("A2b".into()),
+            },
         );
 
         let removed = apply_delete(&backend, "s", "A1");
-        assert_eq!(removed, vec!["A1".to_string()], "only the A1 leaf is removed");
+        assert_eq!(
+            removed,
+            vec!["A1".to_string()],
+            "only the A1 leaf is removed"
+        );
 
         let tree = backend.load_tree("s");
         assert!(!tree.iter().any(|n| n.msg_id == "A1"), "A1 gone");
         for survivor in ["U", "A2", "U2", "A2b"] {
-            assert!(tree.iter().any(|n| n.msg_id == survivor), "{survivor} survives the sibling delete");
+            assert!(
+                tree.iter().any(|n| n.msg_id == survivor),
+                "{survivor} survives the sibling delete"
+            );
         }
     }
 
@@ -3030,15 +3113,30 @@ mod tests {
             zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
 
         persist_turn_as_nodes(
-            &backend, "s", "Q", "ans", "complete",
-            &TurnNodeIds { parent_id: None, user_msg_id: Some("U".into()), assistant_msg_id: Some("A".into()) },
+            &backend,
+            "s",
+            "Q",
+            "ans",
+            "complete",
+            &TurnNodeIds {
+                parent_id: None,
+                user_msg_id: Some("U".into()),
+                assistant_msg_id: Some("A".into()),
+            },
         );
 
         let mut removed = apply_delete(&backend, "s", "U");
         removed.sort();
-        assert_eq!(removed, vec!["A".to_string(), "U".to_string()], "whole tree removed");
+        assert_eq!(
+            removed,
+            vec!["A".to_string(), "U".to_string()],
+            "whole tree removed"
+        );
 
-        assert!(backend.load_tree("s").is_empty(), "tree empty after root delete");
+        assert!(
+            backend.load_tree("s").is_empty(),
+            "tree empty after root delete"
+        );
         assert!(
             backend.load_active_path("s").is_empty(),
             "read path coherent (empty) despite a dangling active_leaf"
@@ -3072,7 +3170,11 @@ mod tests {
         let removed = apply_delete(&backend, "s", "U2");
 
         let active = backend.get_active_leaf("s");
-        assert_eq!(active.as_deref(), Some("A"), "active leaf reset to deleted node's parent");
+        assert_eq!(
+            active.as_deref(),
+            Some("A"),
+            "active leaf reset to deleted node's parent"
+        );
         assert!(
             !active.as_ref().is_some_and(|l| removed.contains(l)),
             "active leaf is never a removed id"

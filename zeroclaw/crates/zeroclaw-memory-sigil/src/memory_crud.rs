@@ -440,14 +440,11 @@ pub fn get_access_times(
              ORDER BY accessed_at DESC"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            params_from_iter(batch.iter().map(String::as_str)),
-            |row| {
-                let memory_id: String = row.get(0)?;
-                let accessed_at: String = row.get(1)?;
-                Ok((memory_id, accessed_at))
-            },
-        )?;
+        let rows = stmt.query_map(params_from_iter(batch.iter().map(String::as_str)), |row| {
+            let memory_id: String = row.get(0)?;
+            let accessed_at: String = row.get(1)?;
+            Ok((memory_id, accessed_at))
+        })?;
         for row in rows {
             let (memory_id, accessed_at) = row?;
             if let Ok(dt) = accessed_at.parse::<chrono::DateTime<Utc>>() {
@@ -613,9 +610,11 @@ mod crud_tests {
         )
         .unwrap();
 
-        let times =
-            get_access_times(&conn, &["m1".to_string(), "m2".to_string(), "m3".to_string()])
-                .unwrap();
+        let times = get_access_times(
+            &conn,
+            &["m1".to_string(), "m2".to_string(), "m3".to_string()],
+        )
+        .unwrap();
         assert_eq!(times["m1"].len(), 3, "m1 has 3 accesses");
         assert_eq!(times["m2"].len(), 1, "m2 has 1 access");
         assert!(

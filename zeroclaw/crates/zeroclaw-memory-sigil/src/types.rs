@@ -331,4 +331,3 @@ pub fn default_tier() -> String {
 fn default_edge_weight() -> f64 {
     1.0
 }
-
