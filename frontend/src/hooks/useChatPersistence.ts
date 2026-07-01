@@ -14,6 +14,8 @@ import {
   getChatList,
   createNewChatFileName,
   stripChatExtension,
+  loadMessagesFromServer,
+  migrateCharacterToServer,
 } from '../services/chatService';
 import { generateId } from '../utils/id';
 import { Role } from '../types';
@@ -155,6 +157,16 @@ export const useChatPersistence = (
       lastLoadedCharacterIdRef.current = null;
 
       try {
+        const serverResult = await loadMessagesFromServer(selectedCharacter.name);
+        if (activeLoadIdRef.current !== currentCharacterId) return;
+
+        if (serverResult && serverResult.messages.length > 0) {
+          setMessages(serverResult.messages);
+          setCurrentChatFileName(createNewChatFileName(selectedCharacter.name));
+          lastLoadedCharacterIdRef.current = currentCharacterId;
+          return;
+        }
+
         const history = await getChatList(selectedCharacter.id);
         setChatHistory(history);
 
@@ -164,7 +176,6 @@ export const useChatPersistence = (
         }
 
         if (history.length > 0) {
-          // Load the most recent chat
           const mostRecent = history[0];
           const fileName = stripChatExtension(mostRecent.file_name);
 
@@ -178,6 +189,9 @@ export const useChatPersistence = (
             setMessages(loadedMessages);
             setCurrentChatFileName(fileName);
             lastLoadedCharacterIdRef.current = currentCharacterId;
+            if (!serverResult) {
+              void migrateCharacterToServer(selectedCharacter.name, loadedMessages);
+            }
             return;
           }
         }
@@ -255,11 +269,17 @@ export const useChatPersistence = (
       if (savedCharacter) {
         restoreInProgressRef.current = true;
         setSelectedCharacter(savedCharacter);
-        // Pull the canonical messages from IndexedDB — the localStorage
-        // pointer only carries metadata, never the messages themselves.
         try {
-          const { messages: loaded } = await loadChat(savedCharacter.id, lastSession.chatFileName);
-          setMessages(loaded.length > 0 ? loaded : []);
+          const serverResult = await loadMessagesFromServer(savedCharacter.name);
+          if (serverResult && serverResult.messages.length > 0) {
+            setMessages(serverResult.messages);
+          } else {
+            const { messages: loaded } = await loadChat(savedCharacter.id, lastSession.chatFileName);
+            setMessages(loaded.length > 0 ? loaded : []);
+            if (loaded.length > 0) {
+              void migrateCharacterToServer(savedCharacter.name, loaded);
+            }
+          }
         } catch {
           setMessages([]);
         }

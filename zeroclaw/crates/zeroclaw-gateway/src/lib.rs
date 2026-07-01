@@ -23,10 +23,12 @@ pub mod api_logs;
 pub mod api_onboard;
 pub mod api_pairing;
 pub mod api_personality;
+pub mod api_sessions;
 pub mod api_skills;
 pub mod api_tts;
 pub mod auth_rate_limit;
 pub mod canvas;
+pub mod chat_prompt;
 pub mod node_tool;
 pub mod nodes;
 pub mod openapi;
@@ -1538,6 +1540,8 @@ pub async fn run_gateway(
         .route("/api/sessions/{id}", delete(api::handle_api_session_delete).put(api::handle_api_session_rename))
         .route("/api/sessions/{id}/state", get(api::handle_api_session_state))
         .route("/api/sessions/{id}/abort", post(api::handle_api_session_abort))
+        .route("/api/sessions/{key}/tree", get(api_sessions::handle_session_tree))
+        .route("/api/sessions/migrate", post(api_sessions::handle_sessions_migrate))
         // ── Pairing + Device management API ──
         .route("/api/pairing/initiate", post(api_pairing::initiate_pairing))
         .route("/api/pair", post(api_pairing::submit_pairing_enhanced))

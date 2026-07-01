@@ -7,7 +7,7 @@
  * IndexedDB is the sole source of truth.
  */
 
-import { Message } from '../types';
+import { Message, Role } from '../types';
 import {
   StoredChat as IDBStoredChat,
   storageGetChat,
@@ -17,6 +17,12 @@ import {
   storageListAllChats,
   storageClearForTests,
 } from './chatStorage';
+import {
+  getSessionTree,
+  sessionKeyForCharacter,
+  getToken,
+  type SessionTreeNode,
+} from './zeroclawService';
 
 const LEGACY_STORAGE_KEY = 'romanbath_chat_history_v1';
 
@@ -364,3 +370,87 @@ export const _resetForTests = async (): Promise<void> => {
   await storageClearForTests();
   migrationPromise = null;
 };
+
+export interface ServerLoadResult {
+  messages: Message[];
+  activeLeafId: string | null;
+  sessionKey: string;
+}
+
+function convertServerNodeToMessage(
+  node: SessionTreeNode,
+  childrenIds: string[]
+): Message {
+  const role = node.role === 'assistant' ? Role.Model : node.role === 'user' ? Role.User : Role.User;
+  const timestamp = node.timestamp
+    ? Date.parse(node.timestamp) || Date.now()
+    : Date.now();
+  return {
+    id: node.id,
+    role,
+    content: node.content,
+    timestamp,
+    parentId: node.parent_id ?? null,
+    childrenIds,
+  };
+}
+
+export const loadMessagesFromServer = async (
+  characterName: string
+): Promise<ServerLoadResult | null> => {
+  const sessionKey = sessionKeyForCharacter(characterName);
+  const tree = await getSessionTree(sessionKey);
+  if (!tree || !tree.session_persistence || tree.nodes.length === 0) {
+    return null;
+  }
+
+  const childrenOf = new Map<string | null, string[]>();
+  for (const node of tree.nodes) {
+    const parentKey = node.parent_id ?? null;
+    const arr = childrenOf.get(parentKey) ?? [];
+    arr.push(node.id);
+    childrenOf.set(parentKey, arr);
+  }
+
+  const messages: Message[] = tree.nodes.map((node) =>
+    convertServerNodeToMessage(node, childrenOf.get(node.id) ?? [])
+  );
+
+  return {
+    messages,
+    activeLeafId: tree.active_leaf,
+    sessionKey,
+  };
+};
+
+export async function migrateCharacterToServer(
+  characterName: string,
+  messages: Message[]
+): Promise<{ inserted: number; skipped: number } | null> {
+  if (messages.length === 0) return null;
+  const sessionKey = sessionKeyForCharacter(characterName);
+  const nodes = messages.map((msg) => ({
+    id: msg.id,
+    parent_id: msg.parentId ?? null,
+    role: msg.role === Role.Model ? 'assistant' : 'user',
+    content: msg.content,
+    timestamp: new Date(msg.timestamp).toISOString(),
+  }));
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  try {
+    const resp = await fetch('/api/sessions/migrate', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ session_key: sessionKey, nodes, name: characterName }),
+    });
+    if (!resp.ok) return null;
+    const result = await resp.json();
+    return { inserted: result.inserted ?? 0, skipped: result.skipped ?? 0 };
+  } catch {
+    return null;
+  }
+}

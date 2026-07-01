@@ -1032,6 +1032,19 @@ async fn handle_socket(
                     let _ = sender.send(Message::Text(err.to_string().into())).await;
                     continue;
                 }
+                if let Some((established, incoming)) =
+                    detect_character_conflict(&parsed, &character_name)
+                {
+                    let err = serde_json::json!({
+                        "type": "error",
+                        "message": format!(
+                            "Cannot switch character from '{established}' to '{incoming}' mid-session; reconnect to change characters"
+                        ),
+                        "code": "CHARACTER_CONTEXT_CONFLICT"
+                    });
+                    let _ = sender.send(Message::Text(err.to_string().into())).await;
+                    continue;
+                }
                 // Cap content + client-minted ids before they become persisted
                 // tree nodes (replayed in every history_snapshot). The REST path
                 // is bounded by RequestBodyLimitLayer(MAX_BODY_SIZE); WS frames
@@ -1252,6 +1265,21 @@ fn parse_turn_node_ids(parsed: &serde_json::Value) -> TurnNodeIds {
     }
 }
 
+fn detect_character_conflict(
+    parsed: &serde_json::Value,
+    session_character: &Option<String>,
+) -> Option<(String, String)> {
+    let incoming = parsed["character_name"]
+        .as_str()
+        .filter(|s| !s.is_empty())?;
+    let established = session_character.as_ref()?;
+    if incoming != established.as_str() {
+        Some((established.clone(), incoming.to_string()))
+    } else {
+        None
+    }
+}
+
 /// Persist one conversation turn as exactly TWO tree nodes — the user node and
 /// the assistant node — under the session's validated tip (or the client's
 /// validated parent_id). Returns the assistant node id (the new active leaf).
@@ -1457,32 +1485,26 @@ fn apply_delete(
 /// Also injects relevant memories from past conversations.
 /// Returns `Ok(Some(first_mes))` if the card has an opening message,
 /// plus the companion persona extracted from extensions.companion (if any).
-fn inject_character_card(
-    agent: &mut zeroclaw_runtime::agent::Agent,
+fn build_character_prompt_components(
     character_name: &str,
     mode: Option<&str>,
     user_name: Option<&str>,
     user_description: Option<&str>,
     memory_context: &str,
 ) -> anyhow::Result<(
+    String,
     Option<String>,
     Option<zeroclaw_affect::CompanionPersona>,
-    String,
 )> {
     let mgr = zeroclaw_cards::CardManager::default()?;
     let card = mgr
         .load(character_name)
         .map_err(|e| anyhow::Error::msg(format!("{e}")))?;
 
-    // Extract companion persona from extensions.companion.
     let companion = parse_companion_from_extensions(&card.data.extensions, &card.data.name);
 
     let uname = user_name.unwrap_or("User");
     let char_mode = mode.unwrap_or("play");
-    // Pass the user's persona so the card prompt knows who the character is
-    // talking to — same input the SSE path feeds build_prompt_with_order.
-    // Previously the WS path passed None here, so the main companion never saw
-    // the user's self-description.
     let fragments = card.build_prompt(
         char_mode,
         uname,
@@ -1498,7 +1520,6 @@ fn inject_character_card(
 
     let image_contract = image_consistency_instructions(&card.data.extensions);
 
-    // Tool-use instructions for character chat
     let tool_instructions = format!(
         "\n\n## Tool Usage\n\nYou have access to image generation and voice tools. Use them naturally during conversation:\n\
          - For photos, call `xai_image_gen` with a clear English prompt that includes enough scene detail\n\
@@ -1518,12 +1539,9 @@ fn inject_character_card(
         full_prompt = format!("{full_prompt}\n\n{memory_context}");
     }
 
-    agent.add_custom_system_section("character_card", full_prompt.clone());
-
     let first_mes = if card.data.first_mes.is_empty() {
         None
     } else {
-        // Apply template substitution to first_mes
         let rendered = card
             .data
             .first_mes
@@ -1532,6 +1550,29 @@ fn inject_character_card(
         Some(rendered)
     };
 
+    Ok((full_prompt, first_mes, companion))
+}
+
+fn inject_character_card(
+    agent: &mut zeroclaw_runtime::agent::Agent,
+    character_name: &str,
+    mode: Option<&str>,
+    user_name: Option<&str>,
+    user_description: Option<&str>,
+    memory_context: &str,
+) -> anyhow::Result<(
+    Option<String>,
+    Option<zeroclaw_affect::CompanionPersona>,
+    String,
+)> {
+    let (full_prompt, first_mes, companion) = build_character_prompt_components(
+        character_name,
+        mode,
+        user_name,
+        user_description,
+        memory_context,
+    )?;
+    agent.add_custom_system_section("character_card", full_prompt.clone());
     Ok((first_mes, companion, full_prompt))
 }
 
@@ -3236,5 +3277,52 @@ mod tests {
         assert!(apply_delete(&backend, "s", "ghost").is_empty());
 
         assert_eq!(backend.load_tree("s").len(), before, "tree unchanged");
+    }
+
+    #[test]
+    fn detect_character_conflict_returns_none_when_no_session_character() {
+        let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": "Aria"});
+        assert!(detect_character_conflict(&parsed, &None).is_none());
+    }
+
+    #[test]
+    fn detect_character_conflict_returns_none_when_no_incoming_character() {
+        let parsed = serde_json::json!({"type": "message", "content": "hi"});
+        let session = Some("Aria".to_string());
+        assert!(detect_character_conflict(&parsed, &session).is_none());
+    }
+
+    #[test]
+    fn detect_character_conflict_returns_none_when_same_character() {
+        let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": "Aria"});
+        let session = Some("Aria".to_string());
+        assert!(detect_character_conflict(&parsed, &session).is_none());
+    }
+
+    #[test]
+    fn detect_character_conflict_returns_some_when_different() {
+        let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": "Bria"});
+        let session = Some("Aria".to_string());
+        let got = detect_character_conflict(&parsed, &session);
+        assert_eq!(got, Some(("Aria".to_string(), "Bria".to_string())));
+    }
+
+    #[test]
+    fn detect_character_conflict_ignores_empty_incoming() {
+        let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": ""});
+        let session = Some("Aria".to_string());
+        assert!(detect_character_conflict(&parsed, &session).is_none());
+    }
+
+    #[test]
+    fn build_character_prompt_components_errors_on_unknown_character() {
+        let result = build_character_prompt_components(
+            "ThisCharacterDoesNotExist12345",
+            Some("play"),
+            Some("User"),
+            None,
+            "",
+        );
+        assert!(result.is_err(), "unknown character must produce an error");
     }
 }

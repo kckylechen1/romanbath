@@ -1757,3 +1757,40 @@ export class ChatPushSubscriber {
     return this.source?.readyState === EventSource.OPEN;
   }
 }
+
+export interface SessionTreeNode {
+  id: string;
+  parent_id: string | null;
+  role: string;
+  content: string;
+  author_id?: string | null;
+  status?: string | null;
+  meta?: unknown;
+  timestamp?: string | null;
+}
+
+export interface SessionTreeResponse {
+  session_key: string;
+  nodes: SessionTreeNode[];
+  active_leaf: string | null;
+  session_persistence: boolean;
+}
+
+export async function getSessionTree(
+  sessionKey: string
+): Promise<SessionTreeResponse | null> {
+  try {
+    const resp = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionKey)}/tree`,
+      { headers: jsonHeaders() }
+    );
+    if (!resp.ok) return null;
+    return (await resp.json()) as SessionTreeResponse;
+  } catch {
+    return null;
+  }
+}
+
+export function sessionKeyForCharacter(characterName: string): string {
+  return `web:${characterName}`;
+}
