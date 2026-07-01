@@ -33,6 +33,7 @@ import { useMessageActions } from "./useMessageActions";
 import { useChatPush } from "./useChatPush";
 import { confirm as confirmDialog, prompt as promptDialog } from "../services/dialogService";
 import { indexMessages, pathToRoot } from "./useMessageTree";
+import { useUIStore } from "../store/uiStore";
 
 export const useAppLogic = () => {
   const { t, language, setLanguage } = useLanguage();
@@ -77,24 +78,14 @@ export const useAppLogic = () => {
     [messageTree, activeLeafId],
   );
 
-  // ==================== UI STATE ====================
-  const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
+  // ==================== UI STATE (via zustand) ====================
+  const ui = useUIStore();
 
   // ==================== BOOKMARK STATE ====================
   const [bookmarks, setBookmarks] = useState<ChatBookmark[]>([]);
-  const [showBookmarks, setShowBookmarks] = useState(false);
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   // ==================== GROUP CHAT STATE ====================
   const [activeGroup, setActiveGroup] = useState<GroupChat | null>(null);
-  const [showGroupManager, setShowGroupManager] = useState(false);
-
-  // ==================== IMAGE GENERATION STATE ====================
-  const [showImageGen, setShowImageGen] = useState(false);
-  const [imageGenPrompt, setImageGenPrompt] = useState<string | undefined>(undefined);
 
   // ==================== TOKEN COUNT ====================
   const [tokenCount, setTokenCount] = useState(0);
@@ -249,7 +240,7 @@ export const useAppLogic = () => {
     if (!ok) return;
 
     setMessages(bookmark.messages);
-    setShowBookmarks(false);
+    ui.setShowBookmarks(false);
     toast.success("Restored from bookmark");
   };
 
@@ -274,7 +265,7 @@ export const useAppLogic = () => {
   // ==================== GROUP CHAT ====================
   const handleSelectGroup = (group: GroupChat) => {
     setActiveGroup(group);
-    setShowGroupManager(false);
+    ui.setShowGroupManager(false);
 
     const newFileName = createNewChatFileName(`Group-${group.name}`);
     chatPersistence.setCurrentChatFileName(newFileName);
@@ -312,8 +303,8 @@ export const useAppLogic = () => {
 
   // ==================== IMAGE GENERATION ====================
   const handleGenerateImage = (prompt: string) => {
-    setImageGenPrompt(prompt);
-    setShowImageGen(true);
+    ui.setImageGenPrompt(prompt);
+    ui.setShowImageGen(true);
   };
 
   // ==================== CLEAR CHAT ====================
@@ -370,14 +361,14 @@ export const useAppLogic = () => {
     toggleVoiceInput,
 
     // UI
-    leftSidebarOpen,
-    setLeftSidebarOpen,
-    rightSidebarOpen,
-    setRightSidebarOpen,
-    mobileMenuOpen,
-    setMobileMenuOpen,
-    mobileSettingsOpen,
-    setMobileSettingsOpen,
+    leftSidebarOpen: ui.leftSidebarOpen,
+    setLeftSidebarOpen: ui.setLeftSidebarOpen,
+    rightSidebarOpen: ui.rightSidebarOpen,
+    setRightSidebarOpen: ui.setRightSidebarOpen,
+    mobileMenuOpen: ui.mobileMenuOpen,
+    setMobileMenuOpen: ui.setMobileMenuOpen,
+    mobileSettingsOpen: ui.mobileSettingsOpen,
+    setMobileSettingsOpen: ui.setMobileSettingsOpen,
 
     // Persistence
     showRestorePrompt: chatPersistence.showRestorePrompt,
@@ -391,21 +382,21 @@ export const useAppLogic = () => {
 
     // Bookmarks
     bookmarks,
-    showBookmarks,
-    setShowBookmarks,
-    showMoreMenu,
-    setShowMoreMenu,
+    showBookmarks: ui.showBookmarks,
+    setShowBookmarks: ui.setShowBookmarks,
+    showMoreMenu: ui.showMoreMenu,
+    setShowMoreMenu: ui.setShowMoreMenu,
 
     // Group chat
     activeGroup,
-    showGroupManager,
-    setShowGroupManager,
+    showGroupManager: ui.showGroupManager,
+    setShowGroupManager: ui.setShowGroupManager,
 
     // Image gen
-    showImageGen,
-    setShowImageGen,
-    imageGenPrompt,
-    setImageGenPrompt,
+    showImageGen: ui.showImageGen,
+    setShowImageGen: ui.setShowImageGen,
+    imageGenPrompt: ui.imageGenPrompt,
+    setImageGenPrompt: ui.setImageGenPrompt,
 
     // Token count
     tokenCount,
