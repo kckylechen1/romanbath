@@ -1,17 +1,26 @@
 use crate::{CardError, CharacterCard, CharacterData, extract_from_json, extract_from_png_bytes};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Manages a local library of imported character cards.
 pub struct CardManager {
     cards_dir: PathBuf,
+    cache: Arc<Mutex<HashMap<String, CachedCard>>>,
+}
+
+struct CachedCard {
+    card: CharacterCard,
+    mtime: SystemTime,
 }
 
 impl CardManager {
-    /// Create a new CardManager with the given storage directory.
     pub fn new(cards_dir: PathBuf) -> Self {
-        Self { cards_dir }
+        Self {
+            cards_dir,
+            cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Default cards directory: `~/.zeroclaw/characters/`
@@ -96,6 +105,10 @@ impl CardManager {
             fs::write(avatar_path, raw_bytes)?;
         }
 
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(&safe_name);
+        }
+
         Ok(name)
     }
 
@@ -108,10 +121,22 @@ impl CardManager {
     /// (RFC 3339 profile: integer part is seconds, sub-second zero) — matches
     /// what ST V3 records and round-trips cleanly through serde.
     pub fn save(&self, card: &CharacterCard) -> Result<String, CardError> {
-        // Read existing card (if any) to preserve `creation_date`. The
-        // canonical timestamp lives on disk, never in a duplicated field.
         let safe_name = sanitize_filename(&card.data.name);
         let json_path = self.cards_dir.join(format!("{safe_name}.json"));
+
+        if json_path.exists() {
+            if let Ok(existing_bytes) = fs::read(&json_path) {
+                if let Ok(existing_card) = serde_json::from_slice::<CharacterCard>(&existing_bytes) {
+                    if existing_card.data.name != card.data.name {
+                        return Err(CardError::AlreadyExists(format!(
+                            "A different character '{}' already occupies this slot",
+                            existing_card.data.name
+                        )));
+                    }
+                }
+            }
+        }
+
         let preserved_creation = if json_path.exists() {
             fs::read(&json_path)
                 .ok()
@@ -188,8 +213,33 @@ impl CardManager {
     pub fn load(&self, name: &str) -> Result<CharacterCard, CardError> {
         let safe_name = sanitize_filename(name);
         let json_path = self.cards_dir.join(format!("{safe_name}.json"));
+
+        let mtime = fs::metadata(&json_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+
+        if let Some(cache) = self.cache.lock().ok() {
+            if let Some(cached) = cache.get(&safe_name) {
+                if cached.mtime == mtime {
+                    return Ok(cached.card.clone());
+                }
+            }
+        }
+
         let bytes = fs::read(&json_path)?;
-        Ok(serde_json::from_slice(&bytes)?)
+        let card: CharacterCard = serde_json::from_slice(&bytes)?;
+
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(
+                safe_name,
+                CachedCard {
+                    card: card.clone(),
+                    mtime,
+                },
+            );
+        }
+
+        Ok(card)
     }
 
     /// Delete a character card by name.
@@ -203,6 +253,10 @@ impl CardManager {
         }
         if avatar_path.exists() {
             fs::remove_file(&avatar_path)?;
+        }
+
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(&safe_name);
         }
 
         Ok(())

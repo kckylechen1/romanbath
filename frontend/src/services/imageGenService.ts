@@ -68,17 +68,13 @@ export const buildCharacterPhotoPrompt = (
     identity ||
     [`The character is ${character.name}.`, character.description].filter(Boolean).join(' ');
 
-  const scene = requestText
-    .replace(/(?:发|傳|传|来|给|給|拍|看|send|show|take|share)/gi, ' ')
-    .replace(/(?:照片|相片|自拍|图|圖|photo|pic|picture|selfie|看看|see)/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const scene = requestText.trim();
 
   const parts = [
     baseIdentity,
     scenePrefix,
     scene
-      ? `Scene request: ${scene}`
+      ? `User request: ${scene}`
       : 'Scene request: casual in-character photo for the current conversation.',
     style ||
       'cinematic photorealistic style, natural skin texture, realistic anatomy, coherent lighting, consistent face identity',

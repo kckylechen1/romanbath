@@ -7,12 +7,13 @@
 use super::AppState;
 use axum::{
     Json,
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub struct ImageGenRequest {
@@ -82,12 +83,13 @@ pub async fn handle_image_gen(
         .find(|(ty, _, _)| *ty == "xai")
         .and_then(|(_, _, entry)| entry.api_key.clone());
 
-    match generate_xai_image(&req.prompt, resolution, api_key.as_deref()).await {
-        Ok(data_url) => (
+    let data_dir = state.config.read().data_dir.clone();
+    match generate_xai_image(&req.prompt, resolution, api_key.as_deref(), &data_dir).await {
+        Ok(image_url) => (
             StatusCode::OK,
             Json(ImageGenResponse {
                 success: true,
-                image_data_url: Some(data_url),
+                image_data_url: Some(image_url),
                 error: None,
             }),
         )
@@ -104,10 +106,50 @@ pub async fn handle_image_gen(
     }
 }
 
+pub async fn handle_serve_image(
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if id.contains('/') || id.contains("..") || id.contains('\\') {
+        return (StatusCode::BAD_REQUEST, "Invalid image id").into_response();
+    }
+
+    let home = directories::UserDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
+        .unwrap_or_default();
+    let path = home.join(".zeroclaw").join("data").join("images").join(&id);
+
+    if !path.exists() {
+        return (StatusCode::NOT_FOUND, "Image not found").into_response();
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png");
+    let content_type = match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => "application/octet-stream",
+    };
+
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, content_type)],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read image").into_response(),
+    }
+}
+
 async fn generate_xai_image(
     prompt: &str,
     resolution: &str,
     api_key: Option<&str>,
+    data_dir: &std::path::Path,
 ) -> Result<String, String> {
     let (auth_token, base_url) = resolve_xai_credentials(api_key).await?;
 
@@ -148,26 +190,41 @@ async fn generate_xai_image(
 
     let first = &data[0];
 
-    if let Some(b64) = first["b64_json"].as_str() {
-        let image_bytes = base64::engine::general_purpose::STANDARD
+    let image_bytes = if let Some(b64) = first["b64_json"].as_str() {
+        base64::engine::general_purpose::STANDARD
             .decode(b64)
-            .map_err(|e| format!("Failed to decode image data: {e}"))?;
-        let mime = zeroclaw_tools::xai_common::image_mime_type(&image_bytes);
-        Ok(format!("data:{mime};base64,{b64}"))
+            .map_err(|e| format!("Failed to decode image data: {e}"))?
     } else if let Some(img_url) = first["url"].as_str() {
-        let image_bytes = reqwest::get(img_url)
+        reqwest::get(img_url)
             .await
             .map_err(|e| format!("Failed to download image: {e}"))?
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read image data: {e}"))?;
-
-        let mime = zeroclaw_tools::xai_common::image_mime_type(&image_bytes);
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&image_bytes);
-        Ok(format!("data:{mime};base64,{b64}"))
+            .map_err(|e| format!("Failed to read image data: {e}"))?
+            .to_vec()
     } else {
-        Err("Response missing both b64_json and url".to_string())
-    }
+        return Err("Response missing both b64_json and url".to_string());
+    };
+
+    let mime = zeroclaw_tools::xai_common::image_mime_type(&image_bytes);
+    let ext = match &mime[..] {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "png",
+    };
+
+    let images_dir = data_dir.join("images");
+    std::fs::create_dir_all(&images_dir)
+        .map_err(|e| format!("Failed to create images dir: {e}"))?;
+
+    let filename = format!("{}.{}", Uuid::new_v4(), ext);
+    let file_path = images_dir.join(&filename);
+    std::fs::write(&file_path, &image_bytes)
+        .map_err(|e| format!("Failed to write image: {e}"))?;
+
+    Ok(format!("/api/images/{filename}"))
 }
 
 async fn resolve_xai_credentials(api_key: Option<&str>) -> Result<(String, String), String> {

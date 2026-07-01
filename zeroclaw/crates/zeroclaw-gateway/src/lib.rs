@@ -1526,6 +1526,7 @@ pub async fn run_gateway(
         )
         .route("/api/chat", post(api_chat::handle_chat))
         .route("/api/image-gen", post(api_image_gen::handle_image_gen))
+        .route("/api/images/{id}", get(api_image_gen::handle_serve_image))
         .route("/api/tts", post(api_tts::handle_tts))
         .route("/api/files/{*path}", get(api_files::handle_serve_file))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
