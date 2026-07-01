@@ -1,197 +1,91 @@
-/**
- * Markdown Renderer Component
- * Parses and renders markdown content with syntax highlighting for code blocks
- * Supports: bold, italic, code, code blocks, links, lists, and roleplay actions (*asterisks*)
- */
-
-import React, { useMemo } from 'react';
+import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface MarkdownRendererProps {
   content: string;
   className?: string;
 }
 
-// Simple markdown parser
-const parseMarkdown = (text: string): React.ReactNode[] => {
-  const elements: React.ReactNode[] = [];
-  let key = 0;
-
-  // Split by code blocks first (```...```)
-  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match;
-
-  const processInline = (text: string): React.ReactNode[] => {
-    const inlineElements: React.ReactNode[] = [];
-    let inlineKey = 0;
-
-    // For roleplay: detect *action* patterns (single asterisks around text)
-    // We'll handle this specially to show actions in a different color
-    const roleplayActionRegex = /\*([^*]+)\*/g;
-
-    // First, let's just do a simple split and process approach
-    let lastPos = 0;
-
-    // Process roleplay actions (*action*)
-    const actionMatches = [...text.matchAll(roleplayActionRegex)];
-    if (actionMatches.length > 0) {
-      actionMatches.forEach((match) => {
-        // Add text before the match
-        if (match.index! > lastPos) {
-          inlineElements.push(
-            <span key={`t-${inlineKey++}`}>{text.slice(lastPos, match.index)}</span>
-          );
-        }
-        // Add the action with special styling
-        inlineElements.push(
-          <span key={`action-${inlineKey++}`} className="italic text-amber-300/90">
-            *{match[1]}*
-          </span>
-        );
-        lastPos = match.index! + match[0].length;
-      });
-      // Add remaining text
-      if (lastPos < text.length) {
-        inlineElements.push(<span key={`t-${inlineKey++}`}>{text.slice(lastPos)}</span>);
-      }
-      return inlineElements;
-    }
-
-    // If no roleplay actions, just return the text
-    return [<span key={`t-${inlineKey++}`}>{text}</span>];
+function CodeBlock({ children, lang }: { children: string; lang?: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(children);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
-
-  const processTextBlock = (text: string): React.ReactNode[] => {
-    const lines = text.split('\n');
-    const blockElements: React.ReactNode[] = [];
-    let blockKey = 0;
-
-    lines.forEach((line) => {
-      // Headers
-      if (line.startsWith('### ')) {
-        blockElements.push(
-          <h3 key={`h3-${blockKey++}`} className="text-lg font-bold text-white mt-4 mb-2">
-            {processInline(line.slice(4))}
-          </h3>
-        );
-      } else if (line.startsWith('## ')) {
-        blockElements.push(
-          <h2 key={`h2-${blockKey++}`} className="text-xl font-bold text-white mt-4 mb-2">
-            {processInline(line.slice(3))}
-          </h2>
-        );
-      } else if (line.startsWith('# ')) {
-        blockElements.push(
-          <h1 key={`h1-${blockKey++}`} className="text-2xl font-bold text-white mt-4 mb-2">
-            {processInline(line.slice(2))}
-          </h1>
-        );
-      }
-      // Unordered list
-      else if (line.match(/^[\s]*[-*]\s/)) {
-        const indent = line.match(/^(\s*)/)?.[1].length || 0;
-        const content = line.replace(/^[\s]*[-*]\s/, '');
-        blockElements.push(
-          <div
-            key={`li-${blockKey++}`}
-            className="flex items-start gap-2"
-            style={{ marginLeft: indent * 4 }}
-          >
-            <span className="text-slate-500 mt-1">•</span>
-            <span>{processInline(content)}</span>
-          </div>
-        );
-      }
-      // Ordered list
-      else if (line.match(/^[\s]*\d+\.\s/)) {
-        const numMatch = line.match(/^[\s]*(\d+)\.\s/);
-        const num = numMatch?.[1] || '1';
-        const content = line.replace(/^[\s]*\d+\.\s/, '');
-        blockElements.push(
-          <div key={`ol-${blockKey++}`} className="flex items-start gap-2">
-            <span className="text-slate-500 min-w-[1.5rem]">{num}.</span>
-            <span>{processInline(content)}</span>
-          </div>
-        );
-      }
-      // Blockquote
-      else if (line.startsWith('> ')) {
-        blockElements.push(
-          <blockquote
-            key={`bq-${blockKey++}`}
-            className="border-l-2 border-slate-600 pl-4 py-1 my-2 text-slate-400 italic"
-          >
-            {processInline(line.slice(2))}
-          </blockquote>
-        );
-      }
-      // Horizontal rule
-      else if (line.match(/^[-*_]{3,}$/)) {
-        blockElements.push(<hr key={`hr-${blockKey++}`} className="border-slate-700 my-4" />);
-      }
-      // Empty line = paragraph break
-      else if (line.trim() === '') {
-        blockElements.push(<div key={`br-${blockKey++}`} className="h-2" />);
-      }
-      // Regular paragraph
-      else {
-        blockElements.push(
-          <p key={`p-${blockKey++}`} className="leading-relaxed">
-            {processInline(line)}
-          </p>
-        );
-      }
-    });
-
-    return blockElements;
-  };
-
-  // Find all code blocks
-  while ((match = codeBlockRegex.exec(text)) !== null) {
-    // Add text before code block
-    if (match.index > lastIndex) {
-      const textBefore = text.slice(lastIndex, match.index);
-      elements.push(...processTextBlock(textBefore));
-    }
-
-    // Add code block
-    const language = match[1] || 'text';
-    const code = match[2].trim();
-    elements.push(
-      <div
-        key={`code-${key++}`}
-        className="my-3 rounded-xl overflow-hidden border border-slate-700/50"
-      >
-        <div className="flex items-center justify-between px-4 py-2 bg-slate-800/80 border-b border-slate-700/50">
-          <span className="text-xs font-mono text-slate-500 uppercase">{language}</span>
-          <button
-            onClick={() => navigator.clipboard.writeText(code)}
-            className="text-xs text-slate-500 hover:text-white transition-colors"
-          >
-            Copy
-          </button>
-        </div>
-        <pre className="p-4 bg-slate-900/80 overflow-x-auto">
-          <code className="text-sm font-mono text-slate-300 whitespace-pre">{code}</code>
-        </pre>
+  return (
+    <div className="my-3 rounded-xl overflow-hidden border border-slate-700/50">
+      <div className="flex items-center justify-between px-4 py-2 bg-slate-800/80 border-b border-slate-700/50">
+        <span className="text-xs font-mono text-slate-500 uppercase">{lang || 'text'}</span>
+        <button onClick={handleCopy} className="text-xs text-slate-500 hover:text-white transition-colors">
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
       </div>
-    );
-
-    lastIndex = match.index + match[0].length;
-  }
-
-  // Add remaining text after last code block
-  if (lastIndex < text.length) {
-    elements.push(...processTextBlock(text.slice(lastIndex)));
-  }
-
-  return elements;
-};
+      <pre className="p-4 bg-slate-900/80 overflow-x-auto">
+        <code className="text-sm font-mono text-slate-300 whitespace-pre">{children}</code>
+      </pre>
+    </div>
+  );
+}
 
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className = '' }) => {
-  const rendered = useMemo(() => parseMarkdown(content), [content]);
-
-  return <div className={`markdown-content space-y-1 ${className}`}>{rendered}</div>;
+  return (
+    <div className={`markdown-content space-y-1 ${className}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          em: ({ children }) => (
+            <span className="italic text-amber-300/90">*{children}*</span>
+          ),
+          pre: ({ children }) => <>{children}</>,
+          code: ({ className: cls, children }) => {
+            const match = /language-(\w+)/.exec(cls || '');
+            const isBlock = (cls || '').includes('language-');
+            if (isBlock) {
+              return <CodeBlock lang={match?.[1]}>{String(children).replace(/\n$/, '')}</CodeBlock>;
+            }
+            return (
+              <code className="px-1.5 py-0.5 rounded bg-slate-800 text-sm font-mono text-emerald-300">
+                {children}
+              </code>
+            );
+          },
+          h1: ({ children }) => <h1 className="text-2xl font-bold text-white mt-4 mb-2">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-xl font-bold text-white mt-4 mb-2">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-lg font-bold text-white mt-4 mb-2">{children}</h3>,
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-slate-600 pl-4 py-1 my-2 text-slate-400 italic">
+              {children}
+            </blockquote>
+          ),
+          hr: () => <hr className="border-slate-700 my-4" />,
+          a: ({ children, href }) => (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-bath-400 hover:text-bath-300 underline">
+              {children}
+            </a>
+          ),
+          table: ({ children }) => (
+            <table className="my-3 border-collapse border border-slate-700 w-full text-sm">{children}</table>
+          ),
+          th: ({ children }) => (
+            <th className="border border-slate-700 px-3 py-1.5 bg-slate-800/60 text-left font-semibold text-white">{children}</th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-slate-700 px-3 py-1.5 text-slate-300">{children}</td>
+          ),
+          ul: ({ children }) => <ul className="list-disc list-inside space-y-0.5 my-1">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal list-inside space-y-0.5 my-1">{children}</ol>,
+          li: ({ children }) => <li className="text-slate-200">{children}</li>,
+          p: ({ children }) => <p className="leading-relaxed">{children}</p>,
+          strong: ({ children }) => <strong className="font-bold text-white">{children}</strong>,
+          del: ({ children }) => <del className="text-slate-500 line-through">{children}</del>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 };
 
 export default MarkdownRenderer;

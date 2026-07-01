@@ -32,6 +32,7 @@ pub mod chat_prompt;
 pub mod node_tool;
 pub mod nodes;
 pub mod openapi;
+pub mod rpc;
 pub mod session_queue;
 pub mod sse;
 pub mod static_files;
