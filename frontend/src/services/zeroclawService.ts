@@ -1779,15 +1779,19 @@ export interface SessionTreeResponse {
 export async function getSessionTree(
   sessionKey: string
 ): Promise<SessionTreeResponse | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const resp = await fetch(
       `/api/sessions/${encodeURIComponent(sessionKey)}/tree`,
-      { headers: jsonHeaders() }
+      { headers: jsonHeaders(), signal: controller.signal }
     );
     if (!resp.ok) return null;
     return (await resp.json()) as SessionTreeResponse;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

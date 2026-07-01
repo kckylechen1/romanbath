@@ -132,6 +132,14 @@ pub async fn handle_sessions_migrate(
 
     let session_key = body.session_key.clone();
 
+    if session_key.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "session_key must not be empty"})),
+        )
+            .into_response();
+    }
+
     let Some(ref backend) = state.session_backend else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -206,12 +214,10 @@ pub async fn handle_sessions_migrate(
             }
         }
 
-        let created_at = body.nodes.iter().find(|n| n.id == node.id).and_then(|n| {
-            n.timestamp.as_ref().and_then(|ts| {
-                chrono::DateTime::parse_from_rfc3339(ts)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-            })
+        let created_at = node.timestamp.as_ref().and_then(|ts| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc))
         });
 
         let conv = ConversationNode {

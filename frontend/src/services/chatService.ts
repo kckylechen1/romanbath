@@ -381,7 +381,12 @@ function convertServerNodeToMessage(
   node: SessionTreeNode,
   childrenIds: string[]
 ): Message {
-  const role = node.role === 'assistant' ? Role.Model : node.role === 'user' ? Role.User : Role.User;
+  const role =
+    node.role === 'assistant'
+      ? Role.Model
+      : node.role === 'system'
+        ? Role.Model
+        : Role.User;
   const timestamp = node.timestamp
     ? Date.parse(node.timestamp) || Date.now()
     : Date.now();
