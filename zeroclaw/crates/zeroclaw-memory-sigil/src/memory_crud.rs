@@ -17,6 +17,8 @@ pub enum MemoryError {
     Sqlite(#[from] rusqlite::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("FTS tokenizer registration error: {0}")]
+    Tokenizer(String),
     #[error("Invalid argument: {0}")]
     InvalidArg(String),
     #[error("I/O error: {0}")]
@@ -73,6 +75,33 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> Result<MemoryEntry, rusqlite::Error>
 }
 
 const ENTRY_COLUMNS: &str = r#"id,path,summary,text,importance,timestamp,category,keywords,entities,source,scope,archived,access_count,last_access,retention_policy,metadata,recall_count,query_diversity,tier"#;
+
+fn join_fts_terms(terms: &[String]) -> String {
+    terms.join(" ")
+}
+
+pub(crate) fn fts_terms_from_json(json: &str) -> String {
+    serde_json::from_str::<Vec<String>>(json)
+        .unwrap_or_default()
+        .join(" ")
+}
+
+pub(crate) fn insert_fts_row(
+    conn: &Connection,
+    id: &str,
+    path: &str,
+    summary: &str,
+    text: &str,
+    keywords: &str,
+    entities: &str,
+) -> Result<(), MemoryError> {
+    conn.execute(
+        "INSERT INTO memories_fts(id, path, summary, text, keywords, entities)
+         VALUES (?1,?2,?3,?4,?5,?6)",
+        params![id, path, summary, text, keywords, entities],
+    )?;
+    Ok(())
+}
 
 // ─── UPSERT ──────────────────────────────────────────────────────────────────
 
@@ -152,20 +181,17 @@ pub fn upsert(conn: &mut Connection, entry: &MemoryEntry) -> Result<(), MemoryEr
     )?;
 
     // Sync FTS
-    let kws = entry.keywords.join(" ");
-    let ents = entry.entities.join(" ");
+    let kws = join_fts_terms(&entry.keywords);
+    let ents = join_fts_terms(&entry.entities);
     tx.execute("DELETE FROM memories_fts WHERE id = ?1", params![entry.id])?;
-    tx.execute(
-        "INSERT INTO memories_fts(id, path, summary, text, keywords, entities)
-         VALUES (?1,?2,?3,?4,?5,?6)",
-        params![
-            entry.id,
-            &entry.path,
-            &clean_summary,
-            &clean_text,
-            kws,
-            ents
-        ],
+    insert_fts_row(
+        &tx,
+        &entry.id,
+        &entry.path,
+        &clean_summary,
+        &clean_text,
+        &kws,
+        &ents,
     )?;
 
     tx.commit()?;
@@ -249,7 +275,7 @@ pub fn search_fts(
         r#"SELECT memories_fts.id, -bm25(memories_fts) AS score
            FROM memories_fts
            JOIN memories m ON m.id = memories_fts.id
-           WHERE memories_fts MATCH ?1
+           WHERE memories_fts MATCH simple_query(?1)
               AND m.archived = 0
               AND m.path LIKE ?3
            ORDER BY bm25(memories_fts)
@@ -258,7 +284,7 @@ pub fn search_fts(
         r#"SELECT memories_fts.id, -bm25(memories_fts) AS score
            FROM memories_fts
            JOIN memories m ON m.id = memories_fts.id
-           WHERE memories_fts MATCH ?1
+           WHERE memories_fts MATCH simple_query(?1)
               AND m.archived = 0
            ORDER BY bm25(memories_fts)
            LIMIT ?2"#
@@ -557,6 +583,7 @@ mod crud_tests {
     use rusqlite::Connection;
 
     fn setup() -> Connection {
+        crate::schema::ensure_simple_tokenizer().unwrap();
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::init_schema(&conn).unwrap();
         conn
@@ -665,6 +692,23 @@ mod crud_tests {
             results.values().all(|score| score.is_finite()),
             "FTS scores should be finite: {results:?}"
         );
+    }
+
+    #[test]
+    fn chinese_recall_hits_with_simple_tokenizer() {
+        let mut conn = setup();
+        let mut entry = test_memory("cjk-hit");
+        entry.summary = "work conflict".to_string();
+        entry.text = "我昨天和老板吵架了，心情很差".to_string();
+        upsert(&mut conn, &entry).unwrap();
+
+        let results = search_fts(&conn, "老板", 10, None).unwrap();
+        let score = results
+            .get("cjk-hit")
+            .copied()
+            .expect("Chinese query should hit the saved memory");
+
+        assert!(score.is_finite(), "FTS score should be finite: {score}");
     }
 
     #[test]

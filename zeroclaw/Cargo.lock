@@ -612,6 +612,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "better_embedded"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e28fd9c8a7f31a913128bee48a37e7abc57c37e71d27e8fb41f849cef36f143f"
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4661,6 +4667,17 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall 0.7.4",
+]
+
+[[package]]
+name = "libsimple"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f655111ccd59686b5e88fbae1fe655dc1b34ceadf3d6b0587a5b3cf0b35951a"
+dependencies = [
+ "better_embedded",
+ "cc",
+ "rusqlite",
 ]
 
 [[package]]
@@ -12261,6 +12278,7 @@ version = "0.8.0-beta-1"
 dependencies = [
  "anyhow",
  "chrono",
+ "libsimple",
  "regex",
  "rusqlite",
  "serde",
