@@ -209,13 +209,15 @@ fn rank_map(scores: &HashMap<String, f64>) -> HashMap<String, usize> {
 fn blend_rrf_with_vector_signal(
     id: &str,
     rrf_score: f64,
+    vec_part: f64,
     vec_scores: &HashMap<String, f64>,
     vec_weight: f64,
 ) -> f64 {
     let Some(cosine) = vec_scores.get(id).copied().map(normalize) else {
         return rrf_score;
     };
-    rrf_score * (1.0 + 0.15 * vec_weight.clamp(0.0, 1.0) * cosine)
+    // Boost only the semantic (vec_part) contribution; boosting the whole rrf_score would bypass fts/symbolic channel weights.
+    rrf_score + 0.15 * vec_weight.clamp(0.0, 1.0) * cosine * vec_part
 }
 
 fn retrieval_rrf_weight(weight: f64, total: f64) -> f64 {
@@ -280,7 +282,8 @@ pub fn hybrid_score(
                 .map(|rank| symbolic_weight / (rrf_k + *rank as f64))
                 .unwrap_or(0.0);
             let rrf_score = vec_part + fts_part + symbolic_part;
-            let blended = blend_rrf_with_vector_signal(id, rrf_score, vec_scores, vec_weight);
+            let blended =
+                blend_rrf_with_vector_signal(id, rrf_score, vec_part, vec_scores, vec_weight);
             blended + weights.decay * ds / rrf_k
         } else {
             weights.semantic * vs + weights.fts * fs + weights.symbolic * ss + weights.decay * ds
@@ -486,10 +489,10 @@ mod tests {
     fn rrf_blends_vector_signal_without_penalizing_missing_vector() {
         let vec_scores = HashMap::from([("a".to_string(), 0.99)]);
 
-        let with_vec = blend_rrf_with_vector_signal("a", 0.02, &vec_scores, 1.0);
+        let with_vec = blend_rrf_with_vector_signal("a", 0.02, 0.02, &vec_scores, 1.0);
         assert!(with_vec > 0.02, "blended should exceed base: {with_vec}");
 
-        let missing = blend_rrf_with_vector_signal("x", 0.02, &vec_scores, 1.0);
+        let missing = blend_rrf_with_vector_signal("x", 0.02, 0.02, &vec_scores, 1.0);
         assert_eq!(missing, 0.02);
     }
 }
