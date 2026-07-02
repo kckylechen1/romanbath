@@ -1,5 +1,5 @@
-//! Relationship memory — session-scoped affect trajectory + mood
-//! baseline.
+//! Relationship memory — affect trajectory, mood baseline, and bond
+//! state for tone/reminder-only prompt conditioning.
 //!
 //! MVP: in-memory only, resets at session start. Cross-session
 //! persistence (via sigil ChatMemoryStore or a dedicated affect DB)
@@ -9,6 +9,7 @@
 use crate::state::AffectState;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::fmt;
 
 /// Maximum trajectory readings kept in memory. Older readings are
 /// evicted FIFO. 50 ≈ a long session's worth of turns; enough for the
@@ -33,6 +34,173 @@ pub struct RelationshipMemory {
     /// Slow mood baseline (EMA). `None` until the first reading
     /// initializes it.
     pub mood_baseline: Option<AffectState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipBond {
+    #[serde(default)]
+    pub closeness: f32,
+    #[serde(default = "default_trust")]
+    pub trust: f32,
+    #[serde(default)]
+    pub interaction_count: u64,
+    #[serde(default)]
+    pub first_interaction_ms: i64,
+    #[serde(default)]
+    pub last_interaction_ms: i64,
+}
+
+impl Default for RelationshipBond {
+    fn default() -> Self {
+        Self {
+            closeness: 0.0,
+            trust: 0.5,
+            interaction_count: 0,
+            first_interaction_ms: 0,
+            last_interaction_ms: 0,
+        }
+    }
+}
+
+impl RelationshipBond {
+    pub fn record_turn(&mut self, at_ms: i64, affect: &AffectState) {
+        self.interaction_count += 1;
+        self.last_interaction_ms = at_ms;
+        if self.first_interaction_ms == 0 {
+            self.first_interaction_ms = at_ms;
+        }
+
+        let w = affect.confidence;
+        let v = affect.valence;
+        if v > 0.0 {
+            self.closeness += 0.02 * v * w;
+            self.trust += 0.01 * v * w;
+        } else if v < 0.0 {
+            self.closeness -= 0.01 * (-v) * w;
+            self.trust -= 0.03 * (-v) * w;
+        }
+        self.closeness = self.closeness.clamp(0.0, 1.0);
+        self.trust = self.trust.clamp(0.0, 1.0);
+    }
+
+    pub fn stage(&self) -> BondStage {
+        if self.closeness < 0.15 || self.interaction_count < 5 {
+            BondStage::Stranger
+        } else if self.closeness < 0.35 || self.interaction_count < 25 {
+            BondStage::Acquaintance
+        } else if self.closeness < 0.6 {
+            BondStage::Friend
+        } else if self.closeness < 0.85 {
+            BondStage::Close
+        } else {
+            BondStage::Intimate
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BondStage {
+    Stranger,
+    Acquaintance,
+    Friend,
+    Close,
+    Intimate,
+}
+
+impl BondStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stranger => "Stranger",
+            Self::Acquaintance => "Acquaintance",
+            Self::Friend => "Friend",
+            Self::Close => "Close",
+            Self::Intimate => "Intimate",
+        }
+    }
+}
+
+impl fmt::Display for BondStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AffectSnapshot {
+    #[serde(default = "default_snapshot_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub relationship: RelationshipMemory,
+    #[serde(default)]
+    pub bond: RelationshipBond,
+    #[serde(default)]
+    pub updated_at_ms: i64,
+}
+
+impl Default for AffectSnapshot {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            relationship: RelationshipMemory::default(),
+            bond: RelationshipBond::default(),
+            updated_at_ms: 0,
+        }
+    }
+}
+
+impl AffectSnapshot {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+
+    pub fn from_json(v: &serde_json::Value) -> Option<Self> {
+        serde_json::from_value(v.clone()).ok()
+    }
+
+    pub fn apply_idle_decay(&mut self, now_ms: i64) {
+        let hours = ((now_ms - self.updated_at_ms).max(0)) as f32 / 3_600_000.0;
+        self.relationship.decay_latest(1.0 - (-hours / 2.0).exp());
+        if let Some(baseline) = &mut self.relationship.mood_baseline {
+            baseline.decay_toward(&AffectState::neutral(), 1.0 - (-hours / 72.0).exp());
+        }
+    }
+
+    pub fn mood_hint(&self) -> Option<String> {
+        let low_baseline = self
+            .relationship
+            .mood_baseline
+            .as_ref()
+            .is_some_and(|b| b.valence < -0.25);
+        if self.relationship.sustained_negative(5) || low_baseline {
+            Some(
+                "[mood] The user's recent baseline has been low. Keep continuity of care — acknowledge what lingers; don't reset to cheerful."
+                    .to_string(),
+            )
+        } else {
+            None
+        }
+    }
+
+    pub fn bond_hint(&self) -> Option<String> {
+        let stage = self.bond.stage();
+        if stage == BondStage::Stranger {
+            None
+        } else {
+            Some(format!(
+                "[bond] Relationship stage: {}. {} prior interactions. Let familiarity match this stage — no more, no less.",
+                stage.as_str(),
+                self.bond.interaction_count
+            ))
+        }
+    }
+}
+
+fn default_trust() -> f32 {
+    0.5
+}
+
+fn default_snapshot_version() -> u32 {
+    1
 }
 
 impl Default for RelationshipMemory {
@@ -128,6 +296,15 @@ mod tests {
         }
     }
 
+    fn affect_with_confidence(v: f32, a: f32, confidence: f32) -> AffectState {
+        AffectState {
+            valence: v,
+            arousal: a,
+            label: AffectState::classify(v, a),
+            confidence,
+        }
+    }
+
     #[test]
     fn record_initializes_baseline() {
         let mut mem = RelationshipMemory::default();
@@ -192,5 +369,92 @@ mod tests {
         }
         mem.record(11, affect(-0.6, 0.2));
         assert!(!mem.sustained_negative(5));
+    }
+
+    #[test]
+    fn bond_stage_progresses_with_positive_turns() {
+        let mut bond = RelationshipBond::default();
+        assert_eq!(bond.stage(), BondStage::Stranger);
+        let positive = affect_with_confidence(0.8, 0.5, 0.9);
+
+        for i in 0..30 {
+            bond.record_turn(i, &positive);
+        }
+
+        assert_eq!(bond.interaction_count, 30);
+        assert!(bond.closeness > 0.3);
+        assert!(bond.closeness <= 1.0);
+        assert_ne!(bond.stage(), BondStage::Stranger);
+    }
+
+    #[test]
+    fn bond_trust_falls_three_times_faster() {
+        let mut negative_bond = RelationshipBond::default();
+        negative_bond.record_turn(1, &affect_with_confidence(-0.8, 0.5, 1.0));
+
+        let mut positive_bond = RelationshipBond::default();
+        positive_bond.record_turn(1, &affect_with_confidence(0.8, 0.5, 1.0));
+
+        let ratio = (0.5 - negative_bond.trust) / (positive_bond.trust - 0.5);
+        assert!((ratio - 3.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn idle_decay_relaxes_mood_not_bond() {
+        let now = 86_400_000;
+        let mut snapshot = AffectSnapshot {
+            updated_at_ms: 0,
+            ..Default::default()
+        };
+        for i in 0..10 {
+            snapshot.relationship.record(i, AffectState::neutral());
+        }
+        snapshot
+            .relationship
+            .record(10, affect_with_confidence(-0.9, 0.9, 0.9));
+        snapshot.bond.closeness = 0.7;
+
+        snapshot.apply_idle_decay(now);
+
+        assert!(snapshot.relationship.latest().unwrap().valence > -0.5);
+        assert_eq!(snapshot.bond.closeness, 0.7);
+    }
+
+    #[test]
+    fn snapshot_json_round_trip() {
+        let mut snapshot = AffectSnapshot {
+            updated_at_ms: 1234,
+            ..Default::default()
+        };
+        snapshot.bond.closeness = 0.42;
+        snapshot.bond.trust = 0.67;
+        snapshot.bond.interaction_count = 9;
+        snapshot.relationship.record(1, affect(0.4, 0.3));
+        snapshot.relationship.record(2, affect(-0.2, 0.4));
+
+        let parsed = AffectSnapshot::from_json(&snapshot.to_json()).unwrap();
+
+        assert_eq!(parsed.bond.closeness, snapshot.bond.closeness);
+        assert_eq!(parsed.bond.trust, snapshot.bond.trust);
+        assert_eq!(
+            parsed.bond.interaction_count,
+            snapshot.bond.interaction_count
+        );
+        assert_eq!(parsed.updated_at_ms, snapshot.updated_at_ms);
+        assert_eq!(
+            parsed.relationship.trajectory.len(),
+            snapshot.relationship.trajectory.len()
+        );
+    }
+
+    #[test]
+    fn bond_hint_gated_by_stage() {
+        assert!(AffectSnapshot::default().bond_hint().is_none());
+
+        let mut snapshot = AffectSnapshot::default();
+        snapshot.bond.closeness = 0.5;
+        snapshot.bond.interaction_count = 30;
+
+        assert!(snapshot.bond_hint().unwrap().contains("Friend"));
     }
 }
