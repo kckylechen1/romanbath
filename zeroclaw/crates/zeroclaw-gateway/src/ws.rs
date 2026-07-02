@@ -1753,7 +1753,9 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
 ///
 /// Both are gated on the same confidence floor: below it we return neither,
 /// so a flat "ok" neither injects an affect hint nor jitters the glow — the
-/// avatar stays at its warm default.
+/// avatar stays at its warm default. Low-confidence committed turns are weak
+/// evidence of calm, not zero evidence: they relax only the latest stored
+/// spike toward baseline, without growing trajectory or bond state.
 fn compute_affect(
     user_message: &str,
     persona: &zeroclaw_affect::CompanionPersona,
@@ -1776,6 +1778,12 @@ fn compute_affect(
     let (affect, stance) = perceive_and_appraise(&HeuristicEstimator, &ctx, &signals, persona);
 
     if affect.confidence < 0.35 {
+        if let Some(snap) = snapshot.as_deref_mut()
+            && !is_alternate
+        {
+            snap.relationship.decay_latest(0.15);
+            snap.updated_at_ms = chrono::Utc::now().timestamp_millis();
+        }
         return (String::new(), None);
     }
 
@@ -1783,9 +1791,7 @@ fn compute_affect(
     if let Some(snap) = snapshot.as_deref_mut()
         && !is_alternate
     {
-        snap.relationship.record(now_ms, affect.clone());
-        snap.bond.record_turn(now_ms, &affect);
-        snap.updated_at_ms = now_ms;
+        snap.record_turn(now_ms, &affect);
     }
 
     let mut hint = stance.to_prompt_hint();
@@ -2769,6 +2775,7 @@ mod tests {
         let mut snapshot = zeroclaw_affect::AffectSnapshot::default();
         snapshot.bond.closeness = 0.5;
         snapshot.bond.interaction_count = 30;
+        snapshot.bond.days_interacted = 30;
         for i in 0..6 {
             snapshot
                 .relationship
@@ -2789,17 +2796,26 @@ mod tests {
     }
 
     #[test]
-    fn compute_affect_low_confidence_stays_silent() {
+    fn compute_affect_low_confidence_relaxes_without_recording() {
         let persona = zeroclaw_affect::CompanionPersona::default();
         let mut snapshot = zeroclaw_affect::AffectSnapshot::default();
-        snapshot.bond.interaction_count = 7;
+        for i in 0..10 {
+            snapshot.relationship.record(i, affect_state(0.0, 0.2, 0.7));
+        }
+        snapshot
+            .relationship
+            .record(10, affect_state(-0.9, 0.9, 0.9));
+
+        assert_eq!(snapshot.bond.interaction_count, 0);
+        assert_eq!(snapshot.relationship.trajectory.len(), 11);
 
         let (hint, affect) = compute_affect("ok", &persona, Some(&mut snapshot), false);
 
         assert_eq!(hint, "");
         assert!(affect.is_none());
-        assert_eq!(snapshot.bond.interaction_count, 7);
-        assert!(snapshot.relationship.trajectory.is_empty());
+        assert_eq!(snapshot.bond.interaction_count, 0);
+        assert_eq!(snapshot.relationship.trajectory.len(), 11);
+        assert!(snapshot.relationship.latest().unwrap().valence > -0.9);
     }
 
     #[test]

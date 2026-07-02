@@ -45,6 +45,12 @@ pub struct RelationshipBond {
     #[serde(default)]
     pub interaction_count: u64,
     #[serde(default)]
+    pub days_interacted: u64,
+    #[serde(default = "default_gain_day")]
+    pub daily_gain_day: i64,
+    #[serde(default)]
+    pub daily_gain: f32,
+    #[serde(default)]
     pub first_interaction_ms: i64,
     #[serde(default)]
     pub last_interaction_ms: i64,
@@ -56,6 +62,9 @@ impl Default for RelationshipBond {
             closeness: 0.0,
             trust: 0.5,
             interaction_count: 0,
+            days_interacted: 0,
+            daily_gain_day: default_gain_day(),
+            daily_gain: 0.0,
             first_interaction_ms: 0,
             last_interaction_ms: 0,
         }
@@ -64,6 +73,8 @@ impl Default for RelationshipBond {
 
 impl RelationshipBond {
     pub fn record_turn(&mut self, at_ms: i64, affect: &AffectState) {
+        const DAILY_CLOSENESS_CAP: f32 = 0.06;
+
         self.interaction_count += 1;
         self.last_interaction_ms = at_ms;
         if self.first_interaction_ms == 0 {
@@ -72,21 +83,25 @@ impl RelationshipBond {
 
         let w = affect.confidence;
         let v = affect.valence;
-        if v > 0.0 {
-            self.closeness += 0.02 * v * w;
-            self.trust += 0.01 * v * w;
-        } else if v < 0.0 {
-            self.closeness -= 0.01 * (-v) * w;
-            self.trust -= 0.03 * (-v) * w;
+
+        let day = at_ms.div_euclid(86_400_000);
+        if day != self.daily_gain_day {
+            self.daily_gain_day = day;
+            self.daily_gain = 0.0;
+            self.days_interacted += 1;
         }
-        self.closeness = self.closeness.clamp(0.0, 1.0);
-        self.trust = self.trust.clamp(0.0, 1.0);
+
+        let gain = (0.02 * v.abs() * w)
+            .min(DAILY_CLOSENESS_CAP - self.daily_gain)
+            .max(0.0);
+        self.closeness = (self.closeness + gain).clamp(0.0, 1.0);
+        self.daily_gain += gain;
     }
 
     pub fn stage(&self) -> BondStage {
-        if self.closeness < 0.15 || self.interaction_count < 5 {
+        if self.closeness < 0.15 || self.days_interacted < 2 {
             BondStage::Stranger
-        } else if self.closeness < 0.35 || self.interaction_count < 25 {
+        } else if self.closeness < 0.35 || self.days_interacted < 7 {
             BondStage::Acquaintance
         } else if self.closeness < 0.6 {
             BondStage::Friend
@@ -165,6 +180,22 @@ impl AffectSnapshot {
         }
     }
 
+    pub fn record_turn(&mut self, at_ms: i64, affect: &AffectState) {
+        let prev_valence = self.relationship.latest().map(|s| s.valence);
+        self.relationship.record(at_ms, affect.clone());
+        self.bond.record_turn(at_ms, affect);
+        // Trust only rises when the companion measurably helps repair a low
+        // mood. Trust loss is deferred until companion-directed negativity is
+        // detectable; user sadness should not be treated as distrust.
+        if let Some(pv) = prev_valence
+            && pv <= -0.3
+            && affect.valence >= pv + 0.3
+        {
+            self.bond.trust = (self.bond.trust + 0.01 * affect.confidence).clamp(0.0, 1.0);
+        }
+        self.updated_at_ms = at_ms;
+    }
+
     pub fn mood_hint(&self) -> Option<String> {
         let low_baseline = self
             .relationship
@@ -197,6 +228,10 @@ impl AffectSnapshot {
 
 fn default_trust() -> f32 {
     0.5
+}
+
+fn default_gain_day() -> i64 {
+    -1
 }
 
 fn default_snapshot_version() -> u32 {
@@ -373,30 +408,55 @@ mod tests {
 
     #[test]
     fn bond_stage_progresses_with_positive_turns() {
-        let mut bond = RelationshipBond::default();
-        assert_eq!(bond.stage(), BondStage::Stranger);
-        let positive = affect_with_confidence(0.8, 0.5, 0.9);
+        let mut snapshot = AffectSnapshot::default();
+        assert_eq!(snapshot.bond.stage(), BondStage::Stranger);
+        let positive = affect_with_confidence(0.8, 0.7, 0.9);
 
-        for i in 0..30 {
-            bond.record_turn(i, &positive);
+        for day in 0..30 {
+            snapshot.record_turn(day * 86_400_000 + 1, &positive);
         }
 
-        assert_eq!(bond.interaction_count, 30);
-        assert!(bond.closeness > 0.3);
-        assert!(bond.closeness <= 1.0);
-        assert_ne!(bond.stage(), BondStage::Stranger);
+        assert_eq!(snapshot.bond.days_interacted, 30);
+        assert!(snapshot.bond.closeness > 0.3);
+        assert!(snapshot.bond.closeness <= 1.0);
+        assert_ne!(snapshot.bond.stage(), BondStage::Stranger);
     }
 
     #[test]
-    fn bond_trust_falls_three_times_faster() {
-        let mut negative_bond = RelationshipBond::default();
-        negative_bond.record_turn(1, &affect_with_confidence(-0.8, 0.5, 1.0));
+    fn trust_rises_only_on_mood_repair() {
+        let mut snapshot = AffectSnapshot::default();
+        snapshot.record_turn(1, &affect_with_confidence(-0.6, 0.6, 0.9));
+        assert_eq!(snapshot.bond.trust, 0.5);
 
-        let mut positive_bond = RelationshipBond::default();
-        positive_bond.record_turn(1, &affect_with_confidence(0.8, 0.5, 1.0));
+        snapshot.record_turn(2, &affect_with_confidence(0.1, 0.3, 0.9));
+        assert!(snapshot.bond.trust > 0.5);
 
-        let ratio = (0.5 - negative_bond.trust) / (positive_bond.trust - 0.5);
-        assert!((ratio - 3.0).abs() < 1e-3);
+        let trust = snapshot.bond.trust;
+        snapshot.record_turn(3, &affect_with_confidence(-0.9, 0.9, 1.0));
+        assert_eq!(snapshot.bond.trust, trust);
+    }
+
+    #[test]
+    fn confiding_sadness_builds_closeness() {
+        let mut snapshot = AffectSnapshot::default();
+        snapshot.record_turn(1, &affect_with_confidence(-0.8, 0.7, 0.9));
+
+        assert!(snapshot.bond.closeness > 0.0);
+        assert!((snapshot.bond.closeness - 0.0144).abs() < 1e-6);
+    }
+
+    #[test]
+    fn daily_cap_blocks_love_bombing() {
+        let mut snapshot = AffectSnapshot::default();
+        let excited = affect_with_confidence(1.0, 0.9, 1.0);
+
+        for turn in 1..=60 {
+            snapshot.record_turn(turn * 1_000, &excited);
+        }
+
+        assert!((snapshot.bond.closeness - 0.06).abs() < 1e-6);
+        assert_eq!(snapshot.bond.days_interacted, 1);
+        assert_eq!(snapshot.bond.stage(), BondStage::Stranger);
     }
 
     #[test]
@@ -429,6 +489,7 @@ mod tests {
         snapshot.bond.closeness = 0.42;
         snapshot.bond.trust = 0.67;
         snapshot.bond.interaction_count = 9;
+        snapshot.bond.days_interacted = 3;
         snapshot.relationship.record(1, affect(0.4, 0.3));
         snapshot.relationship.record(2, affect(-0.2, 0.4));
 
@@ -440,6 +501,7 @@ mod tests {
             parsed.bond.interaction_count,
             snapshot.bond.interaction_count
         );
+        assert_eq!(parsed.bond.days_interacted, snapshot.bond.days_interacted);
         assert_eq!(parsed.updated_at_ms, snapshot.updated_at_ms);
         assert_eq!(
             parsed.relationship.trajectory.len(),
@@ -454,6 +516,7 @@ mod tests {
         let mut snapshot = AffectSnapshot::default();
         snapshot.bond.closeness = 0.5;
         snapshot.bond.interaction_count = 30;
+        snapshot.bond.days_interacted = 30;
 
         assert!(snapshot.bond_hint().unwrap().contains("Friend"));
     }
