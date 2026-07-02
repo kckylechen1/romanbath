@@ -511,6 +511,41 @@ impl Agent {
         self.temperature = temperature;
     }
 
+    /// Swap the memory backend for the no-op `none` backend and stop auto-save.
+    /// Used by hosts whose session has its own memory system (e.g. character
+    /// chat uses the sigil per-character store): kills load_context injection,
+    /// auto_save writes, AND any memory-tool access in one move.
+    pub fn disable_memory(&mut self) {
+        self.auto_save = false;
+        let none_cfg = zeroclaw_config::schema::MemoryConfig {
+            backend: "none".to_string(),
+            ..Default::default()
+        };
+        match zeroclaw_memory::create_memory(&none_cfg, Path::new("."), None) {
+            Ok(mem) => self.memory = Arc::from(mem),
+            Err(e) => {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{e:#}")})),
+                    "Failed to disable agent memory"
+                );
+            }
+        }
+        self.tools.retain(|tool| {
+            !matches!(
+                tool.name(),
+                "memory_store"
+                    | "memory_recall"
+                    | "memory_forget"
+                    | "memory_export"
+                    | "memory_purge"
+            )
+        });
+        self.tool_specs = self.tools.iter().map(|tool| tool.spec()).collect();
+    }
+
     pub fn clear_history(&mut self) {
         self.history.clear();
     }
@@ -3801,6 +3836,132 @@ mod tests {
             .workspace_dir(std::path::PathBuf::from("/tmp"))
             .build()
             .expect("agent builder should succeed with valid config")
+    }
+
+    fn create_test_memory(backend: &str, workspace: &std::path::Path) -> Arc<dyn Memory> {
+        let memory_cfg = zeroclaw_config::schema::MemoryConfig {
+            backend: backend.into(),
+            ..zeroclaw_config::schema::MemoryConfig::default()
+        };
+        Arc::from(
+            zeroclaw_memory::create_memory(&memory_cfg, workspace, None)
+                .expect("memory creation should succeed with valid config"),
+        )
+    }
+
+    fn one_text_response(text: &str) -> zeroclaw_providers::ChatResponse {
+        zeroclaw_providers::ChatResponse {
+            text: Some(text.into()),
+            tool_calls: vec![],
+            usage: None,
+            reasoning_content: None,
+        }
+    }
+
+    fn set_agent_memory_for_test(agent: &mut Agent, memory: Arc<dyn Memory>) {
+        agent.memory = memory;
+        agent.memory_loader = Box::new(DefaultMemoryLoader::new(5, 0.0));
+    }
+
+    fn set_agent_responses_for_test(
+        agent: &mut Agent,
+        responses: Vec<zeroclaw_providers::ChatResponse>,
+    ) {
+        agent.model_provider = Box::new(MockModelProvider {
+            responses: Mutex::new(responses),
+        });
+    }
+
+    fn last_user_message(agent: &Agent) -> Option<&str> {
+        agent
+            .history()
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                ConversationMessage::Chat(chat) if chat.role == "user" => {
+                    Some(chat.content.as_str())
+                }
+                _ => None,
+            })
+    }
+
+    async fn user_msg_count(memory: &Arc<dyn Memory>) -> usize {
+        memory
+            .list(None, None)
+            .await
+            .expect("memory list should succeed")
+            .into_iter()
+            .filter(|entry| entry.key == "user_msg")
+            .count()
+    }
+
+    #[test]
+    fn disable_memory_swaps_to_none_backend() {
+        let workspace = tempfile::TempDir::new().expect("temp dir");
+        let sqlite = create_test_memory("sqlite", workspace.path());
+        let none = create_test_memory("none", workspace.path());
+        let mut agent = make_agent_for_system_prompt_test();
+        set_agent_memory_for_test(&mut agent, sqlite);
+        agent.auto_save = true;
+
+        assert_ne!(agent.memory.name(), none.name());
+
+        agent.disable_memory();
+
+        assert_eq!(agent.memory.name(), none.name());
+        assert!(!agent.auto_save);
+    }
+
+    #[tokio::test]
+    async fn disabled_memory_keeps_context_out_of_prompt_and_stores_nothing() {
+        let keyword = "starfruit-axial-771";
+        let prompt = format!("please use {keyword}");
+        let stored_memory = format!("distinctive memory for {keyword}");
+
+        let control_workspace = tempfile::TempDir::new().expect("temp dir");
+        let control_memory = create_test_memory("sqlite", control_workspace.path());
+        control_memory
+            .store("semantic_fact", &stored_memory, MemoryCategory::Core, None)
+            .await
+            .expect("seed memory should store");
+        let control_user_msgs_before = user_msg_count(&control_memory).await;
+        let mut control_agent = make_agent_for_system_prompt_test();
+        set_agent_memory_for_test(&mut control_agent, Arc::clone(&control_memory));
+        set_agent_responses_for_test(&mut control_agent, vec![one_text_response("control")]);
+        control_agent.auto_save = true;
+
+        control_agent.turn(&prompt).await.expect("control turn");
+
+        let control_user_message =
+            last_user_message(&control_agent).expect("control turn should push user message");
+        assert!(control_user_message.contains("[Memory context]"));
+        assert!(
+            user_msg_count(&control_memory).await > control_user_msgs_before,
+            "enabled native memory should auto-save the user turn"
+        );
+
+        let disabled_workspace = tempfile::TempDir::new().expect("temp dir");
+        let disabled_memory = create_test_memory("sqlite", disabled_workspace.path());
+        disabled_memory
+            .store("semantic_fact", &stored_memory, MemoryCategory::Core, None)
+            .await
+            .expect("seed memory should store");
+        let mut disabled_agent = make_agent_for_system_prompt_test();
+        set_agent_memory_for_test(&mut disabled_agent, Arc::clone(&disabled_memory));
+        set_agent_responses_for_test(&mut disabled_agent, vec![one_text_response("disabled")]);
+        disabled_agent.auto_save = true;
+        disabled_agent.disable_memory();
+
+        disabled_agent.turn(&prompt).await.expect("disabled turn");
+
+        let disabled_user_message =
+            last_user_message(&disabled_agent).expect("disabled turn should push user message");
+        assert!(!disabled_user_message.contains("[Memory context]"));
+        assert_eq!(
+            user_msg_count(&disabled_memory).await,
+            0,
+            "disabled native memory must not auto-save into the original sqlite store"
+        );
     }
 
     #[test]

@@ -649,6 +649,12 @@ async fn handle_socket(
         agent.set_temperature(t);
     }
     agent.set_memory_session_id(Some(memory_session_id));
+    if character_name.is_some() {
+        // Character sessions are sigil-exclusive (see memory-collision analysis):
+        // native load_context/auto_save would double-inject and leak across
+        // characters via the agent-scoped brain.db.
+        agent.disable_memory();
+    }
     if !stored_messages.is_empty() {
         agent.seed_history(&stored_messages);
     }
@@ -1303,6 +1309,12 @@ fn detect_character_conflict(
     } else {
         None
     }
+}
+
+/// Native consolidation runs only for committed turns on NO-CARD sessions —
+/// character sessions are sigil-exclusive.
+fn should_consolidate_native(is_alternate: bool, auto_save: bool, has_character: bool) -> bool {
+    !is_alternate && auto_save && !has_character
 }
 
 /// Reject a client `message` frame whose content or node ids would poison the
@@ -2275,7 +2287,7 @@ async fn process_chat_message(
 
             // Fire-and-forget memory consolidation so facts from WS sessions
             // are extracted to long-term memory (Daily + Core categories).
-            if !is_alternate && state.auto_save {
+            if should_consolidate_native(is_alternate, state.auto_save, character_name.is_some()) {
                 if let Some(mem) = ws_memory.clone() {
                     let model_provider = state.model_provider.clone();
                     let model = state.model.clone();
@@ -3641,6 +3653,14 @@ mod tests {
         let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": ""});
         let session = Some("Aria".to_string());
         assert!(detect_character_conflict(&parsed, &session).is_none());
+    }
+
+    #[test]
+    fn native_consolidation_truth_table() {
+        assert!(should_consolidate_native(false, true, false));
+        assert!(!should_consolidate_native(false, true, true));
+        assert!(!should_consolidate_native(true, true, false));
+        assert!(!should_consolidate_native(false, false, false));
     }
 
     #[test]
