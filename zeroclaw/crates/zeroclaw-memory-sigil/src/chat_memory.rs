@@ -64,7 +64,7 @@ impl ChatMemoryStore {
         user_name: &str,
         role: &str,
         content: &str,
-        affect: Option<&serde_json::Value>,
+        _affect: Option<&serde_json::Value>,
     ) -> Result<Option<String>, MemoryError> {
         // Scrub think tags first so they don't pollute the noise checks or DB
         let cleaned_content = crate::noise::scrub_think_tags(content);
@@ -88,17 +88,10 @@ impl ChatMemoryStore {
         entities.extend(extract_mentions(&cleaned_content));
 
         let path = format!("/chat/{character_name}/memories/{role}");
-        let metadata = match affect {
-            Some(affect) => serde_json::json!({
-                "role": role,
-                "user_name": user_name,
-                "affect": affect,
-            }),
-            None => serde_json::json!({
-                "role": role,
-                "user_name": user_name,
-            }),
-        };
+        let metadata = serde_json::json!({
+            "role": role,
+            "user_name": user_name,
+        });
 
         let entry = MemoryEntry {
             id,
@@ -311,6 +304,12 @@ impl ChatMemoryStore {
     /// reads from, so the model and the UI agree on what is gone.
     pub fn delete_memory(&self, character_name: &str, id: &str) -> Result<bool, MemoryError> {
         let mut conn = self.open_mut(character_name)?;
+        let chat_prefix = format!("/chat/{character_name}/memories");
+        if let Some(entry) = memory_crud::get_by_id(&conn, id)?
+            && !entry.path.starts_with(&chat_prefix)
+        {
+            return Ok(false);
+        }
         memory_crud::delete(&mut conn, id)
     }
 
@@ -335,6 +334,10 @@ impl ChatMemoryStore {
             Some(e) => e,
             None => return Ok(None),
         };
+        let chat_prefix = format!("/chat/{character_name}/memories");
+        if !entry.path.starts_with(&chat_prefix) {
+            return Ok(None);
+        }
 
         if let Some(t) = text {
             entry.summary = t.chars().take(100).collect();
@@ -477,7 +480,16 @@ impl ChatMemoryStore {
             match self.recall_memories_with_vector(character_name, &query, query_vec, 5) {
                 Ok(results) if results.is_empty() => String::new(),
                 Ok(results) => format_memories_block(&results),
-                Err(_) => String::new(),
+                Err(e) => {
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"error": format!("{e:#}")})),
+                        "sigil recall failed; injecting empty memory context"
+                    );
+                    String::new()
+                }
             };
 
         // Slice 3c: learned patterns are an OPTIONAL appendix, off by default.
@@ -531,7 +543,16 @@ impl ChatMemoryStore {
                 }
                 lines.join("\n")
             }
-            Err(_) => String::new(),
+            Err(e) => {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{e:#}")})),
+                    "sigil recall failed; injecting empty memory context"
+                );
+                String::new()
+            }
         }
     }
 }
@@ -930,7 +951,7 @@ mod tests {
             .unwrap()
             .expect("plain row exists");
 
-        assert_eq!(tagged.metadata["affect"]["valence"], -0.5);
+        assert!(tagged.metadata.get("affect").is_none());
         assert!(plain.metadata.get("affect").is_none());
     }
 

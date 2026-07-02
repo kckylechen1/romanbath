@@ -30,9 +30,11 @@ const TRAJECTORY_CAPACITY: usize = 50;
 pub struct RelationshipMemory {
     /// Fast transient: recent affect readings, newest last. Bounded
     /// at [`TRAJECTORY_CAPACITY`].
+    #[serde(default)]
     pub trajectory: VecDeque<TimestampedAffect>,
     /// Slow mood baseline (EMA). `None` until the first reading
     /// initializes it.
+    #[serde(default)]
     pub mood_baseline: Option<AffectState>,
 }
 

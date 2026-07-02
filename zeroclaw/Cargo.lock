@@ -12288,6 +12288,7 @@ dependencies = [
  "tokio",
  "uuid",
  "zeroclaw-api",
+ "zeroclaw-log",
 ]
 
 [[package]]

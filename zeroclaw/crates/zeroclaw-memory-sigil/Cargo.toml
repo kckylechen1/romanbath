@@ -18,6 +18,7 @@ anyhow = "1.0"
 regex = "1.10"
 tokio = { version = "1.50", default-features = false, features = ["rt", "macros", "time"] }
 zeroclaw-api.workspace = true
+zeroclaw-log.workspace = true
 
 [dev-dependencies]
 tempfile = "3.26"
