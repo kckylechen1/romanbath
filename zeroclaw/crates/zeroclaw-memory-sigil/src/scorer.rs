@@ -13,6 +13,14 @@ use crate::types::{HybridScore, MemoryEntry};
 
 const HALF_LIFE_DAYS: f64 = 30.0;
 
+fn stale_reference_datetime() -> chrono::DateTime<Utc> {
+    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+        .expect("valid epoch date")
+        .and_hms_opt(0, 0, 0)
+        .expect("valid epoch time")
+        .and_utc()
+}
+
 pub fn tier_half_life(tier: &str) -> f64 {
     match tier {
         "pattern" => 30_000.0,
@@ -66,7 +74,7 @@ pub fn decay_score(entry: &MemoryEntry) -> f64 {
         .as_ref()
         .and_then(|s| s.parse::<chrono::DateTime<Utc>>().ok())
         .or_else(|| entry.timestamp.parse::<chrono::DateTime<Utc>>().ok())
-        .unwrap_or(now);
+        .unwrap_or_else(stale_reference_datetime);
 
     let age_days = (now - reference).num_seconds().max(0) as f64 / 86_400.0;
     let half_life = tier_half_life(&entry.tier);
@@ -343,6 +351,53 @@ mod tests {
         let entry = test_entry("recent");
         let s = decay_score(&entry);
         assert!(s > 0.5, "recent entry should have high decay score: {s}");
+    }
+
+    #[test]
+    fn decay_unparsable_timestamps_rank_stale_not_fresh() {
+        let mut stale = test_entry("stale");
+        stale.timestamp = "not-a-date".to_string();
+        stale.last_access = Some("also-not-a-date".to_string());
+        stale.importance = 0.0;
+        stale.access_count = 0;
+
+        let mut fresh = test_entry("fresh");
+        fresh.timestamp = Utc::now().to_rfc3339();
+        fresh.last_access = None;
+        fresh.importance = 0.0;
+        fresh.access_count = 0;
+
+        let stale_score = decay_score(&stale);
+        let fresh_score = decay_score(&fresh);
+
+        assert!(
+            stale_score < 0.01,
+            "unparsable timestamps should rank stale, got {stale_score}"
+        );
+        assert!(
+            fresh_score > 0.9,
+            "fresh valid timestamp should keep high recency, got {fresh_score}"
+        );
+        assert!(
+            stale_score < fresh_score,
+            "stale fallback should rank below fresh timestamp: stale={stale_score} fresh={fresh_score}"
+        );
+    }
+
+    #[test]
+    fn decay_importance_floor_survives_stale_fallback() {
+        let mut entry = test_entry("important-stale");
+        entry.timestamp = "not-a-date".to_string();
+        entry.last_access = Some("also-not-a-date".to_string());
+        entry.importance = 1.0;
+        entry.access_count = 0;
+
+        let score = decay_score(&entry);
+
+        assert!(
+            (score - 0.3).abs() <= 1e-9,
+            "importance floor should survive stale fallback, got {score}"
+        );
     }
 
     #[test]
