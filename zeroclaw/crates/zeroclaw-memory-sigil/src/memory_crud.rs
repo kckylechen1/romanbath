@@ -272,16 +272,14 @@ pub fn search_fts(
             let score: f64 = row.get(1)?;
             Ok((id, score))
         })?
-        .filter_map(|r: Result<(String, f64), rusqlite::Error>| r.ok())
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?
     } else {
         stmt.query_map(params![safe_query, limit as i64], |row| {
             let id: String = row.get(0)?;
             let score: f64 = row.get(1)?;
             Ok((id, score))
         })?
-        .filter_map(|r: Result<(String, f64), rusqlite::Error>| r.ok())
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?
     };
 
     let mut raw = raw;
@@ -585,6 +583,50 @@ mod crud_tests {
         assert!(
             !results.is_empty(),
             "FTS search should find 'dark' in entry"
+        );
+    }
+
+    #[test]
+    fn search_fts_healthy_path_returns_all_hits() {
+        let mut conn = setup();
+        let distinctive = "zephyrcucumber";
+        for id in ["fts-hit-1", "fts-hit-2"] {
+            let entry = MemoryEntry {
+                id: id.to_string(),
+                path: "/chat/test_char/memories/user".to_string(),
+                summary: format!("{distinctive} memory"),
+                text: format!("shared token {distinctive} appears in this memory"),
+                importance: 0.7,
+                timestamp: now_utc_iso(),
+                category: "fact".to_string(),
+                keywords: vec![],
+                entities: vec!["Alice".to_string()],
+                source: "chat".to_string(),
+                scope: "user".to_string(),
+                archived: false,
+                access_count: 0,
+                last_access: None,
+                retention_policy: None,
+                metadata: serde_json::json!({}),
+                recall_count: 0,
+                query_diversity: 0,
+                tier: "raw".to_string(),
+            };
+            upsert(&mut conn, &entry).unwrap();
+        }
+
+        let results = search_fts(&conn, distinctive, 10, None).unwrap();
+
+        assert_eq!(
+            results.len(),
+            2,
+            "shared distinctive token should hit both memories"
+        );
+        assert!(results.contains_key("fts-hit-1"));
+        assert!(results.contains_key("fts-hit-2"));
+        assert!(
+            results.values().all(|score| score.is_finite()),
+            "FTS scores should be finite: {results:?}"
         );
     }
 
