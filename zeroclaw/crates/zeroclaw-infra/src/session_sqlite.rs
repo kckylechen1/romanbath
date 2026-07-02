@@ -1164,6 +1164,12 @@ impl SessionBackend for SqliteSessionBackend {
         }
         {
             let conn = self.conn.lock();
+            // Atomic: a crash between two DELETEs must not leave an orphaned
+            // descendant (its parent row already gone) that then resurfaces as a
+            // NEW root via deepest_leaf on reload. Wrap the whole subtree removal
+            // + message_count fixup in one transaction — all-or-nothing. If BEGIN
+            // somehow fails we fall through unwrapped (never worse than before).
+            let in_tx = conn.execute_batch("BEGIN").is_ok();
             for id in &removed {
                 let deleted = conn
                     .execute(
@@ -1195,6 +1201,9 @@ impl SessionBackend for SqliteSessionBackend {
                 "UPDATE session_metadata SET message_count = ?1 WHERE session_key = ?2",
                 params![cnt, session_key],
             );
+            if in_tx {
+                let _ = conn.execute_batch("COMMIT");
+            }
         }
         Ok(removed)
     }

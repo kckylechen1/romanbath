@@ -305,6 +305,13 @@ export const useMessageActions = (
   // this to branch-on-edit later if the UX calls for it.
   const handleEditMessage = useCallback(
     (messageId: string, newContent: string) => {
+      // Blanking a message is never the intent, and the server rejects an
+      // empty-content edit (INVALID_EDIT). Treat it as a no-op so we neither
+      // wipe the bubble locally nor fire a rejected mutation over the socket.
+      if (newContent.trim().length === 0) {
+        toast.error('Message cannot be empty');
+        return;
+      }
       setMessages((prev) =>
         prev.map((msg) => (msg.id === messageId ? { ...msg, content: newContent } : msg))
       );

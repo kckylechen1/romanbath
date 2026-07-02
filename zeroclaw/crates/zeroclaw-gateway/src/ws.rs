@@ -778,6 +778,13 @@ async fn handle_socket(
                 let content = parsed["content"].as_str().unwrap_or("").to_string();
                 let is_alternate = parsed["alternate"].as_bool().unwrap_or(false);
                 if !content.is_empty() {
+                    let ws_ids = parse_turn_node_ids(&parsed);
+                    // Same content/id ceiling the main receive loop enforces — an
+                    // oversized or self-colliding first frame must not slip past.
+                    if let Some(err) = validate_message_frame(&content, &ws_ids) {
+                        let _ = sender.send(Message::Text(err.to_string().into())).await;
+                        return;
+                    }
                     let _session_guard = match state.session_queue.acquire(&session_key).await {
                         Ok(guard) => guard,
                         Err(e) => {
@@ -920,6 +927,12 @@ async fn handle_socket(
                         continue;
                     }
                     if let Some(ref backend) = state.session_backend {
+                        // Serialize this mutation against an in-flight turn on the
+                        // same session (another client's socket may be mid-persist).
+                        // Best-effort: if the queue is saturated, fall through
+                        // unguarded rather than surface a spurious error on a
+                        // zero-generation op.
+                        let _guard = state.session_queue.acquire(&session_key).await.ok();
                         // Validate membership before recording — set_active_leaf
                         // is a blind UPSERT, and a dangling active_leaf would
                         // orphan history on the next turn (see conversation_tip).
@@ -958,6 +971,8 @@ async fn handle_socket(
                         continue;
                     }
                     if let Some(ref backend) = state.session_backend {
+                        // Serialize against an in-flight turn (see select_leaf).
+                        let _guard = state.session_queue.acquire(&session_key).await.ok();
                         if !apply_edit(backend.as_ref(), &session_key, msg_id, new_content) {
                             let err = serde_json::json!({
                                 "type": "error",
@@ -990,6 +1005,8 @@ async fn handle_socket(
                         continue;
                     }
                     if let Some(ref backend) = state.session_backend {
+                        // Serialize against an in-flight turn (see select_leaf).
+                        let _guard = state.session_queue.acquire(&session_key).await.ok();
                         let removed = apply_delete(backend.as_ref(), &session_key, msg_id);
                         if removed.is_empty() {
                             let err = serde_json::json!({
@@ -1045,42 +1062,15 @@ async fn handle_socket(
                     let _ = sender.send(Message::Text(err.to_string().into())).await;
                     continue;
                 }
-                // Cap content + client-minted ids before they become persisted
-                // tree nodes (replayed in every history_snapshot). The REST path
-                // is bounded by RequestBodyLimitLayer(MAX_BODY_SIZE); WS frames
-                // bypass it, so enforce the same ceiling here. Ids are short
-                // (client uuids) — a generous 256-char cap rejects abuse.
-                const MAX_NODE_ID_LEN: usize = 256;
                 let ws_ids = parse_turn_node_ids(&parsed);
                 // An alternate turn (regenerate/swipe) still generates + persists
                 // a sibling, but must NOT feed memory — it's a re-roll of the same
                 // exchange, not new lived context. Default false => normal turn.
                 let is_alternate = parsed["alternate"].as_bool().unwrap_or(false);
-                let id_too_long = [&ws_ids.parent_id, &ws_ids.user_msg_id, &ws_ids.assistant_msg_id]
-                    .iter()
-                    .any(|o| o.as_deref().is_some_and(|s| s.len() > MAX_NODE_ID_LEN));
-                if content.len() > crate::MAX_BODY_SIZE || id_too_long {
-                    let err = serde_json::json!({
-                        "type": "error",
-                        "message": "Message exceeds the maximum size",
-                        "code": "CONTENT_TOO_LARGE"
-                    });
-                    let _ = sender.send(Message::Text(err.to_string().into())).await;
-                    continue;
-                }
-                // A turn's user and assistant nodes are distinct rows; if the
-                // client sends the same id for both, the assistant INSERT
-                // collides with the just-inserted user node on the
-                // UNIQUE(session_key, msg_id) index and the reply is dropped.
-                // Reject up front (same short-circuit shape as id_too_long).
-                if let (Some(u), Some(a)) =
-                    (ws_ids.user_msg_id.as_deref(), ws_ids.assistant_msg_id.as_deref())
-                    && u == a
-                {
-                    let err = serde_json::json!({
-                        "type": "error",
-                        "message": "user_msg_id and assistant_msg_id must differ"
-                    });
+                // Cap content + client-minted ids before they become persisted
+                // tree nodes (replayed in every history_snapshot). Shared with the
+                // first-frame `message` path so neither WS entry point bypasses it.
+                if let Some(err) = validate_message_frame(&content, &ws_ids) {
                     let _ = sender.send(Message::Text(err.to_string().into())).await;
                     continue;
                 }
@@ -1278,6 +1268,39 @@ fn detect_character_conflict(
     } else {
         None
     }
+}
+
+/// Reject a client `message` frame whose content or node ids would poison the
+/// persisted tree. The REST path is bounded by `RequestBodyLimitLayer(MAX_BODY_SIZE)`;
+/// WS frames bypass that layer, so BOTH WS `message` entry points — the
+/// first-frame fallback and the main receive loop — funnel through this one
+/// helper to enforce the same ceiling. Returns the error frame to send back on
+/// rejection, or `None` when the frame is safe.
+fn validate_message_frame(content: &str, ids: &TurnNodeIds) -> Option<serde_json::Value> {
+    // Ids are short client uuids — a generous 256-char cap rejects abuse without
+    // ever tripping a legitimate client.
+    const MAX_NODE_ID_LEN: usize = 256;
+    let id_too_long = [&ids.parent_id, &ids.user_msg_id, &ids.assistant_msg_id]
+        .iter()
+        .any(|o| o.as_deref().is_some_and(|s| s.len() > MAX_NODE_ID_LEN));
+    if content.len() > crate::MAX_BODY_SIZE || id_too_long {
+        return Some(serde_json::json!({
+            "type": "error",
+            "message": "Message exceeds the maximum size",
+            "code": "CONTENT_TOO_LARGE"
+        }));
+    }
+    // A turn's user and assistant nodes are distinct rows; the same id for both
+    // collides on the UNIQUE(session_key, msg_id) index and the reply is dropped.
+    if let (Some(u), Some(a)) = (ids.user_msg_id.as_deref(), ids.assistant_msg_id.as_deref())
+        && u == a
+    {
+        return Some(serde_json::json!({
+            "type": "error",
+            "message": "user_msg_id and assistant_msg_id must differ"
+        }));
+    }
+    None
 }
 
 /// Persist one conversation turn as exactly TWO tree nodes — the user node and

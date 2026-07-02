@@ -1561,12 +1561,20 @@ export class WsChatConnection {
               this.callbacks.onDone(this.fullText || frame.full_response || '');
               break;
             case 'error':
-              // A select_leaf rejection (unknown leaf on a local-only branch the
-              // server hasn't seen) is best-effort connection-level feedback —
-              // it must NOT route to the turn's onError, or a swipe after a turn
-              // would clobber the last assistant message with an error banner.
-              if (frame.code === 'INVALID_SELECT_LEAF') {
-                console.warn('select_leaf rejected (leaf not on server):', frame.message);
+              // Branch-mutation rejections (select_leaf / edit / delete) are
+              // best-effort, out-of-band feedback on a socket whose turn
+              // callbacks are still bound to the LAST generation. Routing them to
+              // the turn's onError would clobber an unrelated assistant bubble
+              // with an error banner (e.g. editing a message to empty, or
+              // editing/deleting a local-only node the server never persisted).
+              // Turn-level failures (CONTENT_TOO_LARGE, QUEUE_FULL, TIMEOUT,
+              // generation errors) still fall through and surface as expected.
+              if (
+                frame.code === 'INVALID_SELECT_LEAF' ||
+                frame.code === 'INVALID_EDIT' ||
+                frame.code === 'INVALID_DELETE'
+              ) {
+                console.warn(`branch mutation rejected (${frame.code}):`, frame.message);
                 break;
               }
               this.turnSettled = true;
