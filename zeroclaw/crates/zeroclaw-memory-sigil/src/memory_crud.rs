@@ -489,8 +489,21 @@ pub fn prune_access_history(
         ),
         [],
     )?;
+    let orphaned = tx.execute(
+        "DELETE FROM access_history WHERE memory_id NOT IN (SELECT id FROM memories)",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE memories
+         SET query_diversity = (
+             SELECT COUNT(DISTINCT query_hash)
+             FROM access_history
+             WHERE memory_id = memories.id AND query_hash != ''
+         )",
+        [],
+    )?;
     tx.commit()?;
-    Ok(deleted)
+    Ok(deleted + orphaned)
 }
 
 // ─── DELETE ───────────────────────────────────────────────────────────────────
@@ -547,6 +560,30 @@ mod crud_tests {
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::init_schema(&conn).unwrap();
         conn
+    }
+
+    fn test_memory(id: &str) -> MemoryEntry {
+        MemoryEntry {
+            id: id.to_string(),
+            path: "/chat/test_char/memories/user".to_string(),
+            summary: "test memory".to_string(),
+            text: "test memory text".to_string(),
+            importance: 0.7,
+            timestamp: now_utc_iso(),
+            category: "fact".to_string(),
+            keywords: vec![],
+            entities: vec!["Alice".to_string()],
+            source: "chat".to_string(),
+            scope: "user".to_string(),
+            archived: false,
+            access_count: 0,
+            last_access: None,
+            retention_policy: None,
+            metadata: serde_json::json!({}),
+            recall_count: 0,
+            query_diversity: 0,
+            tier: "raw".to_string(),
+        }
     }
 
     #[test]
@@ -675,6 +712,8 @@ mod crud_tests {
     #[test]
     fn prune_access_history_keeps_latest_per_memory() {
         let mut conn = setup();
+        upsert(&mut conn, &test_memory("m1")).unwrap();
+        upsert(&mut conn, &test_memory("m2")).unwrap();
         let iso = |secs_ago: i64| {
             Utc::now()
                 .checked_sub_signed(chrono::Duration::seconds(secs_ago))
@@ -709,5 +748,86 @@ mod crud_tests {
         };
         assert_eq!(count("m1"), 2);
         assert_eq!(count("m2"), 2);
+    }
+
+    #[test]
+    fn prune_reconciles_stored_query_diversity() {
+        let mut conn = setup();
+        let id = "diversity-memory";
+        upsert(&mut conn, &test_memory(id)).unwrap();
+
+        for idx in 0..5 {
+            record_access(&conn, &[id.to_string()], &[], Some(&format!("query-{idx}"))).unwrap();
+        }
+
+        assert_eq!(
+            get_by_id(&conn, id).unwrap().unwrap().query_diversity,
+            5,
+            "record_access should store the pre-prune diversity"
+        );
+
+        let deleted = prune_access_history(&mut conn, 2).unwrap();
+        assert_eq!(deleted, 3);
+
+        let live_diversity: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT query_hash) FROM access_history
+                 WHERE memory_id = ?1 AND query_hash != ''",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let stored_diversity = get_by_id(&conn, id).unwrap().unwrap().query_diversity;
+
+        assert_eq!(live_diversity, 2);
+        assert_eq!(stored_diversity, 2);
+        assert_eq!(
+            stored_diversity, live_diversity,
+            "stored query_diversity should match surviving access history"
+        );
+    }
+
+    #[test]
+    fn prune_removes_orphaned_history_rows() {
+        let mut conn = setup();
+        let id = "orphaned-memory";
+        upsert(&mut conn, &test_memory(id)).unwrap();
+        record_access(&conn, &[id.to_string()], &[], Some("orphan query")).unwrap();
+
+        conn.execute("DELETE FROM memories WHERE id = ?1", params![id])
+            .unwrap();
+
+        let deleted = prune_access_history(&mut conn, 100).unwrap();
+        assert_eq!(
+            deleted, 1,
+            "returned count should include orphaned access_history rows"
+        );
+
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM access_history WHERE memory_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn prune_zero_stays_fully_disabled() {
+        let mut conn = setup();
+        let id = "disabled-prune-memory";
+        upsert(&mut conn, &test_memory(id)).unwrap();
+        conn.execute(
+            "UPDATE memories SET query_diversity = 99 WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        let deleted = prune_access_history(&mut conn, 0).unwrap();
+        let stored_diversity = get_by_id(&conn, id).unwrap().unwrap().query_diversity;
+
+        assert_eq!(deleted, 0);
+        assert_eq!(stored_diversity, 99);
     }
 }
