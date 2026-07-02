@@ -7,6 +7,7 @@ description = "Chat-focused memory system for RomanBath — SQLite-backed with A
 publish = false
 
 [dependencies]
+libsimple = "0.7"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }

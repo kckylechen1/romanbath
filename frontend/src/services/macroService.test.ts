@@ -17,9 +17,7 @@ describe('expandMacros — identity substitutions', () => {
 
   it('substitutes {{persona}} when provided', () => {
     const ctx = { ...baseCtx(), personaDescription: 'A tired detective.' };
-    expect(expandMacros('Persona: {{persona}}', ctx)).toBe(
-      'Persona: A tired detective.',
-    );
+    expect(expandMacros('Persona: {{persona}}', ctx)).toBe('Persona: A tired detective.');
   });
 
   it('falls back to empty string for {{persona}} when missing', () => {
@@ -29,9 +27,7 @@ describe('expandMacros — identity substitutions', () => {
 
 describe('expandMacros — whitespace tolerance', () => {
   it('treats {{ user }} the same as {{user}}', () => {
-    expect(expandMacros('{{ user }} / {{user}}', baseCtx())).toBe(
-      'Alex / Alex',
-    );
+    expect(expandMacros('{{ user }} / {{user}}', baseCtx())).toBe('Alex / Alex');
   });
 
   it('matches the documented MACRO_PATTERN shape', () => {
@@ -76,9 +72,7 @@ describe('expandMacros — {{pick}}', () => {
   it('picks one of the inline items across 20 trials', () => {
     const allowed = ['red', 'blue', 'green'];
     for (let i = 0; i < 20; i++) {
-      expect(allowed).toContain(
-        expandMacros('{{pick::red,blue,green}}', baseCtx()),
-      );
+      expect(allowed).toContain(expandMacros('{{pick::red,blue,green}}', baseCtx()));
     }
   });
 
@@ -134,15 +128,13 @@ describe('expandMacros — time / date / format', () => {
   });
 
   it('expands {{date}} to YYYY-MM-DD shape', () => {
-    expect(expandMacros('{{date}}', baseCtx())).toMatch(
-      /^\d{4}-\d{2}-\d{2}$/,
-    );
+    expect(expandMacros('{{date}}', baseCtx())).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it('expands {{datetimeformat:YYYY-MM-DD HH:mm:ss}}', () => {
-    expect(
-      expandMacros('{{datetimeformat:YYYY-MM-DD HH:mm:ss}}', baseCtx()),
-    ).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(expandMacros('{{datetimeformat:YYYY-MM-DD HH:mm:ss}}', baseCtx())).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/
+    );
   });
 });
 
@@ -174,19 +166,17 @@ describe('expandMacros — placeholders / variables / comments', () => {
 
 describe('expandMacros — preservation and edge cases', () => {
   it('preserves unknown macros verbatim', () => {
-    expect(expandMacros('{{unknown_macro}}', baseCtx())).toBe(
-      '{{unknown_macro}}',
-    );
+    expect(expandMacros('{{unknown_macro}}', baseCtx())).toBe('{{unknown_macro}}');
   });
 
   it('expands every macro in a multi-macro string', () => {
     const out = expandMacros(
       '{{char}} talks to {{user}} about {{random:tea,whiskey}}. ({{roll:1d20}})',
-      baseCtx(),
+      baseCtx()
     );
     expect(out.startsWith('Mara talks to Alex about ')).toBe(true);
     expect(['tea', 'whiskey']).toContain(
-      out.slice('Mara talks to Alex about '.length).split('.')[0],
+      out.slice('Mara talks to Alex about '.length).split('.')[0]
     );
     expect(out).toMatch(/\.\s\((\d+)\)$/);
   });

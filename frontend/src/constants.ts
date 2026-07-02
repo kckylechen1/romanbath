@@ -1,4 +1,4 @@
-import { ChatConfig } from "./types";
+import { ChatConfig } from './types';
 
 export const DEFAULT_CONFIG: ChatConfig = {
   // Generation (gateway-accepted samplers only)
@@ -12,28 +12,28 @@ export const DEFAULT_CONFIG: ChatConfig = {
   seed: -1,
 
   // Response Style
-  responseStyle: "natural",
+  responseStyle: 'natural',
 
   // Story
-  scenario: "",
-  exampleDialogue: "",
+  scenario: '',
+  exampleDialogue: '',
   lorebook: [],
 
   // Persona
-  userName: "User",
-  userDescription: "",
+  userName: 'User',
+  userDescription: '',
 
   // Prompt
-  systemPromptOverride: "",
-  authorsNote: "",
+  systemPromptOverride: '',
+  authorsNote: '',
   authorsNoteDepth: 4,
-  promptOrder: "default",
-  negativePrompt: "",
+  promptOrder: 'default',
+  negativePrompt: '',
 
   // Formatting
-  userPrefix: "User:",
-  modelPrefix: "Character:",
-  contextTemplate: "default",
+  userPrefix: 'User:',
+  modelPrefix: 'Character:',
+  contextTemplate: 'default',
 
   // Interface
   fontSize: 15,
@@ -41,9 +41,9 @@ export const DEFAULT_CONFIG: ChatConfig = {
 
   // TTS
   tts: {
-    provider: "browser" as const,
+    provider: 'browser' as const,
     enabled: false,
-    voice: "",
+    voice: '',
     rate: 1,
     pitch: 1,
     volume: 1,

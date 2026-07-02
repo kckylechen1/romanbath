@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { ChatConfig, Persona } from "../../types";
+import React, { useState, useEffect } from 'react';
+import { ChatConfig, Persona } from '../../types';
 import {
   getPersonas,
   createPersona,
@@ -7,10 +7,10 @@ import {
   getActivePersonaId,
   setActivePersonaId,
   updatePersona,
-} from "../../services/personaService";
-import { useLanguage } from "../../i18n";
-import { BufferedInput, BufferedTextArea } from "./SharedComponents";
-import { confirm as confirmDialog } from "../../services/dialogService";
+} from '../../services/personaService';
+import { useLanguage } from '../../i18n';
+import { BufferedInput, BufferedTextArea } from './SharedComponents';
+import { confirm as confirmDialog } from '../../services/dialogService';
 import {
   UserCircle,
   Plus,
@@ -22,7 +22,7 @@ import {
   Download,
   Trash2,
   CheckCircle,
-} from "lucide-react";
+} from 'lucide-react';
 
 interface PersonaTabProps {
   config: ChatConfig;
@@ -30,18 +30,14 @@ interface PersonaTabProps {
   handleChange: (key: keyof ChatConfig, value: unknown) => void;
 }
 
-export const PersonaTab: React.FC<PersonaTabProps> = ({
-  config,
-  onConfigChange,
-  handleChange,
-}) => {
+export const PersonaTab: React.FC<PersonaTabProps> = ({ config, onConfigChange, handleChange }) => {
   const { t } = useLanguage();
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [activePersonaId, setActiveId] = useState<string | null>(null);
-  const [newPersonaName, setNewPersonaName] = useState("");
+  const [newPersonaName, setNewPersonaName] = useState('');
   const [showNewPersonaInput, setShowNewPersonaInput] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
+  const [editName, setEditName] = useState('');
 
   useEffect(() => {
     setPersonas(getPersonas());
@@ -51,12 +47,9 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
   const handleSaveCurrentAsPersona = () => {
     if (!newPersonaName.trim()) return;
 
-    createPersona(
-      newPersonaName.trim(),
-      config.userDescription,
-    );
+    createPersona(newPersonaName.trim(), config.userDescription);
     setPersonas(getPersonas());
-    setNewPersonaName("");
+    setNewPersonaName('');
     setShowNewPersonaInput(false);
   };
 
@@ -72,8 +65,8 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
 
   const handleDeletePersona = async (id: string) => {
     const ok = await confirmDialog({
-      title: t("persona.deleteConfirm"),
-      confirmLabel: "Delete",
+      title: t('persona.deleteConfirm'),
+      confirmLabel: 'Delete',
       danger: true,
     });
     if (!ok) return;
@@ -95,7 +88,7 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
       setPersonas(getPersonas());
     }
     setEditingId(null);
-    setEditName("");
+    setEditName('');
   };
 
   const handleUpdateCurrentToPersona = (persona: Persona) => {
@@ -112,7 +105,7 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <UserCircle size={20} className="text-stone-400" />
-            {t("persona.current")}
+            {t('persona.current')}
           </h3>
           {activePersonaId && (
             <span className="text-xs px-2 py-1 rounded-full bg-bath-500/10 text-bath-400 border border-bath-500/20">
@@ -124,7 +117,7 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
         <BufferedInput
           label="Display Name"
           value={config.userName}
-          onSave={(val) => handleChange("userName", val)}
+          onSave={(val) => handleChange('userName', val)}
           className="w-full bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-stone-500/40"
         />
 
@@ -138,7 +131,7 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
             </>
           }
           value={config.userDescription}
-          onSave={(val) => handleChange("userDescription", val)}
+          onSave={(val) => handleChange('userDescription', val)}
           placeholder="Tall, mysterious stranger with a mechanical arm..."
           className="w-full h-32 bg-black/30 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-stone-500/40 resize-none"
         />
@@ -151,7 +144,7 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
             className="w-full flex items-center justify-center gap-2 text-sm font-medium text-stone-400 hover:text-white py-2 transition-colors"
           >
             <Plus size={16} />
-            {t("persona.save")}
+            {t('persona.save')}
           </button>
         ) : (
           <div className="space-y-3">
@@ -159,7 +152,7 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
               type="text"
               value={newPersonaName}
               onChange={(e) => setNewPersonaName(e.target.value)}
-              placeholder={t("persona.name")}
+              placeholder={t('persona.name')}
               className="w-full bg-black/30 border border-white/10 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-stone-500/40"
               autoFocus
             />
@@ -187,16 +180,14 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
             <Users size={14} />
-            {t("persona.saved")}
+            {t('persona.saved')}
           </h4>
-          <span className="text-xs text-stone-500">
-            {personas.length} saved
-          </span>
+          <span className="text-xs text-stone-500">{personas.length} saved</span>
         </div>
 
         {personas.length === 0 ? (
           <div className="text-center py-8 border border-dashed border-white/10 rounded-xl text-gray-600 text-sm">
-            {t("persona.noPersonas")}
+            {t('persona.noPersonas')}
           </div>
         ) : (
           <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
@@ -205,8 +196,8 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
                 key={persona.id}
                 className={`group p-3 rounded-xl border transition-all ${
                   activePersonaId === persona.id
-                    ? "bg-stone-500/10 border-stone-500/30"
-                    : "bg-black/20 border-white/5 hover:border-white/10 hover:bg-white/5"
+                    ? 'bg-stone-500/10 border-stone-500/30'
+                    : 'bg-black/20 border-white/5 hover:border-white/10 hover:bg-white/5'
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -232,12 +223,10 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
                       </div>
                     ) : (
                       <>
-                        <p className="text-sm font-medium text-white truncate">
-                          {persona.name}
-                        </p>
+                        <p className="text-sm font-medium text-white truncate">{persona.name}</p>
                         <p className="text-xs text-stone-500 truncate">
                           {persona.description.substring(0, 50)}
-                          {persona.description.length > 50 ? "..." : ""}
+                          {persona.description.length > 50 ? '...' : ''}
                         </p>
                       </>
                     )}
@@ -276,12 +265,11 @@ export const PersonaTab: React.FC<PersonaTabProps> = ({
                     </div>
                   )}
 
-                  {activePersonaId === persona.id &&
-                    editingId !== persona.id && (
-                      <div className="flex-shrink-0">
-                        <CheckCircle size={16} className="text-bath-400" />
-                      </div>
-                    )}
+                  {activePersonaId === persona.id && editingId !== persona.id && (
+                    <div className="flex-shrink-0">
+                      <CheckCircle size={16} className="text-bath-400" />
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

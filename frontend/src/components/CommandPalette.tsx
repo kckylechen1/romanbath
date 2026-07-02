@@ -1,13 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Search, X } from "lucide-react";
-import uFuzzy from "@leeoniya/ufuzzy";
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Search, X } from 'lucide-react';
+import uFuzzy from '@leeoniya/ufuzzy';
 import {
   type Command,
   type CommandCategory,
   CATEGORY_LABELS,
   CATEGORY_ORDER,
   commandToHaystack,
-} from "../commands/types";
+} from '../commands/types';
 
 interface CommandPaletteProps {
   commands: Command[];
@@ -44,7 +44,7 @@ const groupByCategory = (commands: Command[]): GroupedResults[] => {
 };
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ commands, onClose }) => {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -67,7 +67,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ commands, onClos
   useEffect(() => {
     if (!selectedId) return;
     const el = listRef.current?.querySelector(`[data-cmd-id="${selectedId}"]`);
-    el?.scrollIntoView({ block: "nearest" });
+    el?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
 
   const moveSelection = (dir: 1 | -1): void => {
@@ -89,23 +89,23 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ commands, onClos
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     switch (e.key) {
-      case "ArrowDown":
+      case 'ArrowDown':
         e.preventDefault();
         moveSelection(1);
         break;
-      case "ArrowUp":
+      case 'ArrowUp':
         e.preventDefault();
         moveSelection(-1);
         break;
-      case "Enter":
+      case 'Enter':
         e.preventDefault();
         void runSelected();
         break;
-      case "Escape":
+      case 'Escape':
         e.preventDefault();
         onClose();
         break;
-      case "Tab":
+      case 'Tab':
         // Prevent Tab from leaving the palette — keep focus in search.
         e.preventDefault();
         moveSelection(e.shiftKey ? -1 : 1);
@@ -128,11 +128,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ commands, onClos
           }, 0);
         }}
         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-          isSelected ? "bg-bath-500/15 text-white" : "text-stone-300 hover:bg-white/5"
+          isSelected ? 'bg-bath-500/15 text-white' : 'text-stone-300 hover:bg-white/5'
         }`}
       >
         {Icon ? (
-          <Icon size={16} className={isSelected ? "text-bath-300" : "text-stone-500"} />
+          <Icon size={16} className={isSelected ? 'text-bath-300' : 'text-stone-500'} />
         ) : (
           <span className="w-4" />
         )}
@@ -207,15 +207,21 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ commands, onClos
         <div className="flex items-center justify-between px-4 py-2 border-t border-white/5 text-[11px] text-stone-600">
           <div className="flex items-center gap-3">
             <span>
-              <kbd className="font-mono bg-stone-800/60 px-1 py-0.5 rounded border border-white/5 mr-1">↑↓</kbd>
+              <kbd className="font-mono bg-stone-800/60 px-1 py-0.5 rounded border border-white/5 mr-1">
+                ↑↓
+              </kbd>
               navigate
             </span>
             <span>
-              <kbd className="font-mono bg-stone-800/60 px-1 py-0.5 rounded border border-white/5 mr-1">↵</kbd>
+              <kbd className="font-mono bg-stone-800/60 px-1 py-0.5 rounded border border-white/5 mr-1">
+                ↵
+              </kbd>
               run
             </span>
             <span>
-              <kbd className="font-mono bg-stone-800/60 px-1 py-0.5 rounded border border-white/5 mr-1">esc</kbd>
+              <kbd className="font-mono bg-stone-800/60 px-1 py-0.5 rounded border border-white/5 mr-1">
+                esc
+              </kbd>
               close
             </span>
           </div>

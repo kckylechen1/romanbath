@@ -58,7 +58,7 @@ export const MACRO_PATTERN: RegExp = new RegExp(
     `${GETVAR_RE}|` +
     `${PLAIN_RE}` +
     `)\\}\\}`,
-  'g',
+  'g'
 );
 
 const pad2 = (n: number): string => n.toString().padStart(2, '0');
@@ -95,21 +95,12 @@ const rollDice = (count: number, sides: number): number => {
 const expandMatch = (
   match: string,
   groups: ReadonlyArray<string | undefined>,
-  ctx: MacroContext,
+  ctx: MacroContext
 ): string => {
   // `groups` is regex captures 1..N in order. Indexing must line up with
   // MACRO_PATTERN's branch order — see the capture-group map above.
-  const [
-    comment,
-    pick,
-    random2,
-    random1,
-    rollN,
-    rollM,
-    datetimeFmt,
-    getVarName,
-    plainName,
-  ] = groups;
+  const [comment, pick, random2, random1, rollN, rollM, datetimeFmt, getVarName, plainName] =
+    groups;
 
   if (comment !== undefined) return '';
   if (pick !== undefined) {

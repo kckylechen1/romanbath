@@ -7,7 +7,7 @@
  * IndexedDB is the sole source of truth.
  */
 
-import { Message } from '../types';
+import { Message, Role } from '../types';
 import {
   StoredChat as IDBStoredChat,
   storageGetChat,
@@ -17,6 +17,12 @@ import {
   storageListAllChats,
   storageClearForTests,
 } from './chatStorage';
+import {
+  getSessionTree,
+  sessionKeyForCharacter,
+  getToken,
+  type SessionTreeNode,
+} from './zeroclawService';
 
 const LEGACY_STORAGE_KEY = 'romanbath_chat_history_v1';
 
@@ -133,12 +139,7 @@ export const migrateFromLocalStorageIfNeeded = async (): Promise<void> => {
         await storageSetChat(chat as IDBStoredChat);
       } catch (error) {
         allLanded = false;
-        console.error(
-          'Chat history migration failed for',
-          characterId,
-          chat.fileName,
-          error,
-        );
+        console.error('Chat history migration failed for', characterId, chat.fileName, error);
       }
     }
   }
@@ -173,7 +174,7 @@ export const saveChat = async (
   chatFileName: string,
   messages: Message[],
   userName: string,
-  characterName: string,
+  characterName: string
 ): Promise<boolean> => {
   try {
     // Explicit race guard: if the legacy localStorage key is still present
@@ -211,8 +212,11 @@ export const saveChat = async (
 
 export const loadChat = async (
   characterId: string,
-  chatFileName: string,
-): Promise<{ messages: Message[]; metadata: { user_name: string; character_name: string } | null }> => {
+  chatFileName: string
+): Promise<{
+  messages: Message[];
+  metadata: { user_name: string; character_name: string } | null;
+}> => {
   try {
     await ensureMigrated();
     const chat = await storageGetChat(characterId, chatFileName);
@@ -243,8 +247,10 @@ export const loadChat = async (
 // pre-dates the tree model we synthesize a linear chain (each message's
 // parent is the previous message in array order). Messages that already
 // declare a parentId are left alone — their existing tree is respected.
-export const linkLinearTree = <T extends { id: string; parentId?: string | null; childrenIds?: string[] }>(
-  messages: T[],
+export const linkLinearTree = <
+  T extends { id: string; parentId?: string | null; childrenIds?: string[] },
+>(
+  messages: T[]
 ): T[] => {
   const byId = new Map(messages.map((m) => [m.id, m]));
   const next = messages.map((msg) => ({
@@ -326,7 +332,7 @@ export const deleteChat = async (characterId: string, chatFileName: string): Pro
 export const renameChat = async (
   characterId: string,
   originalFileName: string,
-  newFileName: string,
+  newFileName: string
 ): Promise<boolean> => {
   try {
     await ensureMigrated();
@@ -351,8 +357,7 @@ export const renameChat = async (
 export const createNewChatFileName = (characterName: string): string =>
   formatDateForFilename(characterName);
 
-export const stripChatExtension = (fileName: string): string =>
-  fileName.replace(/\.jsonl$/, '');
+export const stripChatExtension = (fileName: string): string => fileName.replace(/\.jsonl$/, '');
 
 /**
  * Test-only: drop every IndexedDB chat record AND reset the cached migration
@@ -365,3 +370,109 @@ export const _resetForTests = async (): Promise<void> => {
   await storageClearForTests();
   migrationPromise = null;
 };
+
+export interface ServerLoadResult {
+  messages: Message[];
+  activeLeafId: string | null;
+  sessionKey: string;
+}
+
+function convertServerNodeToMessage(
+  node: SessionTreeNode,
+  childrenIds: string[]
+): Message {
+  const role =
+    node.role === 'assistant'
+      ? Role.Model
+      : node.role === 'system'
+        ? Role.Model
+        : Role.User;
+  const timestamp = node.timestamp
+    ? Date.parse(node.timestamp) || Date.now()
+    : Date.now();
+  return {
+    id: node.id,
+    role,
+    content: node.content,
+    timestamp,
+    parentId: node.parent_id ?? null,
+    childrenIds,
+  };
+}
+
+export const loadMessagesFromServer = async (
+  characterName: string
+): Promise<ServerLoadResult | null> => {
+  const sessionKey = sessionKeyForCharacter(characterName);
+  const tree = await getSessionTree(sessionKey);
+  if (!tree || !tree.session_persistence || tree.nodes.length === 0) {
+    return null;
+  }
+
+  const childrenOf = new Map<string | null, string[]>();
+  for (const node of tree.nodes) {
+    const parentKey = node.parent_id ?? null;
+    const arr = childrenOf.get(parentKey) ?? [];
+    arr.push(node.id);
+    childrenOf.set(parentKey, arr);
+  }
+
+  const messages: Message[] = tree.nodes.map((node) =>
+    convertServerNodeToMessage(node, childrenOf.get(node.id) ?? [])
+  );
+
+  return {
+    messages,
+    activeLeafId: tree.active_leaf,
+    sessionKey,
+  };
+};
+
+export async function migrateCharacterToServer(
+  characterName: string,
+  messages: Message[]
+): Promise<{ inserted: number; skipped: number } | null> {
+  if (messages.length === 0) return null;
+  const sessionKey = sessionKeyForCharacter(characterName);
+  // The server rejects empty-content nodes (they aren't meaningful conversation
+  // tree nodes), which would fail the WHOLE batch and leave the chat unsynced
+  // forever. Splice empty messages out of the parent chain instead: skip them,
+  // and re-point their children to the nearest non-empty ancestor so the tree
+  // stays connected. A chat with no empty messages produces an identical list.
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const skip = new Set(
+    messages.filter((m) => m.content.trim().length === 0).map((m) => m.id)
+  );
+  const resolveParent = (parentId: string | null): string | null => {
+    let p = parentId;
+    while (p && skip.has(p)) p = byId.get(p)?.parentId ?? null;
+    return p;
+  };
+  const nodes = messages
+    .filter((m) => !skip.has(m.id))
+    .map((msg) => ({
+      id: msg.id,
+      parent_id: resolveParent(msg.parentId ?? null),
+      role: msg.role === Role.Model ? 'assistant' : 'user',
+      content: msg.content,
+      timestamp: new Date(msg.timestamp).toISOString(),
+    }));
+  if (nodes.length === 0) return null;
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  try {
+    const resp = await fetch('/api/sessions/migrate', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ session_key: sessionKey, nodes, name: characterName }),
+    });
+    if (!resp.ok) return null;
+    const result = await resp.json();
+    return { inserted: result.inserted ?? 0, skipped: result.skipped ?? 0 };
+  } catch {
+    return null;
+  }
+}

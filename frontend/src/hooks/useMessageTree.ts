@@ -11,8 +11,86 @@
 // off the active path exist in the messages array but are not rendered
 // until the user switches to them.
 
-import { useMemo } from "react";
-import type { Message } from "../types";
+import { useMemo } from 'react';
+import { type Message, Role } from '../types';
+
+/** A node from the server's authoritative conversation tree (Solution B). */
+export interface ServerHistoryNode {
+  id: string;
+  parent_id: string | null;
+  role: string; // "user" | "assistant"
+  content: string;
+  timestamp?: string | null;
+}
+
+/**
+ * Reconcile the local message tree with the server's authoritative snapshot by
+ * UNION ON ID. Nodes the client already has are left untouched (so an in-flight
+ * or locally-edited node isn't clobbered); nodes only the server has — e.g. a
+ * turn from another device — are added. Because the client now sends its minted
+ * ids, same-device snapshots are a subset of the local tree and this is a no-op;
+ * the merge only does work for genuine cross-device / fresh-client reconciliation.
+ * The snapshot is a self-contained tree, so added nodes' parents are present too.
+ */
+export const mergeServerNodes = (
+  local: Message[],
+  nodes: ServerHistoryNode[],
+  tombstones?: Set<string>
+): Message[] => {
+  if (nodes.length === 0) return local;
+  const have = new Set(local.map((m) => m.id));
+  const additions: Message[] = [];
+  for (const n of nodes) {
+    if (have.has(n.id)) continue;
+    // Never resurrect a node the user deleted locally (a delete whose frame
+    // may not have reached the server). See tombstoneStore.
+    if (tombstones?.has(n.id)) continue;
+    additions.push({
+      id: n.id,
+      role: n.role === 'user' ? Role.User : Role.Model,
+      content: n.content,
+      timestamp: n.timestamp ? Date.parse(n.timestamp) || Date.now() : Date.now(),
+      parentId: n.parent_id ?? null,
+      childrenIds: [],
+    });
+  }
+  if (additions.length === 0) return local; // referential no-op → React bailout
+  const merged = [...local, ...additions];
+  // Rebuild childrenIds from parentId across the merged set. The chat view
+  // derives rendering from parentId (indexMessages), but BranchMiniMap/
+  // collectLeaves detect leaves from childrenIds — if the merge left a parent's
+  // childrenIds stale, that parent reads as a phantom leaf. Recompute so both
+  // sources of truth agree.
+  const childrenByParent = new Map<string, string[]>();
+  for (const m of merged) {
+    if (!m.parentId) continue;
+    const list = childrenByParent.get(m.parentId);
+    if (list) list.push(m.id);
+    else childrenByParent.set(m.parentId, [m.id]);
+  }
+  return merged.map((m) => ({ ...m, childrenIds: childrenByParent.get(m.id) ?? [] }));
+};
+
+/**
+ * X3 adoption safety. On connect-on-load hydration the client may adopt the
+ * server's active branch — but ONLY when it is safe to do so:
+ *  - the leaf survived the merge (`mergedIds.has(activeLeaf)`), AND
+ *  - either the client is fresh (no local tree to contradict) OR the leaf is
+ *    one the client ALREADY had locally (`localIds`).
+ * This blocks adopting a node that the union-merge resurrected from the server
+ * (e.g. a subtree the user deleted locally whose delete frame never reached the
+ * server) — such a node is absent from `localIds`, so we never yank the user
+ * onto a branch they deleted. (Full tombstone-aware merge lands in inc 4.)
+ */
+export const shouldAdoptServerLeaf = (
+  localIds: Set<string>,
+  mergedIds: Set<string>,
+  activeLeaf: string | null | undefined
+): activeLeaf is string => {
+  if (!activeLeaf) return false;
+  const locallyKnown = localIds.size === 0 || localIds.has(activeLeaf);
+  return locallyKnown && mergedIds.has(activeLeaf);
+};
 
 export interface MessageTree {
   byId: Map<string, Message>;
@@ -89,7 +167,10 @@ export const deepestLeaf = (tree: MessageTree, fromId: string): Message | null =
 
 // Resolve the active leaf for a given starting point. If the start is
 // already a leaf, returns it; otherwise walks down via deepestLeaf.
-export const resolveLeaf = (tree: MessageTree, startId: string | null | undefined): string | null => {
+export const resolveLeaf = (
+  tree: MessageTree,
+  startId: string | null | undefined
+): string | null => {
   if (!startId) return null;
   const start = tree.byId.get(startId);
   if (!start) return null;

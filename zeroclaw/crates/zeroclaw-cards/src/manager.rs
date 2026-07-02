@@ -1,17 +1,26 @@
 use crate::{CardError, CharacterCard, CharacterData, extract_from_json, extract_from_png_bytes};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Manages a local library of imported character cards.
 pub struct CardManager {
     cards_dir: PathBuf,
+    cache: Arc<Mutex<HashMap<String, CachedCard>>>,
+}
+
+struct CachedCard {
+    card: CharacterCard,
+    mtime: SystemTime,
 }
 
 impl CardManager {
-    /// Create a new CardManager with the given storage directory.
     pub fn new(cards_dir: PathBuf) -> Self {
-        Self { cards_dir }
+        Self {
+            cards_dir,
+            cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Default cards directory: `~/.zeroclaw/characters/`
@@ -96,6 +105,10 @@ impl CardManager {
             fs::write(avatar_path, raw_bytes)?;
         }
 
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(&safe_name);
+        }
+
         Ok(name)
     }
 
@@ -108,10 +121,20 @@ impl CardManager {
     /// (RFC 3339 profile: integer part is seconds, sub-second zero) — matches
     /// what ST V3 records and round-trips cleanly through serde.
     pub fn save(&self, card: &CharacterCard) -> Result<String, CardError> {
-        // Read existing card (if any) to preserve `creation_date`. The
-        // canonical timestamp lives on disk, never in a duplicated field.
         let safe_name = sanitize_filename(&card.data.name);
         let json_path = self.cards_dir.join(format!("{safe_name}.json"));
+
+        if json_path.exists()
+            && let Ok(existing_bytes) = fs::read(&json_path)
+            && let Ok(existing_card) = serde_json::from_slice::<CharacterCard>(&existing_bytes)
+            && existing_card.data.name != card.data.name
+        {
+            return Err(CardError::AlreadyExists(format!(
+                "A different character '{}' already occupies this slot",
+                existing_card.data.name
+            )));
+        }
+
         let preserved_creation = if json_path.exists() {
             fs::read(&json_path)
                 .ok()
@@ -134,6 +157,27 @@ impl CardManager {
         // modification_date is always refreshed — every save is a real edit.
         to_write.data.modification_date = now;
         self.save_card(&to_write, &[], "json")
+    }
+
+    /// Create a new card, refusing to clobber an existing one.
+    ///
+    /// [`save`](Self::save) is a create-*or*-update: it writes
+    /// `{sanitize(name)}.json` unconditionally, which is correct when editing
+    /// a card but silently overwrites a *different* card whose name sanitizes
+    /// to the same file (e.g. "Aria!" vs "Aria?"). Create and duplicate must
+    /// not do that — they call this instead and get an error on collision.
+    pub fn save_new(&self, card: &CharacterCard) -> Result<String, CardError> {
+        let safe_name = sanitize_filename(&card.data.name);
+        if self.cards_dir.join(format!("{safe_name}.json")).exists() {
+            return Err(CardError::AlreadyExists(card.data.name.clone()));
+        }
+        self.save(card)
+    }
+
+    /// Whether a card already exists under this (sanitized) name.
+    pub fn exists(&self, name: &str) -> bool {
+        let safe_name = sanitize_filename(name);
+        self.cards_dir.join(format!("{safe_name}.json")).exists()
     }
 
     /// List all imported character names.
@@ -167,8 +211,32 @@ impl CardManager {
     pub fn load(&self, name: &str) -> Result<CharacterCard, CardError> {
         let safe_name = sanitize_filename(name);
         let json_path = self.cards_dir.join(format!("{safe_name}.json"));
+
+        let mtime = fs::metadata(&json_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached) = cache.get(&safe_name)
+            && cached.mtime == mtime
+        {
+            return Ok(cached.card.clone());
+        }
+
         let bytes = fs::read(&json_path)?;
-        Ok(serde_json::from_slice(&bytes)?)
+        let card: CharacterCard = serde_json::from_slice(&bytes)?;
+
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(
+                safe_name,
+                CachedCard {
+                    card: card.clone(),
+                    mtime,
+                },
+            );
+        }
+
+        Ok(card)
     }
 
     /// Delete a character card by name.
@@ -182,6 +250,10 @@ impl CardManager {
         }
         if avatar_path.exists() {
             fs::remove_file(&avatar_path)?;
+        }
+
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(&safe_name);
         }
 
         Ok(())
@@ -268,6 +340,52 @@ mod tests {
     fn test_sanitize_filename() {
         assert_eq!(sanitize_filename("Hello World"), "Hello_World");
         assert_eq!(sanitize_filename("test/name:1"), "test_name_1");
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let p = std::env::temp_dir().join(format!("zc-cards-test-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn save_new_refuses_to_clobber_and_duplicate_suffixes() {
+        let dir = unique_temp_dir();
+        let mgr = CardManager::new(dir.clone());
+        let card = extract_from_json(
+            r#"{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Aria","description":"d","first_mes":"hi"}}"#,
+        )
+        .unwrap();
+
+        // First create lands.
+        assert_eq!(mgr.save_new(&card).unwrap(), "Aria");
+        assert!(mgr.exists("Aria"));
+        assert!(!mgr.exists("Nobody"));
+
+        // Second create under the same (sanitized) name is refused, not a
+        // silent overwrite of the first card.
+        assert!(matches!(
+            mgr.save_new(&card).unwrap_err(),
+            CardError::AlreadyExists(_)
+        ));
+
+        // Two *different* display names that sanitize to the same file collide
+        // — the real footgun (both "Aria!" and "Aria?" map to "Aria_.json").
+        let mut bang = card.clone();
+        bang.data.name = "Aria!".into();
+        assert_eq!(mgr.save_new(&bang).unwrap(), "Aria!");
+        let mut question = card.clone();
+        question.data.name = "Aria?".into();
+        assert!(matches!(
+            mgr.save_new(&question).unwrap_err(),
+            CardError::AlreadyExists(_)
+        ));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

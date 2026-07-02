@@ -683,6 +683,11 @@ pub struct ModelProviderConfig {
     /// Example: `provider_extra = { model_provider = { only = ["Anthropic"] } }`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_extra: Option<serde_json::Value>,
+    /// Whether stored assistant reasoning should be replayed on outbound
+    /// assistant history messages. `Some(false)` strips `reasoning_content`
+    /// and `reasoning` before sending. `None` honors the provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_assistant_reasoning: Option<bool>,
     /// Per-model pricing for cost tracking, USD per 1M tokens.
     ///
     /// Free-form key/value map. Keys are user-defined model identifiers; an
@@ -882,7 +887,9 @@ impl ModelEndpoint for MoonshotEndpoint {
         match self {
             Self::Cn => "https://api.moonshot.cn/v1",
             Self::Intl => "https://api.moonshot.ai/v1",
-            Self::Code => "https://api.moonshot.cn/coder/v1",
+            // Kimi Code moved to api.kimi.com; the old moonshot.cn coder endpoint returns 404.
+            // Upstream: zeroclaw-labs/zeroclaw#8154.
+            Self::Code => "https://api.kimi.com/coding/v1",
         }
     }
 }

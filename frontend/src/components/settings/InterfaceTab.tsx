@@ -1,17 +1,12 @@
-import React, { useState } from "react";
-import { ChatConfig } from "../../types";
-import { useLanguage } from "../../i18n";
-import {
-  getAppSettings,
-  saveAppSettings,
-} from "../../services/chatPersistenceService";
+import React, { useState } from 'react';
+import { ChatConfig } from '../../types';
+import { useLanguage } from '../../i18n';
+import { getAppSettings, saveAppSettings } from '../../services/chatPersistenceService';
 
 // Auto-restore Chat Toggle Component
 const InterfaceAutoRestoreToggle: React.FC = () => {
   const { t } = useLanguage();
-  const [autoRestore, setAutoRestore] = useState(
-    () => getAppSettings().autoRestoreChat,
-  );
+  const [autoRestore, setAutoRestore] = useState(() => getAppSettings().autoRestoreChat);
 
   const handleToggle = () => {
     const newValue = !autoRestore;
@@ -23,21 +18,19 @@ const InterfaceAutoRestoreToggle: React.FC = () => {
     <label className="flex items-center justify-between cursor-pointer group">
       <div>
         <span className="text-sm text-gray-300 group-hover:text-white transition-colors">
-          {t("chat.autoRestore")}
+          {t('chat.autoRestore')}
         </span>
-        <p className="text-[10px] text-gray-500 mt-0.5">
-          {t("chat.restorePrompt")}
-        </p>
+        <p className="text-[10px] text-gray-500 mt-0.5">{t('chat.restorePrompt')}</p>
       </div>
       <button
         onClick={handleToggle}
         className={`relative w-12 h-6 rounded-full transition-colors ${
-          autoRestore ? "bg-stone-500" : "bg-gray-700"
+          autoRestore ? 'bg-stone-500' : 'bg-gray-700'
         }`}
       >
         <div
           className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-md transition-transform ${
-            autoRestore ? "left-7" : "left-1"
+            autoRestore ? 'left-7' : 'left-1'
           }`}
         />
       </button>
@@ -59,18 +52,14 @@ const InterfaceTab: React.FC<InterfaceTabProps> = ({ config, handleChange }) => 
             <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
               Font Size
             </label>
-            <span className="text-xs text-gray-400">
-              {config.fontSize}px
-            </span>
+            <span className="text-xs text-gray-400">{config.fontSize}px</span>
           </div>
           <input
             type="range"
             min="12"
             max="24"
             value={config.fontSize}
-            onChange={(e) =>
-              handleChange("fontSize", parseInt(e.target.value))
-            }
+            onChange={(e) => handleChange('fontSize', parseInt(e.target.value))}
             className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-white"
           />
         </div>
@@ -80,18 +69,14 @@ const InterfaceTab: React.FC<InterfaceTabProps> = ({ config, handleChange }) => 
             <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
               Background Blur
             </label>
-            <span className="text-xs text-gray-400">
-              {config.backgroundBlur}px
-            </span>
+            <span className="text-xs text-gray-400">{config.backgroundBlur}px</span>
           </div>
           <input
             type="range"
             min="0"
             max="20"
             value={config.backgroundBlur}
-            onChange={(e) =>
-              handleChange("backgroundBlur", parseInt(e.target.value))
-            }
+            onChange={(e) => handleChange('backgroundBlur', parseInt(e.target.value))}
             className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-white"
           />
         </div>

@@ -64,7 +64,7 @@ export const updateGroupChat = (
   updates: Partial<Omit<GroupChat, 'id' | 'createdAt'>>
 ): GroupChat | null => {
   const groups = getGroupChats();
-  const index = groups.findIndex(g => g.id === id);
+  const index = groups.findIndex((g) => g.id === id);
 
   if (index === -1) return null;
 
@@ -83,7 +83,7 @@ export const updateGroupChat = (
  */
 export const deleteGroupChat = (id: string): boolean => {
   const groups = getGroupChats();
-  const filtered = groups.filter(g => g.id !== id);
+  const filtered = groups.filter((g) => g.id !== id);
 
   if (filtered.length === groups.length) return false;
 
@@ -96,7 +96,7 @@ export const deleteGroupChat = (id: string): boolean => {
  */
 export const getGroupChat = (id: string): GroupChat | null => {
   const groups = getGroupChats();
-  return groups.find(g => g.id === id) || null;
+  return groups.find((g) => g.id === id) || null;
 };
 
 /**
@@ -123,7 +123,7 @@ export const removeCharacterFromGroup = (groupId: string, characterId: string): 
   if (!group) return false;
 
   updateGroupChat(groupId, {
-    characterIds: group.characterIds.filter(id => id !== characterId),
+    characterIds: group.characterIds.filter((id) => id !== characterId),
   });
 
   return true;
@@ -137,7 +137,7 @@ export const selectNextCharacter = (
   characters: Character[],
   _lastMessage?: string
 ): Character | null => {
-  const groupCharacters = characters.filter(c => group.characterIds.includes(c.id));
+  const groupCharacters = characters.filter((c) => group.characterIds.includes(c.id));
 
   if (groupCharacters.length === 0) return null;
 
@@ -145,7 +145,7 @@ export const selectNextCharacter = (
     case 'round-robin': {
       // Cycle through characters in order
       const lastIndex = group.lastActiveCharacterId
-        ? groupCharacters.findIndex(c => c.id === group.lastActiveCharacterId)
+        ? groupCharacters.findIndex((c) => c.id === group.lastActiveCharacterId)
         : -1;
       const nextIndex = (lastIndex + 1) % groupCharacters.length;
       return groupCharacters[nextIndex];
@@ -155,19 +155,20 @@ export const selectNextCharacter = (
       // Pick a random character (but not the same as last)
       if (groupCharacters.length === 1) return groupCharacters[0];
 
-      const available = groupCharacters.filter(c => c.id !== group.lastActiveCharacterId);
+      const available = groupCharacters.filter((c) => c.id !== group.lastActiveCharacterId);
       const randomIndex = Math.floor(Math.random() * available.length);
       return available[randomIndex];
     }
 
     case 'natural': {
-      // Natural conversation flow - AI decides based on context
-      // For now, use weighted random based on how long since they spoke
-      // In future, could use AI to determine most relevant speaker
+      // NOTE: 'natural' is currently identical to 'random' — a uniform pick
+      // excluding the last speaker. The intended behavior (weight by how long
+      // since each character spoke, or let the model choose the next speaker)
+      // is NOT implemented yet. Kept as a distinct mode so the wiring is ready;
+      // until it diverges, treat it as an alias of 'random'.
       if (groupCharacters.length === 1) return groupCharacters[0];
 
-      // Prefer someone who hasn't spoken recently
-      const available = groupCharacters.filter(c => c.id !== group.lastActiveCharacterId);
+      const available = groupCharacters.filter((c) => c.id !== group.lastActiveCharacterId);
       if (available.length === 0) return groupCharacters[0];
 
       const randomIndex = Math.floor(Math.random() * available.length);
@@ -203,10 +204,10 @@ export const buildGroupSystemPrompt = (
   }
 
   // Other characters in the group
-  const otherCharacters = allGroupCharacters.filter(c => c.id !== activeCharacter.id);
+  const otherCharacters = allGroupCharacters.filter((c) => c.id !== activeCharacter.id);
   if (otherCharacters.length > 0) {
     prompt += '[Other characters present in this conversation:\n';
-    otherCharacters.forEach(char => {
+    otherCharacters.forEach((char) => {
       prompt += `- ${char.name}: ${char.description || 'No description'}\n`;
     });
     prompt += ']\n\n';

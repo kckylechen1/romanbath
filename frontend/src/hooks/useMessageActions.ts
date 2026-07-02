@@ -1,14 +1,14 @@
-import { useCallback } from "react";
-import { Message, Role, Character, ChatConfig, GroupChat } from "../types";
-import { generateText } from "../services/zeroclawService";
-import { useChatHelpers, characterNameForMessage } from "./useChatHelpers";
-import type { ToastAPI } from "../components/Toast";
-import { confirm as confirmDialog } from "../services/dialogService";
-import { pathToRoot, indexMessages, deepestLeaf } from "./useMessageTree";
-import { generateId } from "../utils/id";
+import { useCallback, useEffect, useRef } from 'react';
+import { Message, Role, Character, ChatConfig, GroupChat } from '../types';
+import { generateText, type WsChatConnection } from '../services/zeroclawService';
+import { useChatHelpers, characterNameForMessage } from './useChatHelpers';
+import type { ToastAPI } from '../components/Toast';
+import { confirm as confirmDialog } from '../services/dialogService';
+import { pathToRoot, indexMessages, deepestLeaf } from './useMessageTree';
+import { generateId } from '../utils/id';
 
 export interface UseMessageActionsReturn {
-  handleSwipeChange: (messageId: string, direction: "left" | "right") => void;
+  handleSwipeChange: (messageId: string, direction: 'left' | 'right') => void;
   handleGenerateSwipe: (messageId: string) => Promise<void>;
   handleRegenerate: (messageId?: string) => Promise<void>;
   handleContinue: (messageId?: string) => Promise<void>;
@@ -28,9 +28,24 @@ export const useMessageActions = (
   activeGroup: GroupChat | null,
   setIsTyping: React.Dispatch<React.SetStateAction<boolean>>,
   toast: ToastAPI,
+  wsChatRef: React.MutableRefObject<WsChatConnection | null>,
+  // Companion (WS) regenerate/swipe: reuse the user node + grow a server-synced
+  // alternate assistant sibling. Returns true if it handled the turn, false to
+  // decline (no user node to reuse) so we fall back to the REST branch helper.
+  regenerateAssistant: (target: Message) => Promise<boolean>,
+  // Persist deleted node ids so a later hydration can't resurrect them.
+  recordTombstones: (ids: string[]) => void
 ): UseMessageActionsReturn => {
-  const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } =
-    useChatHelpers(config, activeGroup, characters);
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const { buildChatOptions, buildChatRequest, buildChatMessagesForContext } = useChatHelpers(
+    config,
+    activeGroup,
+    characters
+  );
 
   // Append `child` to `messages`, recording the back-reference on the
   // parent so childrenIds stays consistent without re-indexing the world.
@@ -49,7 +64,7 @@ export const useMessageActions = (
         return next;
       });
     },
-    [setMessages],
+    [setMessages]
   );
 
   // handleSwipeChange now navigates siblings in the tree. We pick the
@@ -57,7 +72,7 @@ export const useMessageActions = (
   // leaf that sibling currently resolves to and make it the active tip.
   // The name is kept for backwards-compatibility with the message toolbar.
   const handleSwipeChange = useCallback(
-    (messageId: string, direction: "left" | "right") => {
+    (messageId: string, direction: 'left' | 'right') => {
       const target = messages.find((m) => m.id === messageId);
       if (!target) return;
 
@@ -68,7 +83,7 @@ export const useMessageActions = (
 
       const currentIdx = siblings.findIndex((m) => m.id === messageId);
       const nextIdx =
-        direction === "left"
+        direction === 'left'
           ? (currentIdx - 1 + siblings.length) % siblings.length
           : (currentIdx + 1) % siblings.length;
       const nextSibling = siblings[nextIdx];
@@ -77,8 +92,12 @@ export const useMessageActions = (
       const newLeaf = deepestLeaf(tree, nextSibling.id);
       if (!newLeaf) return;
       setActiveLeafId(newLeaf.id);
+      // Tell the server which branch is now active (zero-generation), so a
+      // resume / another device lands on the same leaf. No-op if no live
+      // socket (selectLeaf guards on readyState).
+      wsChatRef.current?.selectLeaf(newLeaf.id);
     },
-    [messages, setActiveLeafId],
+    [messages, setActiveLeafId, wsChatRef]
   );
 
   // Shared branch-creation helper for swipe and regenerate. Both flows
@@ -90,14 +109,16 @@ export const useMessageActions = (
       target: Message,
       rollbackLeafId: string,
       successToast: string,
-      errorToast: string,
+      errorToast: string
     ): Promise<void> => {
-      const parent = target.parentId ? messages.find((m) => m.id === target.parentId) ?? null : null;
+      const parent = target.parentId
+        ? (messages.find((m) => m.id === target.parentId) ?? null)
+        : null;
       const contextMessages = pathToRoot(indexMessages(messages), target.parentId ?? null);
 
       const respondingCharacter =
         characters.find(
-          (char) => char.name === characterNameForMessage(target, selectedCharacter),
+          (char) => char.name === characterNameForMessage(target, selectedCharacter)
         ) ?? selectedCharacter;
 
       const placeholderId = generateId();
@@ -105,7 +126,7 @@ export const useMessageActions = (
       appendChild(parent, {
         id: placeholderId,
         role: Role.Model,
-        content: "",
+        content: '',
         timestamp: Date.now(),
         isThinking: true,
         childrenIds: [],
@@ -117,15 +138,15 @@ export const useMessageActions = (
         const chatMessages = buildChatMessagesForContext(contextMessages, respondingCharacter.name);
         const responseText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
-          buildChatOptions(),
+          buildChatOptions()
         );
 
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === placeholderId
               ? { ...msg, content: responseText, isThinking: false, timestamp: Date.now() }
-              : msg,
-          ),
+              : msg
+          )
         );
         toast.success(successToast);
       } catch (error: unknown) {
@@ -133,10 +154,7 @@ export const useMessageActions = (
         // leave a dangling thinking bubble on the active path.
         setMessages((prev) => prev.filter((m) => m.id !== placeholderId));
         setActiveLeafId(rollbackLeafId);
-        toast.error(
-          errorToast,
-          error instanceof Error ? error.message : "Unknown error",
-        );
+        toast.error(errorToast, error instanceof Error ? error.message : 'Unknown error');
       } finally {
         setIsTyping(false);
       }
@@ -153,16 +171,31 @@ export const useMessageActions = (
       buildChatOptions,
       buildChatRequest,
       buildChatMessagesForContext,
-    ],
+    ]
+  );
+
+  // Companion (WS) chat routes regenerate/swipe through the server-synced
+  // alternate-turn pipeline; group chat and the "Assistant" character keep the
+  // REST branch helper (they don't use the WS conversation tree).
+  const wsRegenEligible = useCallback(
+    (target: Message): boolean =>
+      !activeGroup && characterNameForMessage(target, selectedCharacter) !== 'Assistant',
+    [activeGroup, selectedCharacter]
   );
 
   const handleGenerateSwipe = useCallback(
     async (messageId: string) => {
       const target = messages.find((m) => m.id === messageId);
       if (!target || target.role !== Role.Model) return;
-      await appendModelBranch(target, target.id, "New branch generated", "Failed to generate branch");
+      if (wsRegenEligible(target) && (await regenerateAssistant(target))) return;
+      await appendModelBranch(
+        target,
+        target.id,
+        'New branch generated',
+        'Failed to generate branch'
+      );
     },
-    [messages, appendModelBranch],
+    [messages, wsRegenEligible, regenerateAssistant, appendModelBranch]
   );
 
   const handleRegenerate = useCallback(
@@ -181,14 +214,15 @@ export const useMessageActions = (
         }
       }
       if (!target || target.role !== Role.Model) return;
+      if (wsRegenEligible(target) && (await regenerateAssistant(target))) return;
       await appendModelBranch(
         target,
         activeLeafId ?? target.id,
-        "Branch regenerated",
-        "Regeneration failed",
+        'Branch regenerated',
+        'Regeneration failed'
       );
     },
-    [messages, activePath, activeLeafId, appendModelBranch],
+    [messages, activePath, activeLeafId, wsRegenEligible, regenerateAssistant, appendModelBranch]
   );
 
   const handleContinue = useCallback(
@@ -216,36 +250,36 @@ export const useMessageActions = (
         const contextMessages = activePath.slice(0, targetIndex + 1);
         const respondingCharacter =
           characters.find(
-            (char) => char.name === characterNameForMessage(target, selectedCharacter),
+            (char) => char.name === characterNameForMessage(target, selectedCharacter)
           ) ?? selectedCharacter;
         const chatMessages = buildChatMessagesForContext(contextMessages, respondingCharacter.name);
         chatMessages.push({
-          role: "user",
+          role: 'user',
           content:
-            "[Continue your response naturally without repeating yourself. Do not acknowledge this instruction.]",
+            '[Continue your response naturally without repeating yourself. Do not acknowledge this instruction.]',
         });
 
         const continuationText = await generateText(
           buildChatRequest(chatMessages, respondingCharacter),
-          buildChatOptions(),
+          buildChatOptions()
         );
 
         // Continue appends to the active branch's content in place. This
         // is intentionally not a new branch — extending a half-finished
         // answer is a correction, not an exploration.
+        const latestTarget = messagesRef.current.find((m) => m.id === targetId) ?? target;
+        const continuedContent = `${latestTarget.content} ${continuationText}`;
         setMessages((prev) =>
           prev.map((msg) =>
-            msg.id === targetId
-              ? { ...msg, content: `${msg.content} ${continuationText}` }
-              : msg,
-          ),
+            msg.id === targetId ? { ...msg, content: continuedContent } : msg
+          )
         );
-        toast.success("Message continued");
+        if (wsRegenEligible(latestTarget)) {
+          wsChatRef.current?.editNode(targetId, continuedContent);
+        }
+        toast.success('Message continued');
       } catch (error: unknown) {
-        toast.error(
-          "Continue failed",
-          error instanceof Error ? error.message : "Unknown error",
-        );
+        toast.error('Continue failed', error instanceof Error ? error.message : 'Unknown error');
       } finally {
         setIsTyping(false);
       }
@@ -257,11 +291,13 @@ export const useMessageActions = (
       selectedCharacter,
       setIsTyping,
       setMessages,
+      wsRegenEligible,
+      wsChatRef,
       toast,
       buildChatOptions,
       buildChatRequest,
       buildChatMessagesForContext,
-    ],
+    ]
   );
 
   // Edit stays in-place for MVP. The user uses edit to fix typos, not to
@@ -269,20 +305,35 @@ export const useMessageActions = (
   // this to branch-on-edit later if the UX calls for it.
   const handleEditMessage = useCallback(
     (messageId: string, newContent: string) => {
+      // Blanking a message is never the intent, and the server rejects an
+      // empty-content edit (INVALID_EDIT). Treat it as a no-op so we neither
+      // wipe the bubble locally nor fire a rejected mutation over the socket.
+      if (newContent.trim().length === 0) {
+        toast.error('Message cannot be empty');
+        return;
+      }
       setMessages((prev) =>
-        prev.map((msg) => (msg.id === messageId ? { ...msg, content: newContent } : msg)),
+        prev.map((msg) => (msg.id === messageId ? { ...msg, content: newContent } : msg))
       );
-      toast.success("Message edited");
+      // Server-sync the in-place edit so the conversation tree stays
+      // authoritative — companion (WS) path only (no-op if offline). Group chat
+      // and "Assistant" don't use the WS tree; leave them local, as before, so
+      // an edit can't leak onto a lingering companion socket's session.
+      const target = messages.find((m) => m.id === messageId);
+      if (target && wsRegenEligible(target)) {
+        wsChatRef.current?.editNode(messageId, newContent);
+      }
+      toast.success('Message edited');
     },
-    [setMessages, toast],
+    [messages, wsRegenEligible, setMessages, wsChatRef, toast]
   );
 
   const handleDeleteMessage = useCallback(
     async (messageId: string) => {
       const ok = await confirmDialog({
-        title: "Delete message?",
-        message: "This message and any branches below it will be removed from the conversation.",
-        confirmLabel: "Delete",
+        title: 'Delete message?',
+        message: 'This message and any branches below it will be removed from the conversation.',
+        confirmLabel: 'Delete',
         danger: true,
       });
       if (!ok) return;
@@ -292,7 +343,7 @@ export const useMessageActions = (
       // cleans them all.
       const childrenOf = new Map<string, string[]>();
       for (const msg of messages) {
-        const parent = msg.parentId ?? "";
+        const parent = msg.parentId ?? '';
         const list = childrenOf.get(parent) ?? [];
         list.push(msg.id);
         childrenOf.set(parent, list);
@@ -335,9 +386,28 @@ export const useMessageActions = (
       if (activeLeafId && toRemove.has(activeLeafId)) {
         setActiveLeafId(targetParentId);
       }
-      toast.success("Message deleted");
+      // Server-sync the delete so the server tree drops the subtree too — this
+      // is what permanently fixes the "server resurrects a deleted node on
+      // reload" class. Companion (WS) path only (no-op if offline); group chat /
+      // "Assistant" stay local, as before. Tombstone the removed ids so even an
+      // OFFLINE delete (frame never reached the server) survives a reload — the
+      // next hydration won't resurrect them.
+      if (target && wsRegenEligible(target)) {
+        wsChatRef.current?.deleteNode(messageId);
+        recordTombstones([...toRemove]);
+      }
+      toast.success('Message deleted');
     },
-    [messages, activeLeafId, setMessages, setActiveLeafId, toast],
+    [
+      messages,
+      activeLeafId,
+      wsRegenEligible,
+      recordTombstones,
+      setMessages,
+      setActiveLeafId,
+      wsChatRef,
+      toast,
+    ]
   );
 
   return {

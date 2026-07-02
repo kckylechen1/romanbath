@@ -29,7 +29,7 @@ export const getBookmarks = (characterId: string): ChatBookmark[] => {
 
     const allBookmarks: ChatBookmark[] = JSON.parse(stored);
     return allBookmarks
-      .filter(b => b.characterId === characterId)
+      .filter((b) => b.characterId === characterId)
       .sort((a, b) => b.createdAt - a.createdAt); // Most recent first
   } catch (error) {
     console.error('Error loading bookmarks:', error);
@@ -62,7 +62,7 @@ export const saveBookmark = (bookmark: ChatBookmark): void => {
     const allBookmarks: ChatBookmark[] = stored ? JSON.parse(stored) : [];
 
     // Remove existing bookmark with same ID (for updates)
-    const filtered = allBookmarks.filter(b => b.id !== bookmark.id);
+    const filtered = allBookmarks.filter((b) => b.id !== bookmark.id);
     filtered.push(bookmark);
 
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(filtered));
@@ -81,7 +81,7 @@ export const deleteBookmark = (bookmarkId: string): void => {
     if (!stored) return;
 
     const allBookmarks: ChatBookmark[] = JSON.parse(stored);
-    const filtered = allBookmarks.filter(b => b.id !== bookmarkId);
+    const filtered = allBookmarks.filter((b) => b.id !== bookmarkId);
 
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(filtered));
   } catch (error) {
@@ -99,9 +99,7 @@ export const renameBookmark = (bookmarkId: string, newName: string): void => {
     if (!stored) return;
 
     const allBookmarks: ChatBookmark[] = JSON.parse(stored);
-    const updated = allBookmarks.map(b =>
-      b.id === bookmarkId ? { ...b, name: newName } : b
-    );
+    const updated = allBookmarks.map((b) => (b.id === bookmarkId ? { ...b, name: newName } : b));
 
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(updated));
   } catch (error) {
@@ -132,7 +130,7 @@ export const createBookmark = (
     messageCount: messages.length,
     messages: JSON.parse(JSON.stringify(messages)), // Deep copy
     createdAt: Date.now(),
-    previewText
+    previewText,
   };
 };
 
@@ -145,7 +143,7 @@ export const getBookmarkCount = (characterId: string): number => {
     if (!stored) return 0;
 
     const allBookmarks: ChatBookmark[] = JSON.parse(stored);
-    return allBookmarks.filter(b => b.characterId === characterId).length;
+    return allBookmarks.filter((b) => b.characterId === characterId).length;
   } catch {
     return 0;
   }
@@ -160,7 +158,7 @@ export const clearCharacterBookmarks = (characterId: string): void => {
     if (!stored) return;
 
     const allBookmarks: ChatBookmark[] = JSON.parse(stored);
-    const filtered = allBookmarks.filter(b => b.characterId !== characterId);
+    const filtered = allBookmarks.filter((b) => b.characterId !== characterId);
 
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(filtered));
   } catch (error) {
@@ -192,10 +190,7 @@ export const importBookmarks = (jsonString: string, merge: boolean = true): numb
       const existing: ChatBookmark[] = stored ? JSON.parse(stored) : [];
 
       // Merge, preferring imported versions for duplicates
-      const merged = [
-        ...imported,
-        ...existing.filter(b => !imported.some(i => i.id === b.id))
-      ];
+      const merged = [...imported, ...existing.filter((b) => !imported.some((i) => i.id === b.id))];
 
       localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(merged));
       return imported.length;

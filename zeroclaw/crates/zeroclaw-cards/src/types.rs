@@ -426,7 +426,23 @@ impl CharacterCard {
         };
 
         let mut seen: HashSet<usize> = HashSet::new();
-        self.split_lorebook_with_text(book, conversation_text, 0, &mut seen)
+        self.split_lorebook_with_text(book, conversation_text, 0, &mut seen, true)
+    }
+
+    /// Return keyword-triggered lorebook contents for per-turn prompt injection.
+    ///
+    /// Constant entries are intentionally excluded here because `build_prompt`
+    /// already injects them into the static system section.
+    pub fn lorebook_keyword_blocks(&self, conversation_text: &str) -> Vec<String> {
+        let book = match &self.data.character_book {
+            Some(b) => b,
+            None => return Vec::new(),
+        };
+
+        let mut seen: HashSet<usize> = HashSet::new();
+        let (before, after) =
+            self.split_lorebook_with_text(book, conversation_text, 0, &mut seen, false);
+        before.into_iter().chain(after).collect()
     }
 
     /// Internal recursive lorebook scanner.
@@ -441,6 +457,7 @@ impl CharacterCard {
         text: &str,
         depth: usize,
         seen: &mut HashSet<usize>,
+        include_constant: bool,
     ) -> (Vec<String>, Vec<String>) {
         let max_depth = 3;
         let lower_text = text.to_lowercase();
@@ -454,7 +471,7 @@ impl CharacterCard {
             }
 
             let should_include = if entry.constant {
-                true
+                include_constant
             } else if entry.selective {
                 let primary_match = entry
                     .keys
@@ -509,8 +526,13 @@ impl CharacterCard {
                 combined_text.push('\n');
                 combined_text.push_str(&content);
 
-                let (rec_before, rec_after) =
-                    self.split_lorebook_with_text(book, &combined_text, depth + 1, seen);
+                let (rec_before, rec_after) = self.split_lorebook_with_text(
+                    book,
+                    &combined_text,
+                    depth + 1,
+                    seen,
+                    include_constant,
+                );
                 before.extend(rec_before);
                 after.extend(rec_after);
             }
@@ -585,6 +607,43 @@ mod tests {
         }
     }
 
+    fn make_keyword_lorebook_card() -> CharacterCard {
+        let mut card = make_card();
+        card.data.character_book = Some(CharacterBook {
+            name: "DragonLore".into(),
+            description: String::new(),
+            entries: vec![
+                CharacterBookEntry {
+                    id: String::new(),
+                    keys: vec!["dragon".into()],
+                    content: "DRAGON_LORE".into(),
+                    enabled: true,
+                    selective: false,
+                    secondary_keys: vec![],
+                    constant: false,
+                    position: "before_char".into(),
+                    token_budget: None,
+                    priority: None,
+                    recursive: false,
+                },
+                CharacterBookEntry {
+                    id: String::new(),
+                    keys: vec![],
+                    content: "CONSTANT_LORE".into(),
+                    enabled: true,
+                    selective: false,
+                    secondary_keys: vec![],
+                    constant: true,
+                    position: "before_char".into(),
+                    token_budget: None,
+                    priority: None,
+                    recursive: false,
+                },
+            ],
+        });
+        card
+    }
+
     #[test]
     fn test_build_prompt_order() {
         let card = make_card();
@@ -627,6 +686,35 @@ mod tests {
     }
 
     #[test]
+    fn build_prompt_includes_user_persona_when_provided() {
+        // The WS companion path now feeds the user's persona here (it used to
+        // pass None, so the main character never knew who it was talking to).
+        // Lock that a non-empty persona lands in the prompt, and an absent one
+        // doesn't fabricate a persona section.
+        let card = make_card();
+
+        let with = card.build_prompt(
+            "play",
+            "Alex",
+            "hello there friend",
+            Some("Alex is a night-shift nurse who loves jazz."),
+        );
+        let has_persona = with
+            .iter()
+            .any(|f| f.content.contains("night-shift nurse who loves jazz"));
+        assert!(has_persona, "persona text must appear when provided");
+        let labels_user = with.iter().any(|f| f.content.contains("[Alex's persona]"));
+        assert!(
+            labels_user,
+            "persona block should be attributed to the user"
+        );
+
+        let without = card.build_prompt("play", "Alex", "hello there friend", None);
+        let fabricated = without.iter().any(|f| f.content.contains("persona]"));
+        assert!(!fabricated, "no persona section when none is provided");
+    }
+
+    #[test]
     fn test_lorebook_no_match() {
         let card = make_card();
         let fragments = card.build_prompt("play", "Alex", "Just water for me.", None);
@@ -637,6 +725,30 @@ mod tests {
             .any(|f| f.content.contains("government agency"));
         assert!(!has_whiskey);
         assert!(!has_secret);
+    }
+
+    #[test]
+    fn keyword_blocks_exclude_constant_and_match_keys() {
+        let card = make_keyword_lorebook_card();
+
+        let blocks = card.lorebook_keyword_blocks("I saw a dragon today");
+        assert!(blocks.iter().any(|block| block == "DRAGON_LORE"));
+        assert!(!blocks.iter().any(|block| block == "CONSTANT_LORE"));
+        assert!(card.lorebook_keyword_blocks("hello").is_empty());
+    }
+
+    #[test]
+    fn build_prompt_with_empty_text_keeps_constant_only() {
+        let card = make_keyword_lorebook_card();
+        let prompt = card
+            .build_prompt("play", "User", "", None)
+            .into_iter()
+            .map(|fragment| fragment.content)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(prompt.contains("CONSTANT_LORE"));
+        assert!(!prompt.contains("DRAGON_LORE"));
     }
 
     #[test]

@@ -14,7 +14,7 @@ zeroclaw-infra.workspace = true
 zeroclaw-log.workspace = true
 zeroclaw-memory.workspace = true
 zeroclaw-providers.workspace = true
-zeroclaw-channels = { workspace = true, default-features = true, features = ["channel-email", "channel-telegram"] }
+zeroclaw-channels = { workspace = true, default-features = false }
 zeroclaw-runtime.workspace = true
 zeroclaw-tools.workspace = true
 zeroclaw-plugins = { workspace = true, optional = true }
@@ -79,6 +79,9 @@ toml_edit = "0.25"
 rustls-pemfile = "2"
 uuid = { version = "1.22", default-features = false, features = ["v4", "std"] }
 
+jsonrpsee = { version = "0.26", default-features = false, features = ["server", "macros"] }
+ts-rs = { version = "10.1", features = ["chrono-impl", "serde-json-impl"] }
+
 [dev-dependencies]
 rand = "0.10"
 rcgen = "0.13"
@@ -95,6 +98,18 @@ schema-export = ["zeroclaw-config/schema-export", "dep:schemars"]
 embedded-web = ["dep:include_dir"]
 gateway-voice-duplex = []
 plugins-wasm = ["dep:zeroclaw-plugins"]
+gateway-channels = [
+  "channel-email",
+  "channel-linq",
+  "channel-nextcloud",
+  "channel-wati",
+  "channel-whatsapp-cloud",
+]
+channel-email = ["zeroclaw-channels/channel-email"]
+channel-linq = ["zeroclaw-channels/channel-linq"]
+channel-nextcloud = ["zeroclaw-channels/channel-nextcloud"]
+channel-wati = ["zeroclaw-channels/channel-wati"]
+channel-whatsapp-cloud = ["zeroclaw-channels/channel-whatsapp-cloud"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

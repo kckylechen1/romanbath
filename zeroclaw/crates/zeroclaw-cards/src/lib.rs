@@ -29,6 +29,8 @@ pub enum CardError {
     Json(#[from] serde_json::Error),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("a character named {0:?} already exists")]
+    AlreadyExists(String),
 }
 
 /// Extract a character card from raw PNG bytes.

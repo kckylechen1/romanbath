@@ -13,7 +13,7 @@
  * app root and subscribes to this service.
  */
 
-export type DialogKind = "confirm" | "prompt" | "alert";
+export type DialogKind = 'confirm' | 'prompt' | 'alert';
 
 interface BaseState {
   id: string;
@@ -26,12 +26,12 @@ interface BaseState {
 }
 
 export interface ConfirmState extends BaseState {
-  kind: "confirm";
+  kind: 'confirm';
   resolve: (ok: boolean) => void;
 }
 
 export interface PromptState extends BaseState {
-  kind: "prompt";
+  kind: 'prompt';
   defaultValue: string;
   placeholder?: string;
   multiline?: boolean;
@@ -39,7 +39,7 @@ export interface PromptState extends BaseState {
 }
 
 export interface AlertState extends BaseState {
-  kind: "alert";
+  kind: 'alert';
   resolve: () => void;
 }
 
@@ -59,8 +59,7 @@ export const subscribe = (fn: (state: DialogState | null) => void): (() => void)
 
 export const getCurrentDialog = (): DialogState | null => current;
 
-const newId = (): string =>
-  `dialog-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+const newId = (): string => `dialog-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 const close = (): void => {
   current = null;
@@ -82,19 +81,19 @@ export const confirm = (opts: ConfirmOptions): Promise<boolean> => {
   if (current) {
     const prev = current;
     close();
-    if (prev.kind === "confirm") prev.resolve(false);
-    else if (prev.kind === "prompt") prev.resolve(null);
+    if (prev.kind === 'confirm') prev.resolve(false);
+    else if (prev.kind === 'prompt') prev.resolve(null);
     else prev.resolve();
   }
 
   return new Promise<boolean>((resolve) => {
     current = {
       id: newId(),
-      kind: "confirm",
+      kind: 'confirm',
       title: opts.title,
       message: opts.message,
-      confirmLabel: opts.confirmLabel ?? "Confirm",
-      cancelLabel: opts.cancelLabel ?? "Cancel",
+      confirmLabel: opts.confirmLabel ?? 'Confirm',
+      cancelLabel: opts.cancelLabel ?? 'Cancel',
       danger: opts.danger,
       resolve,
     };
@@ -116,22 +115,22 @@ export const prompt = (opts: PromptOptions): Promise<string | null> => {
   if (current) {
     const prev = current;
     close();
-    if (prev.kind === "confirm") prev.resolve(false);
-    else if (prev.kind === "prompt") prev.resolve(null);
+    if (prev.kind === 'confirm') prev.resolve(false);
+    else if (prev.kind === 'prompt') prev.resolve(null);
     else prev.resolve();
   }
 
   return new Promise<string | null>((resolve) => {
     current = {
       id: newId(),
-      kind: "prompt",
+      kind: 'prompt',
       title: opts.title,
       message: opts.message,
-      defaultValue: opts.defaultValue ?? "",
+      defaultValue: opts.defaultValue ?? '',
       placeholder: opts.placeholder,
       multiline: opts.multiline,
-      confirmLabel: opts.confirmLabel ?? "OK",
-      cancelLabel: opts.cancelLabel ?? "Cancel",
+      confirmLabel: opts.confirmLabel ?? 'OK',
+      cancelLabel: opts.cancelLabel ?? 'Cancel',
       resolve,
     };
     notify();
@@ -148,19 +147,19 @@ export const alert = (opts: AlertOptions): Promise<void> => {
   if (current) {
     const prev = current;
     close();
-    if (prev.kind === "confirm") prev.resolve(false);
-    else if (prev.kind === "prompt") prev.resolve(null);
+    if (prev.kind === 'confirm') prev.resolve(false);
+    else if (prev.kind === 'prompt') prev.resolve(null);
     else prev.resolve();
   }
 
   return new Promise<void>((resolve) => {
     current = {
       id: newId(),
-      kind: "alert",
+      kind: 'alert',
       title: opts.title,
       message: opts.message,
-      confirmLabel: opts.okLabel ?? "OK",
-      cancelLabel: "",
+      confirmLabel: opts.okLabel ?? 'OK',
+      cancelLabel: '',
       resolve,
     };
     notify();
@@ -173,10 +172,10 @@ export const resolveDialog = (value: boolean | string | null): void => {
   if (!current) return;
   const active = current;
   close();
-  if (active.kind === "confirm") {
-    active.resolve(typeof value === "boolean" ? value : false);
-  } else if (active.kind === "prompt") {
-    active.resolve(typeof value === "string" ? value : null);
+  if (active.kind === 'confirm') {
+    active.resolve(typeof value === 'boolean' ? value : false);
+  } else if (active.kind === 'prompt') {
+    active.resolve(typeof value === 'string' ? value : null);
   } else {
     active.resolve();
   }

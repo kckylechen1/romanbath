@@ -98,6 +98,22 @@ export const ensurePairing = async (): Promise<void> => {
 
 // ── Types ──
 
+export interface MemoryEntry {
+  id: string;
+  text: string;
+  summary?: string;
+  category: string;
+  importance: number;
+  timestamp: string;
+  tier: string;
+  keywords: string[];
+  entities: string[];
+  /** Retention policy from the store; "pinned" means GC-exempt. The UI derives
+   *  the pin state from this (pinned = retention_policy === 'pinned'). Matches
+   *  the snake_case field the gateway serializes from MemoryEntry. */
+  retention_policy?: string | null;
+}
+
 export interface ChatMessage {
   role: string;
   content: string;
@@ -238,6 +254,10 @@ interface CharacterDataResponse {
   source: string[];
   character_book: CharacterBook | null;
   extensions: Record<string, unknown>;
+  // V3 asset manifest (avatar/expression/background URIs). The backend always
+  // serializes this; the form must read it back or every edit-save round-trip
+  // writes `assets: []` and silently drops the card's assets.
+  assets?: CharacterAsset[];
 }
 
 const characterAvatarUrl = (name: string): string =>
@@ -353,7 +373,7 @@ const mapSummaryToCharacter = (char: CharacterSummary): Character => {
 };
 
 const parseCompanionConfig = (
-  extensions: Record<string, unknown>,
+  extensions: Record<string, unknown>
 ): CompanionPersonaConfig | null => {
   const raw = extensions.companion;
   if (!raw || typeof raw !== 'object') return null;
@@ -370,7 +390,7 @@ const parseCompanionConfig = (
 };
 
 const serializeCompanionConfig = (
-  companion: CompanionPersonaConfig | null | undefined,
+  companion: CompanionPersonaConfig | null | undefined
 ): Record<string, unknown> | null => {
   if (!companion) return null;
   return {
@@ -430,6 +450,7 @@ export const mapDetailsToForm = (char: CharacterDataResponse): CharacterFormData
     nickname: char.nickname || '',
     groupOnlyGreetings: char.group_only_greetings || [],
     source: char.source || [],
+    assets: char.assets || [],
     characterBook: mapBookToForm(char.character_book),
     extensions,
     companion: parseCompanionConfig(extensions),
@@ -470,13 +491,14 @@ export const buildOptionsBody = (options: ChatOptions): Record<string, unknown> 
     body.authors_note = options.authorsNote;
   }
   if (
-    isNonEmptyString(options.authorsNote)
-    && options.authorsNoteDepth !== null
-    && options.authorsNoteDepth !== undefined
+    isNonEmptyString(options.authorsNote) &&
+    options.authorsNoteDepth !== null &&
+    options.authorsNoteDepth !== undefined
   ) {
     body.authors_note_depth = options.authorsNoteDepth;
   }
-  if (options.promptOrder && options.promptOrder !== 'default') body.prompt_order = options.promptOrder;
+  if (options.promptOrder && options.promptOrder !== 'default')
+    body.prompt_order = options.promptOrder;
   if (isNonEmptyString(options.userPrefix)) body.user_prefix = options.userPrefix;
   if (isNonEmptyString(options.modelPrefix)) body.model_prefix = options.modelPrefix;
   if (isNonEmptyString(options.contextTemplate)) body.context_template = options.contextTemplate;
@@ -536,7 +558,7 @@ export const getCharacters = async (opts?: GetCharactersOptions): Promise<Charac
 export const getSettings = async (): Promise<Record<string, unknown>> => ({});
 
 export const getCharacterDetails = async (
-  characterId: string,
+  characterId: string
 ): Promise<CharacterFormData | null> => {
   try {
     await ensurePairing();
@@ -555,7 +577,7 @@ export const getCharacterDetails = async (
 const MAX_IMPORT_SIZE = 10 * 1024 * 1024; // 10MB
 
 export const importCharacterCard = async (
-  file: File,
+  file: File
 ): Promise<{ success: boolean; fileName?: string; error?: string }> => {
   const extension = file.name.split('.').pop()?.toLowerCase() || '';
   const supportedFormats = ['png', 'json', 'webp'];
@@ -595,14 +617,14 @@ export const importCharacterCard = async (
 };
 
 export const duplicateCharacter = async (
-  characterId: string,
+  characterId: string
 ): Promise<{ success: boolean; fileName?: string; error?: string }> => {
   try {
     await ensurePairing();
-    const res = await fetch(
-      `/api/characters/${encodeURIComponent(characterId)}/duplicate`,
-      { method: 'POST', headers: jsonHeaders() },
-    );
+    const res = await fetch(`/api/characters/${encodeURIComponent(characterId)}/duplicate`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+    });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       return { success: false, error: err.error || 'Duplicate failed' };
@@ -620,10 +642,9 @@ export const duplicateCharacter = async (
 export const exportCharacter = async (characterId: string): Promise<Blob | null> => {
   try {
     await ensurePairing();
-    const res = await fetch(
-      `/api/characters/${encodeURIComponent(characterId)}/export`,
-      { headers: jsonHeaders() },
-    );
+    const res = await fetch(`/api/characters/${encodeURIComponent(characterId)}/export`, {
+      headers: jsonHeaders(),
+    });
     if (!res.ok) return null;
     return res.blob();
   } catch {
@@ -633,19 +654,16 @@ export const exportCharacter = async (characterId: string): Promise<Blob | null>
 
 export const uploadCharacterAvatar = async (
   characterName: string,
-  file: File,
+  file: File
 ): Promise<{ success: boolean; error?: string }> => {
   try {
     await ensurePairing();
     const data_base64 = await fileToBase64(file);
-    const res = await fetch(
-      `/api/characters/${encodeURIComponent(characterName)}/avatar`,
-      {
-        method: 'POST',
-        headers: jsonHeaders(),
-        body: JSON.stringify({ data_base64 }),
-      },
-    );
+    const res = await fetch(`/api/characters/${encodeURIComponent(characterName)}/avatar`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ data_base64 }),
+    });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       return { success: false, error: err.error || 'Avatar upload failed' };
@@ -671,7 +689,7 @@ export const hasCharacterAvatar = async (characterName: string): Promise<boolean
 };
 
 export const deleteCharacterAvatar = async (
-  characterName: string,
+  characterName: string
 ): Promise<{ success: boolean; error?: string }> => {
   try {
     await ensurePairing();
@@ -694,7 +712,7 @@ export const deleteCharacterAvatar = async (
 };
 
 export const createCharacter = async (
-  data: CharacterFormData,
+  data: CharacterFormData
 ): Promise<{ success: boolean; error: string; fileName?: string }> => {
   try {
     await ensurePairing();
@@ -719,7 +737,7 @@ export const createCharacter = async (
 
 export const updateCharacter = async (
   id: string,
-  data: CharacterFormData,
+  data: CharacterFormData
 ): Promise<{ success: boolean; error: string }> => {
   try {
     await ensurePairing();
@@ -741,9 +759,7 @@ export const updateCharacter = async (
   }
 };
 
-export const deleteCharacter = async (
-  id: string,
-): Promise<{ success: boolean; error: string }> => {
+export const deleteCharacter = async (id: string): Promise<{ success: boolean; error: string }> => {
   try {
     await ensurePairing();
     const res = await fetch(`/api/characters/${encodeURIComponent(id)}`, {
@@ -774,11 +790,7 @@ const mapBookEntryResponse = (entry: unknown): CharacterBookEntry => {
   // (raw SillyTavern spec). Normalize defensively like the rest of the
   // service does so the editor never sees an undefined field.
   const e = entry as CharacterBookEntryWire;
-  const id = typeof e.id === 'string' && e.id
-    ? e.id
-    : e.uid != null
-      ? String(e.uid)
-      : '';
+  const id = typeof e.id === 'string' && e.id ? e.id : e.uid != null ? String(e.uid) : '';
   const secondaryKeys = e.secondaryKeys ?? e.secondary_keys ?? [];
   const tokenBudget = e.tokenBudget ?? e.token_budget;
   return {
@@ -822,7 +834,7 @@ export const getCharacterBook = async (name: string): Promise<CharacterBook | nu
 
 export const replaceCharacterBook = async (
   name: string,
-  book: CharacterBook,
+  book: CharacterBook
 ): Promise<CharacterBook> => {
   await ensurePairing();
   const res = await fetch(`/api/characters/${encodeURIComponent(name)}/book`, {
@@ -834,13 +846,14 @@ export const replaceCharacterBook = async (
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || `Replace book failed: ${res.status}`);
   }
-  const data = (await res.json()) as { book: CharacterBook };
+  const data = (await res.json()) as { book: CharacterBook | null };
+  if (!data.book) throw new Error('Replace book failed: server returned empty book');
   return mapBookResponse(data.book);
 };
 
 export const addBookEntry = async (
   name: string,
-  entry: Omit<CharacterBookEntry, 'id'>,
+  entry: Omit<CharacterBookEntry, 'id'>
 ): Promise<CharacterBookEntry> => {
   await ensurePairing();
   // Omit<..., 'id'> is structurally compatible with CharacterBookEntry
@@ -863,7 +876,7 @@ export const addBookEntry = async (
 export const updateBookEntry = async (
   name: string,
   entryId: string,
-  entry: CharacterBookEntry,
+  entry: CharacterBookEntry
 ): Promise<CharacterBookEntry> => {
   await ensurePairing();
   const res = await fetch(
@@ -872,7 +885,7 @@ export const updateBookEntry = async (
       method: 'PUT',
       headers: jsonHeaders(),
       body: JSON.stringify({ entry: mapBookEntryToWire({ ...entry, id: entryId }) }),
-    },
+    }
   );
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -887,13 +900,77 @@ export const deleteBookEntry = async (name: string, entryId: string): Promise<bo
     await ensurePairing();
     const res = await fetch(
       `/api/characters/${encodeURIComponent(name)}/book/entries/${encodeURIComponent(entryId)}`,
-      { method: 'DELETE', headers: jsonHeaders() },
+      { method: 'DELETE', headers: jsonHeaders() }
     );
     // 204 No Content on success.
     return res.ok;
   } catch (e) {
     console.error('Error deleting book entry:', e);
     return false;
+  }
+};
+
+// ── Memory API ──
+
+export const getCharacterMemories = async (characterName: string): Promise<MemoryEntry[]> => {
+  try {
+    await ensurePairing();
+    // Per-character endpoint backed by the sigil ChatMemoryStore the chat
+    // pipeline writes to. NOT /api/memory — that resolves the install-wide
+    // backend, silently drops the path filter, and returns the wrong store.
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(characterName)}/memories`,
+      { headers: jsonHeaders() }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.entries ?? data.memories ?? []);
+  } catch (e) {
+    console.error('Error fetching character memories:', e);
+    return [];
+  }
+};
+
+/** Hard-delete one memory (user-initiated, confirmed in the UI). Returns true
+ *  when the gateway reports the row was removed. */
+export const deleteCharacterMemory = async (
+  characterName: string,
+  id: string
+): Promise<boolean> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(characterName)}/memories/${encodeURIComponent(id)}`,
+      { method: 'DELETE', headers: jsonHeaders() }
+    );
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data?.ok === true;
+  } catch (e) {
+    console.error('Error deleting character memory:', e);
+    return false;
+  }
+};
+
+/** Edit/pin one memory. `text` recomputes the summary server-side; `pinned`
+ *  maps to retention_policy. Returns the updated entry, or null on failure. */
+export const updateCharacterMemory = async (
+  characterName: string,
+  id: string,
+  patch: { text?: string; category?: string; pinned?: boolean }
+): Promise<MemoryEntry | null> => {
+  try {
+    await ensurePairing();
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(characterName)}/memories/${encodeURIComponent(id)}`,
+      { method: 'PATCH', headers: jsonHeaders(), body: JSON.stringify(patch) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data?.entry as MemoryEntry) ?? null;
+  } catch (e) {
+    console.error('Error updating character memory:', e);
+    return null;
   }
 };
 
@@ -910,17 +987,14 @@ export const deleteBookEntry = async (name: string, entryId: string): Promise<bo
 // Yields one string per event — the concatenated `data:` payload, or '' for
 // events with no data field (so callers can still observe keep-alives if
 // they care). The caller decides what to do with each payload.
-export async function* parseSseEvents(
-  res: Response,
-): AsyncGenerator<string, void, unknown> {
+export async function* parseSseEvents(res: Response): AsyncGenerator<string, void, unknown> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('No response body');
 
   const decoder = new TextDecoder();
   let buffer = '';
 
-  const normalizeLineEndings = (s: string): string =>
-    s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const normalizeLineEndings = (s: string): string => s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -966,7 +1040,7 @@ export async function* parseSseEvents(
 
 const parseSseStream = async (
   res: Response,
-  onToken: (fullText: string) => void,
+  onToken: (fullText: string) => void
 ): Promise<string> => {
   let fullText = '';
 
@@ -1004,7 +1078,7 @@ export const generateTextStream = async (
   onChunk: (chunk: string, fullText: string) => void,
   onComplete: (fullText: string) => void,
   onError: (error: Error) => void,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<void> => {
   try {
     await ensurePairing();
@@ -1044,7 +1118,7 @@ export const generateTextStream = async (
 export const generateText = async (
   request: ChatRequestPayload,
   options: ChatOptions,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<string> => {
   await ensurePairing();
 
@@ -1075,7 +1149,7 @@ export const generateText = async (
 
 export const generateImage = async (
   prompt: string,
-  resolution?: string,
+  resolution?: string
 ): Promise<{ url: string }> => {
   await ensurePairing();
 
@@ -1105,7 +1179,7 @@ export const generateImage = async (
 export const generateSpeech = async (
   text: string,
   voiceId?: string,
-  language?: string,
+  language?: string
 ): Promise<ArrayBuffer> => {
   await ensurePairing();
 
@@ -1129,39 +1203,149 @@ export const generateSpeech = async (
 
 // ── WebSocket Chat (for tool-enabled character chat) ──
 
+/** The user's perceived emotional state for a turn, as inferred server-side by
+ *  zeroclaw-affect. Dimensional model (valence + arousal) is the source of
+ *  truth; `label` is a derived discrete emotion. Drives the avatar mood glow. */
+export interface AffectState {
+  /** -1.0 (negative) … 1.0 (positive) */
+  valence: number;
+  /** 0.0 (calm) … 1.0 (activated) */
+  arousal: number;
+  /** Discrete label, e.g. "Excitement" | "Sadness" | "Calm" | null */
+  label: string | null;
+  /** 0.0 … 1.0 */
+  confidence: number;
+}
+
+/** One node from a server history_snapshot — the server-authoritative
+ *  conversation tree (Solution B). Shape mirrors ws.rs's snapshot frame. */
+export interface WsHistoryNode {
+  id: string;
+  parent_id: string | null;
+  role: string; // "user" | "assistant"
+  content: string;
+  author_id?: string | null;
+  status?: string | null;
+  meta?: unknown;
+  timestamp?: string | null;
+}
+
+/** Per-turn context surfaced to the Studio inspector from a `done` frame:
+ *  the memories injected THIS turn plus the turn's token/cost accounting.
+ *  Numeric fields are null when the gateway didn't report them. */
+export interface TurnContext {
+  /** Memories injected this turn (empty string when none). */
+  recalledMemories: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  tokensUsed: number | null;
+  costUsd: number | null;
+  model: string | null;
+  provider: string | null;
+}
+
+const finiteOrNull = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+const nonEmptyOrNull = (v: unknown): string | null =>
+  typeof v === 'string' && v.length > 0 ? v : null;
+
+/** Pure parse of a `done` frame into a TurnContext. Exported for unit tests —
+ *  tolerates missing/malformed fields (numbers fall back to null, recalled
+ *  memories to ''), so a sparse gateway frame never throws into the WS loop. */
+export const parseTurnContext = (frame: Record<string, unknown>): TurnContext => ({
+  recalledMemories: typeof frame.recalled_memories === 'string' ? frame.recalled_memories : '',
+  inputTokens: finiteOrNull(frame.input_tokens),
+  outputTokens: finiteOrNull(frame.output_tokens),
+  tokensUsed: finiteOrNull(frame.tokens_used),
+  costUsd: finiteOrNull(frame.cost_usd),
+  model: nonEmptyOrNull(frame.model),
+  provider: nonEmptyOrNull(frame.provider),
+});
+
 export interface WsChatCallbacks {
   onChunk: (chunk: string, fullText: string) => void;
   onToolCall: (toolName: string) => void;
-  onToolResult: (toolName: string, output: string, mediaUrl?: string, mediaType?: "image" | "audio" | "video") => void;
+  onToolResult: (
+    toolName: string,
+    output: string,
+    mediaUrl?: string,
+    mediaType?: 'image' | 'audio' | 'video'
+  ) => void;
   onDone: (fullText: string) => void;
   onError: (error: string) => void;
   onFirstMessage?: (text: string) => void;
+  /** Fired when a done frame carries a perceived affect state (may be null). */
+  onAffect?: (affect: AffectState | null) => void;
+  /** Fired on connect with the server-authoritative conversation tree, so the
+   *  client can reconcile its local view (cross-device / replaceable frontend). */
+  onHistory?: (nodes: WsHistoryNode[], activeLeaf: string | null) => void;
+  /** Fired when the server broadcasts an in-place content edit (this device's
+   *  own echo, or another device). Must be idempotent with the optimistic
+   *  local update — the same edit may already be applied. */
+  onNodeEdited?: (msgId: string, content: string) => void;
+  /** Fired when the server broadcasts a subtree delete. `removed` lists every
+   *  deleted node id (the target + its descendants). Must be idempotent with
+   *  the optimistic local delete. */
+  onNodeDeleted?: (msgId: string, removed: string[]) => void;
+  /** Fired on connect with the resolved system prompt (card + tools + injected
+   *  lorebook/world-info + connect-time memory), for the Studio inspector. */
+  onContextMeta?: (systemPrompt: string) => void;
+  /** Fired when a `done` frame arrives, carrying this turn's recalled memories
+   *  and token/cost accounting, for the Studio inspector. */
+  onTurnContext?: (ctx: TurnContext) => void;
 }
 
-const WS_URL = (agentAlias: string = "default", token?: string) => {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+/** Client-minted node ids for a turn, sent on the message frame so the server
+ *  stores the same tree the client renders (Solution B Phase 2). */
+export interface WsSendIds {
+  msgId?: string;
+  parentId?: string | null;
+  assistantMsgId?: string;
+  /** Regenerate / generate-swipe: mark this turn as an alternate. The server
+   *  reuses the existing user node (msgId) and creates a NEW assistant SIBLING
+   *  (assistantMsgId) under it, and SKIPS memory for the turn. */
+  alternate?: boolean;
+}
+
+const WS_URL = (agentAlias: string = 'default', token?: string, sessionId?: string) => {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const params = new URLSearchParams({ agent: agentAlias });
-  if (token) params.set("token", token);
+  if (token) params.set('token', token);
+  // The query-param session_id is what the gateway turns into its session_key
+  // (ws.rs builds session_key from the query param *before* reading the connect
+  // frame). Sending a stable id per (character, chat thread) lets the backend
+  // resume the session — seed_history + recall — instead of spinning up a fresh
+  // amnesiac session on every message.
+  if (sessionId) params.set('session_id', sessionId);
   return `${proto}//${window.location.host}/ws/chat?${params.toString()}`;
 };
 
-function resolveMediaUrl(toolName: string, output: string): { url: string; type: "image" | "audio" | "video" } | null {
+function resolveMediaUrl(
+  toolName: string,
+  output: string
+): { url: string; type: 'image' | 'audio' | 'video' } | null {
   const isRemoteUrl = (value: string): boolean => /^https?:\/\//i.test(value);
 
   const normalizePath = (value: string): string => {
     const trimmed = value.trim();
-    if (trimmed.startsWith("/api/files/")) {
-      return trimmed.replace(/^\/api\/files\//, "");
+    if (trimmed.startsWith('/api/files/')) {
+      return trimmed.replace(/^\/api\/files\//, '');
     }
-    return trimmed.replace(/^\/+/, "");
+    return trimmed.replace(/^\/+/, '');
   };
 
   const resolveCandidate = (candidate?: unknown): string | null => {
-    if (typeof candidate !== "string") return null;
+    if (typeof candidate !== 'string') return null;
     const value = candidate.trim();
     if (!value) return null;
     if (isRemoteUrl(value)) return value;
-    if (!value.startsWith("images/") && !value.startsWith("audio/") && !value.startsWith("videos/") && !value.startsWith("/api/files/")) {
+    if (
+      !value.startsWith('images/') &&
+      !value.startsWith('audio/') &&
+      !value.startsWith('videos/') &&
+      !value.startsWith('/api/files/')
+    ) {
       return null;
     }
     return `/api/files/${normalizePath(value)}`;
@@ -1169,28 +1353,38 @@ function resolveMediaUrl(toolName: string, output: string): { url: string; type:
 
   try {
     const data = JSON.parse(output);
-    if (toolName.includes("image_gen") || toolName.includes("imagegen") || toolName.includes("photo")) {
-      const filePath = resolveCandidate(data.image || data.image_url || data.imageUrl || data.path || data.output);
-      if (filePath) return { url: filePath, type: "image" };
+    if (
+      toolName.includes('image_gen') ||
+      toolName.includes('imagegen') ||
+      toolName.includes('photo')
+    ) {
+      const filePath = resolveCandidate(
+        data.image || data.image_url || data.imageUrl || data.path || data.output
+      );
+      if (filePath) return { url: filePath, type: 'image' };
     }
-    if (toolName.includes("tts")) {
-      const filePath = resolveCandidate(data.audio || data.audio_file || data.audioFile || data.path || data.output);
-      if (filePath) return { url: filePath, type: "audio" };
+    if (toolName.includes('tts')) {
+      const filePath = resolveCandidate(
+        data.audio || data.audio_file || data.audioFile || data.path || data.output
+      );
+      if (filePath) return { url: filePath, type: 'audio' };
     }
-    if (toolName.includes("video")) {
-      const filePath = resolveCandidate(data.video || data.video_url || data.videoUrl || data.path || data.output);
-      if (filePath) return { url: filePath, type: "video" };
+    if (toolName.includes('video')) {
+      const filePath = resolveCandidate(
+        data.video || data.video_url || data.videoUrl || data.path || data.output
+      );
+      if (filePath) return { url: filePath, type: 'video' };
     }
 
     const genericCandidate = resolveCandidate(
-      data.file || data.file_path || data.filePath || data.url,
+      data.file || data.file_path || data.filePath || data.url
     );
     if (genericCandidate) {
-      const type = genericCandidate.includes("/audio/")
-        ? ("audio" as const)
-        : genericCandidate.includes("/videos/")
-          ? ("video" as const)
-          : ("image" as const);
+      const type = genericCandidate.includes('/audio/')
+        ? ('audio' as const)
+        : genericCandidate.includes('/videos/')
+          ? ('video' as const)
+          : ('image' as const);
       return { url: genericCandidate, type };
     }
 
@@ -1198,18 +1392,28 @@ function resolveMediaUrl(toolName: string, output: string): { url: string; type:
     const pathMatch = output.match(/"(images\/[^"]+|audio\/[^"]+|videos\/[^"]+)"/);
     if (pathMatch) {
       const path = pathMatch[1];
-      const type = path.startsWith("images/") ? "image" as const : path.startsWith("audio/") ? "audio" as const : "video" as const;
+      const type = path.startsWith('images/')
+        ? ('image' as const)
+        : path.startsWith('audio/')
+          ? ('audio' as const)
+          : ('video' as const);
       return { url: `/api/files/${path}`, type };
     }
-  } catch { /* not JSON */ }
+  } catch {
+    /* not JSON */
+  }
 
   const fallbackMatch = output.match(/(\bapi\/files\/[^"]+|\b(images|audio|videos)\/[^"]+)/);
   if (fallbackMatch) {
     const normalized = normalizePath(fallbackMatch[0]);
-    const path = normalized.startsWith("api/files/")
-      ? normalized.replace(/^api\/files\//, "")
+    const path = normalized.startsWith('api/files/')
+      ? normalized.replace(/^api\/files\//, '')
       : normalized;
-    const type = path.startsWith("audio/") ? ("audio" as const) : path.startsWith("videos/") ? ("video" as const) : ("image" as const);
+    const type = path.startsWith('audio/')
+      ? ('audio' as const)
+      : path.startsWith('videos/')
+        ? ('video' as const)
+        : ('image' as const);
     return { url: `/api/files/${path}`, type };
   }
 
@@ -1219,33 +1423,71 @@ function resolveMediaUrl(toolName: string, output: string): { url: string; type:
 export class WsChatConnection {
   private ws: WebSocket | null = null;
   private callbacks: WsChatCallbacks;
-  private fullText = "";
+  private fullText = '';
   private token: string;
+  // False while a turn is streaming (between send() and its done/error frame).
+  // Lets onclose tell "closed mid-reply" (surface an error so the UI unsticks)
+  // apart from "closed at rest" (silent, expected).
+  private turnSettled = true;
+  // The session this socket is bound to. A persistent connection is reused
+  // across turns of the same conversation; the caller checks `session` before
+  // reusing vs reconnecting.
+  private sessionId?: string;
 
   constructor(callbacks: WsChatCallbacks) {
     this.callbacks = callbacks;
-    this.token = getToken() || "";
+    this.token = getToken() || '';
   }
 
-  connect(characterName: string, mode?: string, userName?: string, agentAlias?: string): Promise<void> {
+  /** Which conversation this socket is bound to (undefined if none). */
+  get session(): string | undefined {
+    return this.sessionId;
+  }
+
+  /** Swap the per-turn callbacks before reusing a persistent socket for a new
+   *  turn (each turn's callbacks close over a fresh placeholder message id).
+   *  Connection-level callbacks (onHistory/onAffect) are swapped too — harmless,
+   *  since history merge is idempotent and gated. */
+  rebindCallbacks(callbacks: WsChatCallbacks): void {
+    this.callbacks = callbacks;
+  }
+
+  connect(
+    characterName: string,
+    mode?: string,
+    userName?: string,
+    agentAlias?: string,
+    sessionId?: string,
+    userDescription?: string
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(WS_URL(agentAlias, this.token));
-      this.fullText = "";
+      this.ws = new WebSocket(WS_URL(agentAlias, this.token, sessionId));
+      this.fullText = '';
+      this.sessionId = sessionId;
+      let opened = false;
 
       const timer = setTimeout(() => {
         if (this.ws?.readyState !== WebSocket.OPEN) {
-          reject(new Error("WebSocket connection timeout"));
+          reject(new Error('WebSocket connection timeout'));
           this.ws?.close();
         }
       }, 10000);
 
       this.ws.onopen = () => {
+        opened = true;
         const connectFrame: Record<string, unknown> = {
-          type: "connect",
+          type: 'connect',
           character_name: characterName,
-          character_mode: mode || "play",
-          user_name: userName || "User",
+          character_mode: mode || 'play',
+          user_name: userName || 'User',
         };
+        // User persona ("who the user is") so the card prompt addresses them
+        // correctly — the WS counterpart of the SSE path's user_description.
+        if (userDescription) connectFrame.user_description = userDescription;
+        // Mirror the session id into the connect frame too: the query param
+        // drives the gateway's session_key (history resume), the connect-frame
+        // id drives memory_session_id (sigil). Same value keeps them aligned.
+        if (sessionId) connectFrame.session_id = sessionId;
         this.ws!.send(JSON.stringify(connectFrame));
       };
 
@@ -1254,57 +1496,160 @@ export class WsChatConnection {
           const frame = JSON.parse(event.data);
 
           switch (frame.type) {
-            case "connected":
+            case 'connected':
               clearTimeout(timer);
               resolve();
               break;
-            case "chunk":
-              this.fullText += frame.content || "";
-              this.callbacks.onChunk(frame.content || "", this.fullText);
+            case 'context_meta':
+              // Resolved system prompt for this session (Studio inspector).
+              this.callbacks.onContextMeta?.(
+                typeof frame.system_prompt === 'string' ? frame.system_prompt : ''
+              );
               break;
-            case "tool_call": {
-              const toolName = frame.name || frame.tool_name || "unknown";
+            case 'chunk':
+              this.fullText += frame.content || '';
+              this.callbacks.onChunk(frame.content || '', this.fullText);
+              break;
+            case 'tool_call': {
+              const toolName = frame.name || frame.tool_name || 'unknown';
               this.callbacks.onToolCall(toolName);
               break;
             }
-            case "tool_result": {
-              const toolName = frame.name || frame.tool_name || "unknown";
-              const output = frame.output || "";
-              const media = resolveMediaUrl(toolName, typeof output === "string" ? output : JSON.stringify(output));
+            case 'tool_result': {
+              const toolName = frame.name || frame.tool_name || 'unknown';
+              const output = frame.output || '';
+              const media = resolveMediaUrl(
+                toolName,
+                typeof output === 'string' ? output : JSON.stringify(output)
+              );
               this.callbacks.onToolResult(
                 toolName,
-                typeof output === "string" ? output : JSON.stringify(output),
+                typeof output === 'string' ? output : JSON.stringify(output),
                 media?.url,
-                media?.type,
+                media?.type
               );
               break;
             }
-            case "done":
-              this.callbacks.onDone(this.fullText || frame.full_response || "");
+            case 'history_snapshot':
+              this.callbacks.onHistory?.(
+                (frame.nodes as WsHistoryNode[]) ?? [],
+                (frame.active_leaf as string | null) ?? null
+              );
               break;
-            case "error":
-              this.callbacks.onError(frame.message || frame.error || "Unknown error");
+            case 'node_edited':
+              // Echo of an edit frame (this device) or a cross-device edit.
+              this.callbacks.onNodeEdited?.(
+                String(frame.msg_id ?? ''),
+                String(frame.content ?? '')
+              );
+              break;
+            case 'node_deleted':
+              // Echo of a delete frame (this device) or a cross-device delete.
+              this.callbacks.onNodeDeleted?.(
+                String(frame.msg_id ?? ''),
+                (frame.removed as string[]) ?? []
+              );
+              break;
+            case 'done':
+              this.turnSettled = true;
+              if (this.callbacks.onAffect && 'affect' in frame) {
+                this.callbacks.onAffect((frame.affect as AffectState | null) ?? null);
+              }
+              // Per-turn context for the Studio inspector: recalled memories +
+              // token/cost accounting carried on the same done frame.
+              this.callbacks.onTurnContext?.(parseTurnContext(frame));
+              this.callbacks.onDone(this.fullText || frame.full_response || '');
+              break;
+            case 'error':
+              // Branch-mutation rejections (select_leaf / edit / delete) are
+              // best-effort, out-of-band feedback on a socket whose turn
+              // callbacks are still bound to the LAST generation. Routing them to
+              // the turn's onError would clobber an unrelated assistant bubble
+              // with an error banner (e.g. editing a message to empty, or
+              // editing/deleting a local-only node the server never persisted).
+              // Turn-level failures (CONTENT_TOO_LARGE, QUEUE_FULL, TIMEOUT,
+              // generation errors) still fall through and surface as expected.
+              if (
+                frame.code === 'INVALID_SELECT_LEAF' ||
+                frame.code === 'INVALID_EDIT' ||
+                frame.code === 'INVALID_DELETE'
+              ) {
+                console.warn(`branch mutation rejected (${frame.code}):`, frame.message);
+                break;
+              }
+              this.turnSettled = true;
+              this.callbacks.onError(frame.message || frame.error || 'Unknown error');
               break;
             default:
               // Ignore unknown frame types (connected acks, etc.)
               break;
           }
         } catch (e) {
-          console.warn("Failed to parse WS frame:", e);
+          console.warn('Failed to parse WS frame:', e);
         }
       };
 
-      this.ws.onerror = () => { clearTimeout(timer); reject(new Error("WebSocket connection failed")); };
-      this.ws.onclose = () => { clearTimeout(timer); };
+      this.ws.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error('WebSocket connection failed'));
+      };
+      this.ws.onclose = () => {
+        clearTimeout(timer);
+        if (!opened) {
+          // Closed before the socket ever opened — connect() never resolved.
+          reject(new Error('WebSocket closed before connect'));
+          return;
+        }
+        // Opened, but the socket dropped while a reply was still streaming.
+        // Without this the turn's done/error frame never arrives and the UI
+        // hangs with isTyping stuck on forever.
+        if (!this.turnSettled) {
+          this.turnSettled = true;
+          this.callbacks.onError('Connection closed before the reply finished');
+        }
+      };
     });
   }
 
-  send(content: string): void {
+  send(content: string, ids?: WsSendIds): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket not connected");
+      throw new Error('WebSocket not connected');
     }
-    this.ws.send(JSON.stringify({ type: "message", content }));
-    this.fullText = "";
+    this.turnSettled = false;
+    const frame: Record<string, unknown> = { type: 'message', content };
+    // Send the client-minted node ids so the server stores the same tree the
+    // client renders (so optimistic UI + cross-device reconcile by id).
+    if (ids?.msgId) frame.msg_id = ids.msgId;
+    if (ids?.parentId) frame.parent_id = ids.parentId;
+    if (ids?.assistantMsgId) frame.assistant_msg_id = ids.assistantMsgId;
+    // Regenerate / swipe: server reuses the user node + adds a new assistant
+    // sibling, and skips memory for this turn.
+    if (ids?.alternate) frame.alternate = true;
+    this.ws.send(JSON.stringify(frame));
+    this.fullText = '';
+  }
+
+  /** Tell the server which leaf is the active branch (zero-generation). */
+  selectLeaf(leafId: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'select_leaf', leaf_id: leafId }));
+  }
+
+  /** Tell the server to update a node's content in place (zero-generation).
+   *  No-op if the socket isn't open, like selectLeaf — the optimistic local
+   *  edit already happened; this is best-effort server sync. */
+  editNode(msgId: string, content: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'edit', msg_id: msgId, content }));
+  }
+
+  /** Tell the server to delete a node and its subtree (zero-generation).
+   *  No-op if the socket isn't open, like selectLeaf — the optimistic local
+   *  delete already happened; this is best-effort server sync (also fixes the
+   *  X1 "server resurrects deleted node on reload" class when online). */
+  deleteNode(msgId: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'delete', msg_id: msgId }));
   }
 
   close(): void {
@@ -1348,11 +1693,7 @@ export class ChatPushSubscriber {
   private shouldReconnect = true;
   private static RECONNECT_DELAY_MS = 5000;
 
-  constructor(
-    agentAlias: string,
-    callbacks: ChatPushCallbacks,
-    characterName?: string,
-  ) {
+  constructor(agentAlias: string, callbacks: ChatPushCallbacks, characterName?: string) {
     this.agentAlias = agentAlias;
     this.characterName = characterName;
     this.callbacks = callbacks;
@@ -1395,7 +1736,7 @@ export class ChatPushSubscriber {
       if (this.shouldReconnect) {
         this.reconnectTimer = setTimeout(
           () => this.connect(),
-          ChatPushSubscriber.RECONNECT_DELAY_MS,
+          ChatPushSubscriber.RECONNECT_DELAY_MS
         );
       }
     };
@@ -1423,4 +1764,45 @@ export class ChatPushSubscriber {
   get isConnected(): boolean {
     return this.source?.readyState === EventSource.OPEN;
   }
+}
+
+export interface SessionTreeNode {
+  id: string;
+  parent_id: string | null;
+  role: string;
+  content: string;
+  author_id?: string | null;
+  status?: string | null;
+  meta?: unknown;
+  timestamp?: string | null;
+}
+
+export interface SessionTreeResponse {
+  session_key: string;
+  nodes: SessionTreeNode[];
+  active_leaf: string | null;
+  session_persistence: boolean;
+}
+
+export async function getSessionTree(
+  sessionKey: string
+): Promise<SessionTreeResponse | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const resp = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionKey)}/tree`,
+      { headers: jsonHeaders(), signal: controller.signal }
+    );
+    if (!resp.ok) return null;
+    return (await resp.json()) as SessionTreeResponse;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export function sessionKeyForCharacter(characterName: string): string {
+  return `web:${characterName}`;
 }

@@ -618,6 +618,9 @@ pub struct ModelProviderRuntimeOptions {
     /// Extra JSON parameters merged into API request bodies at the top level.
     /// Propagated from `ModelProviderConfig::provider_extra`.
     pub provider_extra: Option<serde_json::Value>,
+    /// When `Some(false)`, strip assistant reasoning fields from outbound
+    /// history replay. `None` honors the provider default.
+    pub replay_assistant_reasoning: Option<bool>,
     /// When set, the provider is asked to use its native tool-calling
     /// schema instead of OpenAI-compat tool calls. Generic across families.
     pub native_tools: Option<bool>,
@@ -649,6 +652,7 @@ impl Default for ModelProviderRuntimeOptions {
             provider_max_tokens: None,
             merge_system_into_user: false,
             provider_extra: None,
+            replay_assistant_reasoning: None,
             native_tools: None,
             wire_api: None,
             think: None,
@@ -715,6 +719,7 @@ pub fn model_provider_runtime_options_from_model_provider_entry(
         provider_max_tokens: entry.and_then(|e| e.max_tokens),
         merge_system_into_user,
         provider_extra: entry.and_then(|e| e.provider_extra.clone()),
+        replay_assistant_reasoning: entry.and_then(|e| e.replay_assistant_reasoning),
         native_tools: entry.and_then(|e| e.native_tools),
         wire_api: entry.and_then(|e| e.wire_api.map(|w| w.as_str().to_string())),
         think: entry.and_then(|e| e.think),
@@ -2152,10 +2157,11 @@ mod tests {
                 provider.supports_vision(),
                 "alias `{alias}` should report vision capability"
             );
+            // Kimi Code moved to api.kimi.com; see upstream zeroclaw-labs/zeroclaw#8154.
             assert_eq!(
                 moonshot_code_base_url(),
-                "https://api.moonshot.cn/coder/v1",
-                "alias `{alias}` should resolve to the Moonshot code endpoint"
+                "https://api.kimi.com/coding/v1",
+                "alias `{alias}` should resolve to the Kimi Code endpoint"
             );
         }
     }
@@ -2472,6 +2478,29 @@ mod tests {
             options.native_tools,
             Some(true),
             "native_tools must propagate from the active model_provider entry to runtime options"
+        );
+    }
+
+    #[test]
+    fn provider_runtime_options_from_config_propagates_replay_assistant_reasoning() {
+        use zeroclaw_config::schema::{GroqModelProviderConfig, ModelProviderConfig};
+        let mut config = zeroclaw_config::schema::Config::default();
+        config.providers.models.groq.insert(
+            "default".to_string(),
+            GroqModelProviderConfig {
+                base: ModelProviderConfig {
+                    uri: Some("https://api.groq.com/openai/v1".to_string()),
+                    replay_assistant_reasoning: Some(false),
+                    ..Default::default()
+                },
+            },
+        );
+
+        let options = provider_runtime_options_from_config(&config);
+        assert_eq!(
+            options.replay_assistant_reasoning,
+            Some(false),
+            "replay_assistant_reasoning must propagate from the active model_provider entry"
         );
     }
 

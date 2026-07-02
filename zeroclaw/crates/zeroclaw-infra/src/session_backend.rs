@@ -69,6 +69,35 @@ pub struct TimestampedMessage {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+/// One node in a conversation TREE (companion-chat branching model).
+///
+/// The linear `ChatMessage` only carries `{role, content}`; a tree node adds
+/// the client-minted stable `msg_id`, its `parent_id` (None = root), an
+/// optional `author_id` (group chat: which character spoke), a streaming
+/// `status`, and a `meta` blob for purely-presentational fields (tool calls,
+/// media URLs) that have no column of their own. Backends that don't model a
+/// tree (JSONL, in-memory) leave the tree fields untouched via the trait's
+/// default methods and behave linearly.
+#[derive(Debug, Clone)]
+pub struct ConversationNode {
+    /// Client-minted stable id (the tree's identity; not the SQLite rowid).
+    pub msg_id: String,
+    /// Parent node's `msg_id`. `None` marks a root.
+    pub parent_id: Option<String>,
+    pub role: String,
+    pub content: String,
+    /// Group chat: the answering character's id. `None` for single-character
+    /// or user nodes.
+    pub author_id: Option<String>,
+    /// `"complete"` | `"streaming"` | `"interrupted"`. `None` == complete.
+    pub status: Option<String>,
+    /// JSON blob for presentational fields that have no dedicated column
+    /// (e.g. `toolCalls`, media). `None` when there are none.
+    pub meta: Option<serde_json::Value>,
+    /// Stamp the backend recorded, when it has one.
+    pub created_at: Option<DateTime<Utc>>,
+}
+
 /// Trait for session persistence backends.
 ///
 /// Implementations must be `Send + Sync` for sharing across async tasks.
@@ -255,6 +284,115 @@ pub trait SessionBackend: Send + Sync {
     /// List sessions stuck in "running" state longer than `threshold_secs`.
     fn list_stuck_sessions(&self, _threshold_secs: u64) -> Vec<SessionMetadata> {
         Vec::new()
+    }
+
+    // ── Conversation-tree API (companion branching) ───────────────────
+    //
+    // Every method below has a linear-fallback default so JSONL / in-memory
+    // backends keep compiling and behave linearly. Only a tree-aware backend
+    // (SQLite) overrides them. None of these are wired into the chat path yet
+    // (Phase 0 is dark infra); they exist so later phases can build on them.
+
+    /// Append a node carrying tree fields. Default drops the tree fields and
+    /// appends a plain message (linear behavior).
+    fn append_node(&self, session_key: &str, node: &ConversationNode) -> std::io::Result<()> {
+        self.append(
+            session_key,
+            &ChatMessage {
+                role: node.role.clone(),
+                content: node.content.clone(),
+            },
+        )
+    }
+
+    /// Update an existing node (by `msg_id`) — used for streaming content +
+    /// status/meta finalization. Default falls back to `update_last` (linear
+    /// backends have no node identity, so they update the tail).
+    fn update_node(&self, session_key: &str, node: &ConversationNode) -> std::io::Result<bool> {
+        self.update_last(
+            session_key,
+            &ChatMessage {
+                role: node.role.clone(),
+                content: node.content.clone(),
+            },
+        )
+    }
+
+    /// Load the full conversation tree. Default wraps `load()` as one linear
+    /// chain (each node's parent is the previous message), with synthesized
+    /// ids so a linear backend still answers tree queries coherently.
+    fn load_tree(&self, session_key: &str) -> Vec<ConversationNode> {
+        let mut prev: Option<String> = None;
+        self.load(session_key)
+            .into_iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let msg_id = format!("lin-{i}");
+                let parent_id = prev.take();
+                prev = Some(msg_id.clone());
+                ConversationNode {
+                    msg_id,
+                    parent_id,
+                    role: m.role,
+                    content: m.content,
+                    author_id: None,
+                    status: None,
+                    meta: None,
+                    created_at: None,
+                }
+            })
+            .collect()
+    }
+
+    /// Load the active conversation path (root → active leaf) as a flat message
+    /// list — exactly what gets seeded into the model. Default: the linear
+    /// `load()` (a linear backend has only one path).
+    fn load_active_path(&self, session_key: &str) -> Vec<ChatMessage> {
+        self.load(session_key)
+    }
+
+    /// Load the path from a specific leaf back to the root, flattened. Default
+    /// ignores the leaf and returns the linear `load()`.
+    fn load_path(&self, session_key: &str, _leaf_id: &str) -> Vec<ChatMessage> {
+        self.load(session_key)
+    }
+
+    /// The currently-selected leaf `msg_id` (which branch the client last
+    /// rendered). Default: none.
+    fn get_active_leaf(&self, _session_key: &str) -> Option<String> {
+        None
+    }
+
+    /// Record the selected leaf. Default: no-op (linear backends have one leaf).
+    fn set_active_leaf(&self, _session_key: &str, _msg_id: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    /// Delete a node and its entire subtree, returning the removed `msg_id`s.
+    /// Default: no-op (linear backends don't model subtrees; tree-aware
+    /// backends override).
+    fn delete_subtree(&self, _session_key: &str, _msg_id: &str) -> std::io::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    /// The leaf a new turn should extend: the explicit active leaf if set,
+    /// else the tree's deepest leaf. For a legacy purely-linear session this
+    /// resolves to the tail, so appending a new turn under this tip keeps the
+    /// old history connected to the new branch (no orphaned roots on resume).
+    /// Default: the active leaf (or `None`).
+    fn conversation_tip(&self, session_key: &str) -> Option<String> {
+        self.get_active_leaf(session_key)
+    }
+
+    /// Whether a node with `msg_id` exists in the session's tree. Used to
+    /// validate client-supplied tree references (parent_id, leaf_id) on the
+    /// WRITE side, mirroring the read side's membership guard — an unvalidated
+    /// dangling reference would otherwise orphan history on resume. Default
+    /// checks `load_tree` membership (so synthesized linear ids count too).
+    fn node_exists(&self, session_key: &str, msg_id: &str) -> bool {
+        self.load_tree(session_key)
+            .iter()
+            .any(|n| n.msg_id == msg_id)
     }
 }
 

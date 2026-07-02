@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from "react";
-import { Message, Role, Character, TTSConfig, GroupMessage } from "../types";
+import React, { useState, useRef, useEffect } from 'react';
+import { Message, Role, Character, TTSConfig } from '../types';
 import {
   ChevronLeft,
   ChevronRight,
@@ -14,12 +14,11 @@ import {
   Volume2,
   VolumeX,
   Image,
-} from "lucide-react";
-import MarkdownRenderer from "./MarkdownRenderer";
-import { CharacterAvatar } from "./CharacterAvatar";
-import ToolCallCard from "./chat/ToolCallCard";
-import { speak, stop, isSpeaking } from "../services/ttsService";
-import { extractImagePrompt } from "../services/imageGenService";
+  MoreVertical,
+} from 'lucide-react';
+import MarkdownRenderer from './MarkdownRenderer';
+
+import ToolCallCard from './chat/ToolCallCard';
 
 interface MessageBubbleProps {
   message: Message;
@@ -31,7 +30,7 @@ interface MessageBubbleProps {
   /** 0-based index of this message within its sibling set. */
   branchIndex?: number;
   // Action callbacks
-  onSwipeChange?: (id: string, direction: "left" | "right") => void;
+  onSwipeChange?: (id: string, direction: 'left' | 'right') => void;
   onGenerateSwipe?: (id: string) => void;
   onRegenerate?: (id: string) => void;
   onContinue?: (id: string) => void;
@@ -47,10 +46,7 @@ interface MessageBubbleProps {
 // that may produce fresh refs. We compare only the data fields that actually
 // affect the bubble's rendered output, and trust callbacks to be stable
 // enough that identity changes between renders don't matter.
-const messageBubblePropsEqual = (
-  prev: MessageBubbleProps,
-  next: MessageBubbleProps,
-): boolean => {
+const messageBubblePropsEqual = (prev: MessageBubbleProps, next: MessageBubbleProps): boolean => {
   if (prev.isLastMessage !== next.isLastMessage) return false;
   if (prev.isGenerating !== next.isGenerating) return false;
   if (prev.userName !== next.userName) return false;
@@ -71,8 +67,8 @@ const messageBubblePropsEqual = (
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
-  character,
-  userName,
+  character: _character,
+  userName: _userName,
   ttsConfig,
   branchCount = 1,
   branchIndex = 0,
@@ -87,17 +83,23 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   isGenerating = false,
 }) => {
   const isUser = message.role === Role.User;
-  const [showActions, setShowActions] = useState(false);
+  // Hover (desktop) and an explicit tap-toggle (touch) both reveal the toolbar.
+  // The last assistant message keeps its actions always visible so the primary
+  // affordances are reachable without any interaction.
+  const [hovered, setHovered] = useState(false);
+  const [toggled, setToggled] = useState(false);
+  const alwaysShow = isLastMessage && !isUser && !message.isThinking;
+  const showActions = hovered || toggled || alwaysShow;
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
+  const [ttsSpeaking, setTtsSpeaking] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-resize textarea
   useEffect(() => {
     if (isEditing && textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height =
-        textareaRef.current.scrollHeight + "px";
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
       textareaRef.current.focus();
     }
   }, [isEditing, editContent]);
@@ -129,47 +131,18 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   // linear chats.
   const hasBranches = !isUser && branchCount > 1;
 
-  const groupExtra = (message as GroupMessage).extra;
-  const displayName = groupExtra?.characterName || character.name;
-  const avatarForDisplay =
-    groupExtra?.characterName && groupExtra.characterName !== character.name
-      ? ""
-      : character.avatar;
-
   return (
     <div
-      className={`flex w-full mb-6 ${isUser ? "justify-end" : "justify-start"} animate-message-in`}
-      style={{ contain: "layout" }}
-      onMouseEnter={() => setShowActions(true)}
-      onMouseLeave={() => setShowActions(false)}
+      className={`flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'} animate-message-in`}
+      style={{ contain: 'layout' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <div
-        className={`flex max-w-[85%] md:max-w-[75%] gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+        className={`flex max-w-[90%] md:max-w-[80%] ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
       >
-        {/* Avatar */}
-        <div className="shrink-0 flex flex-col items-center gap-1">
-          {isUser ? (
-            <CharacterAvatar name={userName || "You"} variant="user" size="md" ringClassName="ring-white/5" />
-          ) : (
-            <CharacterAvatar
-              name={displayName}
-              avatar={avatarForDisplay}
-              size="md"
-              ringClassName="ring-bath-500/20"
-            />
-          )}
-        </div>
-
         {/* Bubble */}
-        <div
-          className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
-        >
-          <span className="text-[10px] font-mono uppercase tracking-wider text-stone-500 mb-1 px-1">
-            {isUser
-              ? userName || "You"
-              : displayName}
-          </span>
-
+        <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
           {/* Edit Mode */}
           {isEditing ? (
             <div className="w-full">
@@ -177,13 +150,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 ref={textareaRef}
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
-                className="w-full bg-stone-800/90 text-stone-200 p-4 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-bath-500/30 border border-white/10 min-w-[300px]"
+                className="w-full bg-bath-900/80 text-bath-100 p-4 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-bath-500/30 border border-bath-700/20 min-w-[300px]"
                 rows={3}
               />
               <div className="flex gap-2 mt-2 justify-end">
                 <button
                   onClick={handleCancelEdit}
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-stone-400 hover:text-white bg-stone-700/50 hover:bg-stone-600/50 border border-white/5 transition-all flex items-center gap-1.5"
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-bath-400 hover:text-bath-100 bg-bath-800/50 hover:bg-bath-700/50 border border-bath-700/15 transition-all flex items-center gap-1.5"
                 >
                   <X size={14} />
                   Cancel
@@ -201,22 +174,40 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             <>
               {/* Message Bubble */}
               <div
-                className={`relative px-5 py-3 text-sm md:text-base leading-[1.75] shadow-sm backdrop-blur-md
+                className={`relative px-5 py-3 text-sm md:text-base leading-[1.75]
                   ${
                     isUser
-                      ? "bg-bath-950/30 text-stone-100 rounded-3xl rounded-tr-sm border border-bath-500/10"
-                      : "bg-stone-900/60 text-stone-200 rounded-3xl rounded-tl-sm border border-white/5 border-l-2 border-l-bath-500/30"
+                      ? 'bg-bath-800/20 text-bath-100 rounded-2xl border border-bath-700/15'
+                      : 'bg-transparent text-bath-50 rounded-2xl border-l-2 border-bath-500/20'
                   }
                 `}
               >
+                {/* Persistent toggle affordance so the toolbar is reachable on
+                    touch (where hover never fires). Subtle at rest, full on
+                    interaction; sits in a stable corner of the bubble. Skipped
+                    on the last assistant message, whose toolbar is always shown
+                    (the toggle would be inert there). */}
+                {!message.isThinking && !alwaysShow && (
+                  <button
+                    type="button"
+                    onClick={() => setToggled((v) => !v)}
+                    aria-label={showActions ? 'Hide message actions' : 'Show message actions'}
+                    aria-expanded={showActions}
+                    className={`absolute -top-2.5 ${isUser ? '-left-2.5' : '-right-2.5'} z-10 flex items-center justify-center w-9 h-9 rounded-full bg-bath-900/80 border border-bath-700/20 text-bath-500 hover:text-bath-200 transition-all ${
+                      toggled ? 'opacity-100' : 'opacity-40 hover:opacity-100 focus:opacity-100'
+                    }`}
+                  >
+                    <MoreVertical size={15} />
+                  </button>
+                )}
                 <div className="whitespace-pre-wrap font-sans">
                   {isUser ? (
                     message.content
                   ) : message.isThinking ? (
                     <span className="inline-flex gap-1.5 items-center py-1">
-                      <span className="w-1.5 h-1.5 bg-bath-400/60 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                      <span className="w-1.5 h-1.5 bg-bath-400/60 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                      <span className="w-1.5 h-1.5 bg-bath-400/60 rounded-full animate-bounce"></span>
+                      <span className="w-1.5 h-1.5 bg-bath-300/40 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                      <span className="w-1.5 h-1.5 bg-bath-300/40 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                      <span className="w-1.5 h-1.5 bg-bath-300/40 rounded-full animate-bounce"></span>
                     </span>
                   ) : (
                     <MarkdownRenderer content={message.content} />
@@ -234,10 +225,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
               {/* Branch Navigation */}
               {hasBranches && (
-                <div className="flex items-center gap-2 mt-2 text-xs text-stone-500">
+                <div className="flex items-center gap-2 mt-2 text-xs text-bath-500/60">
                   <button
-                    onClick={() => onSwipeChange?.(message.id, "left")}
-                    className="p-1 hover:bg-white/10 rounded transition-colors"
+                    onClick={() => onSwipeChange?.(message.id, 'left')}
+                    className="p-1 hover:bg-bath-800/30 rounded transition-colors"
                     disabled={isGenerating}
                     aria-label="Previous branch"
                     title="Previous branch"
@@ -248,8 +239,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                     {branchIndex + 1} / {branchCount}
                   </span>
                   <button
-                    onClick={() => onSwipeChange?.(message.id, "right")}
-                    className="p-1 hover:bg-white/10 rounded transition-colors"
+                    onClick={() => onSwipeChange?.(message.id, 'right')}
+                    className="p-1 hover:bg-bath-800/30 rounded transition-colors"
                     disabled={isGenerating}
                     aria-label="Next branch"
                     title="Next branch"
@@ -262,12 +253,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
               {/* Action Toolbar - appears on hover */}
               {showActions && !message.isThinking && (
                 <div
-                  className={`flex gap-1 mt-2 bg-stone-800/90 rounded-lg p-1 shadow-lg border border-white/10 animate-in fade-in slide-in-from-bottom-2 duration-150`}
+                  className={`flex gap-1 mt-2 bg-bath-900/90 rounded-lg p-1 shadow-lg border border-bath-700/20 animate-message-in`}
                 >
                   {/* Edit */}
                   <button
                     onClick={handleStartEdit}
-                    className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-white transition-colors"
+                    className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-bath-200 transition-colors"
                     aria-label="Edit"
                     title="Edit"
                   >
@@ -277,7 +268,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   {/* Copy */}
                   <button
                     onClick={handleCopy}
-                    className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-white transition-colors"
+                    className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-bath-200 transition-colors"
                     aria-label="Copy"
                     title="Copy"
                   >
@@ -288,46 +279,51 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   {!isUser && (
                     <>
                       {/* Image Gen Button */}
-                      <button
-                        onClick={() => {
-                          const extracted = extractImagePrompt(message.content);
-                          onGenerateImage?.(extracted || "");
-                        }}
-                        className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-purple-400 transition-colors"
-                        aria-label="Generate image"
-                        title="Generate image"
-                        disabled={isGenerating}
-                      >
-                        <Image size={14} />
-                      </button>
+                      {onGenerateImage && (
+                        <button
+                          onClick={async () => {
+                            const { extractImagePrompt } =
+                              await import('../services/imageGenService');
+                            const extracted = extractImagePrompt(message.content);
+                            onGenerateImage(extracted || '');
+                          }}
+                          className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-accent transition-colors"
+                          aria-label="Generate image"
+                          title="Generate image"
+                          disabled={isGenerating}
+                        >
+                          <Image size={14} />
+                        </button>
+                      )}
 
                       {/* TTS Button */}
                       {ttsConfig && (
                         <button
-                          onClick={() => {
-                            if (isSpeaking()) {
-                              stop();
+                          onClick={async () => {
+                            const tts = await import('../services/ttsService');
+                            if (tts.isSpeaking()) {
+                              tts.stop();
+                              setTtsSpeaking(false);
                             } else {
-                              speak(message.content, ttsConfig);
+                              setTtsSpeaking(true);
+                              void tts.speak(message.content, ttsConfig).finally(() => {
+                                setTtsSpeaking(false);
+                              });
                             }
                           }}
-                          className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
+                          className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-bath-300 transition-colors"
                           aria-label="Read aloud"
                           title="Read aloud"
                           disabled={isGenerating}
                         >
-                          {isSpeaking() ? (
-                            <VolumeX size={14} />
-                          ) : (
-                            <Volume2 size={14} />
-                          )}
+                          {ttsSpeaking ? <VolumeX size={14} /> : <Volume2 size={14} />}
                         </button>
                       )}
 
                       {/* Regenerate */}
                       <button
                         onClick={() => onRegenerate?.(message.id)}
-                        className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
+                        className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-bath-300 transition-colors"
                         aria-label="Regenerate"
                         title="Regenerate"
                         disabled={isGenerating}
@@ -338,7 +334,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                       {/* New Swipe */}
                       <button
                         onClick={() => onGenerateSwipe?.(message.id)}
-                        className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
+                        className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-bath-300 transition-colors"
                         aria-label="Generate alternative"
                         title="Generate alternative"
                         disabled={isGenerating}
@@ -350,7 +346,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                       {isLastMessage && (
                         <button
                           onClick={() => onContinue?.(message.id)}
-                          className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-bath-400 transition-colors"
+                          className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-bath-300 transition-colors"
                           aria-label="Continue"
                           title="Continue"
                           disabled={isGenerating}
@@ -364,7 +360,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   {/* Delete */}
                   <button
                     onClick={() => onDelete?.(message.id)}
-                    className="p-1.5 hover:bg-white/10 rounded text-stone-400 hover:text-red-400 transition-colors"
+                    className="p-1.5 hover:bg-bath-800/30 rounded text-bath-500 hover:text-red-400 transition-colors"
                     aria-label="Delete"
                     title="Delete"
                   >

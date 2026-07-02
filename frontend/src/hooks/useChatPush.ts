@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
-import type React from "react";
-import { Message, Role, GroupMessage } from "../types";
-import { ChatPushSubscriber, type ChatPushEvent } from "../services/zeroclawService";
-import { generateId } from "../utils/id";
+import { useEffect, useRef } from 'react';
+import type React from 'react';
+import { Message, Role, GroupMessage } from '../types';
+import { ChatPushSubscriber, type ChatPushEvent } from '../services/zeroclawService';
+import { generateId } from '../utils/id';
 
 interface UseChatPushOptions {
   agentAlias: string;
@@ -82,7 +82,7 @@ export const useChatPush = ({
           onPush?.(event);
         },
       },
-      characterName,
+      characterName
     );
 
     subscriberRef.current = subscriber;

@@ -1,13 +1,6 @@
 import React from 'react';
 import { ChatConfig } from '../types';
-import {
-  BrainCircuit,
-  AlignLeft,
-  SlidersHorizontal,
-  Sparkles,
-  Hash,
-  Octagon,
-} from 'lucide-react';
+import { BrainCircuit, AlignLeft, SlidersHorizontal, Sparkles, Hash, Octagon } from 'lucide-react';
 import { useLanguage } from '../i18n';
 
 interface GenerationSettingsProps {
@@ -33,7 +26,13 @@ const PRESETS: Array<{
   {
     id: 'flirty',
     labelKey: 'style.flirty',
-    values: { temperature: 1.2, topP: 0.95, topK: 50, frequencyPenalty: 0.05, presencePenalty: 0.15 },
+    values: {
+      temperature: 1.2,
+      topP: 0.95,
+      topK: 50,
+      frequencyPenalty: 0.05,
+      presencePenalty: 0.15,
+    },
   },
   {
     id: 'horny',
@@ -47,10 +46,7 @@ const PRESETS: Array<{
   },
 ];
 
-const GenerationSettings: React.FC<GenerationSettingsProps> = ({
-  config,
-  onConfigChange,
-}) => {
+const GenerationSettings: React.FC<GenerationSettingsProps> = ({ config, onConfigChange }) => {
   const { t } = useLanguage();
 
   const handleChange = (key: keyof ChatConfig, value: unknown) => {
@@ -224,9 +220,7 @@ const SliderField: React.FC<SliderFieldProps> = ({
       </label>
       <span
         className={`text-xs font-mono px-1.5 py-0.5 rounded ${
-          accent === 'bath'
-            ? 'text-bath-500/80 bg-bath-500/10'
-            : 'text-stone-500 bg-black/30'
+          accent === 'bath' ? 'text-bath-500/80 bg-bath-500/10' : 'text-stone-500 bg-black/30'
         }`}
       >
         {display ?? value}

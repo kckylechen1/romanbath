@@ -3,10 +3,11 @@
 // Tables: memories, memories_fts, memory_edges, access_history, embedding_cache.
 // Removed: persons, location, valid_from/until, superseded_by, hub/sandbox/pack/vault/foundry/audit.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
+use std::sync::{Once, OnceLock};
 
-use crate::memory_crud::MemoryError;
+use crate::memory_crud::{MemoryError, fts_terms_from_json, insert_fts_row};
 
 /// Current on-disk schema version.
 ///
@@ -15,7 +16,28 @@ use crate::memory_crud::MemoryError;
 /// constraint changes — and add a matching guarded step in [`init_schema`]'s
 /// migration section. Existing databases are upgraded forward to this version
 /// on open; fresh databases are created at it directly.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
+
+static REGISTER_SIMPLE_TOKENIZER: Once = Once::new();
+static SIMPLE_TOKENIZER_REGISTRATION_ERROR: OnceLock<String> = OnceLock::new();
+
+/// Register libsimple's process-global SQLite auto-extension before opening
+/// connections that need the `simple` FTS tokenizer.
+pub(crate) fn ensure_simple_tokenizer() -> Result<(), MemoryError> {
+    REGISTER_SIMPLE_TOKENIZER.call_once(|| {
+        if let Err(err) = libsimple::enable_auto_extension() {
+            let _ = SIMPLE_TOKENIZER_REGISTRATION_ERROR.set(format!(
+                "failed to register libsimple simple tokenizer: {err}"
+            ));
+        }
+    });
+
+    if let Some(error) = SIMPLE_TOKENIZER_REGISTRATION_ERROR.get() {
+        Err(MemoryError::Tokenizer(error.clone()))
+    } else {
+        Ok(())
+    }
+}
 
 /// Open a sigil memory database, creating its parent directory and bringing
 /// the schema up to date.
@@ -27,6 +49,7 @@ pub const SCHEMA_VERSION: i64 = 1;
 /// foreign keys off, `busy_timeout` at 0, and additive schema changes
 /// silently unapplied on every database past its first run.)
 pub fn open(path: &Path) -> Result<Connection, MemoryError> {
+    ensure_simple_tokenizer()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -50,26 +73,28 @@ pub fn init_schema(conn: &Connection) -> Result<(), MemoryError> {
         return Ok(());
     }
 
-    // Baseline (v1) tables. CREATE ... IF NOT EXISTS, so this is a harmless
-    // no-op on databases that already have them — including pre-versioning
-    // deployments that report `user_version = 0`.
-    create_baseline(conn)?;
+    let tx = conn.unchecked_transaction()?;
 
-    // ── Forward migrations ────────────────────────────────────────────────
-    // For changes `CREATE ... IF NOT EXISTS` cannot express (new columns,
-    // constraint changes), add a guarded step here and bump SCHEMA_VERSION:
-    //
-    //     if version < 2 {
-    //         conn.execute_batch(
-    //             "ALTER TABLE memories ADD COLUMN affect REAL NOT NULL DEFAULT 0.0;",
-    //         )?;
-    //     }
-    //
-    // Steps are ordered and guarded on `version`, so a database at any older
-    // version upgrades through every step to SCHEMA_VERSION in a single open.
+    // v1→v2: FTS tokenizer rebuild (unicode61 → simple).
+    let rebuild_fts = if version < 2 && memories_fts_uses_unicode61(&tx)? {
+        tx.execute_batch("DROP TABLE memories_fts;")?;
+        true
+    } else {
+        false
+    };
+
+    // Baseline tables. CREATE ... IF NOT EXISTS, so this is a harmless no-op on
+    // databases that already have them — including pre-versioning deployments
+    // that report `user_version = 0`.
+    create_baseline(&tx)?;
+
+    if rebuild_fts {
+        rebuild_memories_fts(&tx)?;
+    }
 
     // PRAGMA does not accept bind parameters; SCHEMA_VERSION is a trusted i64.
-    conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+    tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -138,7 +163,7 @@ fn create_baseline(conn: &Connection) -> Result<(), MemoryError> {
             text,
             keywords,
             entities,
-            tokenize = 'unicode61'
+            tokenize = 'simple'
         );
 
         CREATE TABLE IF NOT EXISTS memory_edges (
@@ -174,10 +199,71 @@ fn create_baseline(conn: &Connection) -> Result<(), MemoryError> {
     Ok(())
 }
 
+fn memories_fts_uses_unicode61(conn: &Connection) -> Result<bool, MemoryError> {
+    let sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    Ok(sql
+        .as_deref()
+        .map(|ddl| ddl.to_ascii_lowercase().contains("unicode61"))
+        .unwrap_or(false))
+}
+
+fn rebuild_memories_fts(conn: &Connection) -> Result<(), MemoryError> {
+    let mut stmt =
+        conn.prepare("SELECT id, path, summary, text, keywords, entities FROM memories")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    for (id, path, summary, text, keywords_json, entities_json) in rows {
+        let keywords = fts_terms_from_json(&keywords_json);
+        let entities = fts_terms_from_json(&entities_json);
+        insert_fts_row(conn, &id, &path, &summary, &text, &keywords, &entities)?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory_crud::{now_utc_iso, search_fts, upsert};
+    use crate::types::MemoryEntry;
     use rusqlite::Connection;
+    use std::path::Path;
+
+    const LEGACY_UNICODE61_FTS_DDL: &str = r#"
+        CREATE VIRTUAL TABLE memories_fts USING fts5(
+            id UNINDEXED,
+            path,
+            summary,
+            text,
+            keywords,
+            entities,
+            tokenize = 'unicode61'
+        );
+    "#;
+
+    fn open_in_memory() -> Connection {
+        ensure_simple_tokenizer().unwrap();
+        Connection::open_in_memory().unwrap()
+    }
 
     fn user_version(conn: &Connection) -> i64 {
         conn.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -189,16 +275,88 @@ mod tests {
             .unwrap()
     }
 
+    fn memories_fts_sql(conn: &Connection) -> String {
+        conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn assert_fts_uses_simple(conn: &Connection) {
+        let sql = memories_fts_sql(conn).to_ascii_lowercase();
+        assert!(
+            sql.contains("'simple'"),
+            "memories_fts should use simple tokenizer: {sql}"
+        );
+        assert!(
+            !sql.contains("unicode61"),
+            "memories_fts should not keep unicode61 tokenizer: {sql}"
+        );
+    }
+
+    fn chinese_memory(id: &str) -> MemoryEntry {
+        MemoryEntry {
+            id: id.to_string(),
+            path: "/chat/test_char/memories/user".to_string(),
+            summary: "work conflict".to_string(),
+            text: "我昨天和老板吵架了，心情很差".to_string(),
+            importance: 0.7,
+            timestamp: now_utc_iso(),
+            category: "fact".to_string(),
+            keywords: vec![],
+            entities: vec!["Alice".to_string()],
+            source: "chat".to_string(),
+            scope: "user".to_string(),
+            archived: false,
+            access_count: 0,
+            last_access: None,
+            retention_policy: None,
+            metadata: serde_json::json!({}),
+            recall_count: 0,
+            query_diversity: 0,
+            tier: "raw".to_string(),
+        }
+    }
+
+    fn assert_chinese_hit(conn: &Connection, id: &str) {
+        let results = search_fts(conn, "老板", 10, None).unwrap();
+        let score = results
+            .get(id)
+            .copied()
+            .expect("Chinese query should hit the migrated memory");
+        assert!(score.is_finite(), "FTS score should be finite: {score}");
+    }
+
+    fn create_legacy_unicode61_db(path: &Path) -> String {
+        let id = "legacy-cjk".to_string();
+        {
+            let mut conn = open(path).unwrap();
+            upsert(&mut conn, &chinese_memory(&id)).unwrap();
+            conn.execute_batch("DROP TABLE memories_fts;").unwrap();
+            conn.execute_batch(LEGACY_UNICODE61_FTS_DDL).unwrap();
+            conn.execute(
+                "INSERT INTO memories_fts(id, path, summary, text, keywords, entities)
+                 SELECT id, path, summary, text, keywords, entities FROM memories",
+                [],
+            )
+            .unwrap();
+            conn.execute_batch("PRAGMA user_version = 1;").unwrap();
+        }
+        id
+    }
+
     #[test]
     fn init_schema_idempotent() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = open_in_memory();
         init_schema(&conn).unwrap();
         init_schema(&conn).unwrap();
     }
 
     #[test]
     fn can_insert_and_query() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = open_in_memory();
         init_schema(&conn).unwrap();
         conn.execute(
             "INSERT INTO memories (id, path, text, importance, timestamp)
@@ -218,7 +376,7 @@ mod tests {
 
     #[test]
     fn fresh_db_is_stamped_current() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = open_in_memory();
         init_schema(&conn).unwrap();
         assert_eq!(user_version(&conn), SCHEMA_VERSION);
     }
@@ -227,7 +385,7 @@ mod tests {
     fn pragmas_apply_on_every_open() {
         // Regression: per-connection PRAGMAs must be set even when the schema
         // is already current (the old code skipped them for existing DBs).
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = open_in_memory();
         init_schema(&conn).unwrap(); // stamps version → next call takes fast path
         init_schema(&conn).unwrap();
         assert_eq!(pragma_i64(&conn, "foreign_keys"), 1);
@@ -269,7 +427,7 @@ mod tests {
         // Simulate a pre-versioning deployment: a partial schema with
         // user_version still at 0. init_schema must reconcile it to the full
         // baseline and stamp the version forward.
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = open_in_memory();
         conn.execute_batch(
             "CREATE TABLE memories (
                  id TEXT PRIMARY KEY, path TEXT, summary TEXT, text TEXT,
@@ -295,5 +453,47 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_edges, 1);
+    }
+
+    #[test]
+    fn v1_unicode61_db_migrates_and_recalls_chinese() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("char_memory.db");
+        let id = create_legacy_unicode61_db(&path);
+
+        let conn = open(&path).unwrap();
+
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
+        assert_fts_uses_simple(&conn);
+        assert_chinese_hit(&conn, &id);
+    }
+
+    #[test]
+    fn fresh_db_lands_at_v2_with_simple() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("char_memory.db");
+
+        let conn = open(&path).unwrap();
+
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
+        assert_fts_uses_simple(&conn);
+    }
+
+    #[test]
+    fn migrated_db_reopen_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("char_memory.db");
+        let id = create_legacy_unicode61_db(&path);
+
+        {
+            let conn = open(&path).unwrap();
+            assert_eq!(user_version(&conn), SCHEMA_VERSION);
+            assert_chinese_hit(&conn, &id);
+        }
+
+        let conn = open(&path).unwrap();
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
+        assert_fts_uses_simple(&conn);
+        assert_chinese_hit(&conn, &id);
     }
 }

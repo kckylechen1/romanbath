@@ -23,13 +23,16 @@ pub mod api_logs;
 pub mod api_onboard;
 pub mod api_pairing;
 pub mod api_personality;
+pub mod api_sessions;
 pub mod api_skills;
 pub mod api_tts;
 pub mod auth_rate_limit;
 pub mod canvas;
+pub mod chat_prompt;
 pub mod node_tool;
 pub mod nodes;
 pub mod openapi;
+pub mod rpc;
 pub mod session_queue;
 pub mod sse;
 pub mod static_files;
@@ -54,12 +57,24 @@ use std::time::{Duration, Instant};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
+#[cfg(any(
+    feature = "channel-linq",
+    feature = "channel-nextcloud",
+    feature = "channel-wati",
+    feature = "channel-whatsapp-cloud"
+))]
 use zeroclaw_api::channel::{Channel, SendMessage};
 use zeroclaw_api::tool::ToolSpec;
-use zeroclaw_channels::{
-    gmail_push::GmailPushChannel, linq::LinqChannel, nextcloud_talk::NextcloudTalkChannel,
-    wati::WatiChannel, whatsapp::WhatsAppChannel,
-};
+#[cfg(feature = "channel-email")]
+use zeroclaw_channels::gmail_push::GmailPushChannel;
+#[cfg(feature = "channel-linq")]
+use zeroclaw_channels::linq::LinqChannel;
+#[cfg(feature = "channel-nextcloud")]
+use zeroclaw_channels::nextcloud_talk::NextcloudTalkChannel;
+#[cfg(feature = "channel-wati")]
+use zeroclaw_channels::wati::WatiChannel;
+#[cfg(feature = "channel-whatsapp-cloud")]
+use zeroclaw_channels::whatsapp::WhatsAppChannel;
 use zeroclaw_config::policy::SecurityPolicy;
 use zeroclaw_config::schema::Config;
 use zeroclaw_infra::session_backend::SessionBackend;
@@ -71,6 +86,22 @@ use zeroclaw_runtime::platform;
 use zeroclaw_runtime::security::pairing::{PairingGuard, constant_time_eq, is_public_bind};
 use zeroclaw_runtime::tools;
 use zeroclaw_runtime::tools::CanvasStore;
+
+#[cfg(not(feature = "channel-email"))]
+#[derive(Debug)]
+pub struct GmailPushChannel;
+#[cfg(not(feature = "channel-linq"))]
+#[derive(Debug)]
+pub struct LinqChannel;
+#[cfg(not(feature = "channel-nextcloud"))]
+#[derive(Debug)]
+pub struct NextcloudTalkChannel;
+#[cfg(not(feature = "channel-wati"))]
+#[derive(Debug)]
+pub struct WatiChannel;
+#[cfg(not(feature = "channel-whatsapp-cloud"))]
+#[derive(Debug)]
+pub struct WhatsAppChannel;
 
 /// Maximum request body size (64KB) — prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;
@@ -111,22 +142,32 @@ fn webhook_memory_key() -> String {
     format!("webhook_msg_{}", Uuid::new_v4())
 }
 
+#[cfg(feature = "channel-whatsapp-cloud")]
 fn whatsapp_memory_key(msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     format!("whatsapp_{}_{}", msg.sender, msg.id)
 }
 
+#[cfg(feature = "channel-linq")]
 fn linq_memory_key(msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     format!("linq_{}_{}", msg.sender, msg.id)
 }
 
+#[cfg(feature = "channel-wati")]
 fn wati_memory_key(msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     format!("wati_{}_{}", msg.sender, msg.id)
 }
 
+#[cfg(feature = "channel-nextcloud")]
 fn nextcloud_talk_memory_key(msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     format!("nextcloud_talk_{}_{}", msg.sender, msg.id)
 }
 
+#[cfg(any(
+    feature = "channel-linq",
+    feature = "channel-nextcloud",
+    feature = "channel-wati",
+    feature = "channel-whatsapp-cloud"
+))]
 fn sender_session_id(channel: &str, msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     match &msg.thread_ts {
         Some(thread_id) => format!("{channel}_{thread_id}_{}", msg.sender),
@@ -836,6 +877,7 @@ pub async fn run_gateway(
         });
 
     // WhatsApp channel (if configured)
+    #[cfg(feature = "channel-whatsapp-cloud")]
     let whatsapp_channel: Option<Arc<WhatsAppChannel>> = config
         .channels
         .whatsapp
@@ -856,8 +898,11 @@ pub async fn run_gateway(
                 peer_resolver,
             ))
         });
+    #[cfg(not(feature = "channel-whatsapp-cloud"))]
+    let whatsapp_channel: Option<Arc<WhatsAppChannel>> = None;
 
     // WhatsApp app secret for webhook signature verification.
+    #[cfg(feature = "channel-whatsapp-cloud")]
     let whatsapp_app_secret: Option<Arc<str>> = config
         .channels
         .whatsapp
@@ -871,8 +916,11 @@ pub async fn run_gateway(
                 .map(ToOwned::to_owned)
         })
         .map(Arc::from);
+    #[cfg(not(feature = "channel-whatsapp-cloud"))]
+    let whatsapp_app_secret: Option<Arc<str>> = None;
 
     // Linq channel (if configured)
+    #[cfg(feature = "channel-linq")]
     let linq_channel: Option<Arc<LinqChannel>> = config.channels.linq.values().next().map(|lq| {
         let alias = "default".to_string();
         let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> = {
@@ -887,8 +935,11 @@ pub async fn run_gateway(
             peer_resolver,
         ))
     });
+    #[cfg(not(feature = "channel-linq"))]
+    let linq_channel: Option<Arc<LinqChannel>> = None;
 
     // Linq signing secret for webhook signature verification.
+    #[cfg(feature = "channel-linq")]
     let linq_signing_secret: Option<Arc<str>> = config
         .channels
         .linq
@@ -902,8 +953,11 @@ pub async fn run_gateway(
                 .map(ToOwned::to_owned)
         })
         .map(Arc::from);
+    #[cfg(not(feature = "channel-linq"))]
+    let linq_signing_secret: Option<Arc<str>> = None;
 
     // WATI channel (if configured)
+    #[cfg(feature = "channel-wati")]
     let wati_channel: Option<Arc<WatiChannel>> =
         config.channels.wati.values().next().map(|wati_cfg| {
             let alias = "default".to_string();
@@ -923,8 +977,11 @@ pub async fn run_gateway(
                 .with_transcription(config.transcription.clone()),
             )
         });
+    #[cfg(not(feature = "channel-wati"))]
+    let wati_channel: Option<Arc<WatiChannel>> = None;
 
     // Nextcloud Talk channel (if configured)
+    #[cfg(feature = "channel-nextcloud")]
     let nextcloud_talk_channel: Option<Arc<NextcloudTalkChannel>> =
         config.channels.nextcloud_talk.values().next().map(|nc| {
             let alias = "default".to_string();
@@ -945,8 +1002,11 @@ pub async fn run_gateway(
                 peer_resolver,
             ))
         });
+    #[cfg(not(feature = "channel-nextcloud"))]
+    let nextcloud_talk_channel: Option<Arc<NextcloudTalkChannel>> = None;
 
     // Nextcloud Talk webhook secret for signature verification.
+    #[cfg(feature = "channel-nextcloud")]
     let nextcloud_talk_webhook_secret: Option<Arc<str>> = config
         .channels
         .nextcloud_talk
@@ -959,8 +1019,11 @@ pub async fn run_gateway(
                 .map(ToOwned::to_owned)
         })
         .map(Arc::from);
+    #[cfg(not(feature = "channel-nextcloud"))]
+    let nextcloud_talk_webhook_secret: Option<Arc<str>> = None;
 
     // Gmail Push channel (if configured and referenced by an enabled agent)
+    #[cfg(feature = "channel-email")]
     let gmail_push_channel: Option<Arc<GmailPushChannel>> = {
         let active: std::collections::HashSet<String> = config
             .agents
@@ -983,6 +1046,8 @@ pub async fn run_gateway(
                 Arc::new(GmailPushChannel::new(gp.clone(), alias, peer_resolver))
             })
     };
+    #[cfg(not(feature = "channel-email"))]
+    let gmail_push_channel: Option<Arc<GmailPushChannel>> = None;
 
     // ── Session persistence for WS chat ─────────────────────
     // Routes through `make_session_backend` so `[channels].session_backend`
@@ -1430,6 +1495,17 @@ pub async fn run_gateway(
         )
         .route("/api/characters/{name}/export", get(api_characters::handle_export_character))
         .route("/api/characters/{name}/duplicate", post(api_characters::handle_duplicate_character))
+        .route("/api/characters/{name}/memories", get(api_characters::handle_character_memories))
+        .route(
+            "/api/characters/{name}/memories/{id}",
+            delete(api_characters::handle_delete_character_memory)
+                .patch(api_characters::handle_patch_character_memory),
+        )
+        .route(
+            "/api/characters/{name}/settings",
+            get(api_characters::handle_get_character_settings)
+                .put(api_characters::handle_put_character_settings),
+        )
         .route(
             "/api/characters/{name}/avatar",
             get(api_characters::handle_character_avatar)
@@ -1451,6 +1527,7 @@ pub async fn run_gateway(
         )
         .route("/api/chat", post(api_chat::handle_chat))
         .route("/api/image-gen", post(api_image_gen::handle_image_gen))
+        .route("/api/images/{id}", get(api_image_gen::handle_serve_image))
         .route("/api/tts", post(api_tts::handle_tts))
         .route("/api/files/{*path}", get(api_files::handle_serve_file))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
@@ -1465,6 +1542,8 @@ pub async fn run_gateway(
         .route("/api/sessions/{id}", delete(api::handle_api_session_delete).put(api::handle_api_session_rename))
         .route("/api/sessions/{id}/state", get(api::handle_api_session_state))
         .route("/api/sessions/{id}/abort", post(api::handle_api_session_abort))
+        .route("/api/sessions/{key}/tree", get(api_sessions::handle_session_tree))
+        .route("/api/sessions/migrate", post(api_sessions::handle_sessions_migrate))
         // ── Pairing + Device management API ──
         .route("/api/pairing/initiate", post(api_pairing::initiate_pairing))
         .route("/api/pair", post(api_pairing::submit_pairing_enhanced))
@@ -2177,6 +2256,7 @@ pub struct WhatsAppVerifyQuery {
 }
 
 /// GET /whatsapp — Meta webhook verification
+#[cfg(feature = "channel-whatsapp-cloud")]
 async fn handle_whatsapp_verify(
     State(state): State<AppState>,
     Query(params): Query<WhatsAppVerifyQuery>,
@@ -2213,6 +2293,17 @@ async fn handle_whatsapp_verify(
     (StatusCode::FORBIDDEN, "Forbidden".to_string())
 }
 
+#[cfg(not(feature = "channel-whatsapp-cloud"))]
+async fn handle_whatsapp_verify(
+    State(_state): State<AppState>,
+    Query(_params): Query<WhatsAppVerifyQuery>,
+) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        "WhatsApp not compiled in".to_string(),
+    )
+}
+
 /// Verify `WhatsApp` webhook signature (`X-Hub-Signature-256`).
 /// Returns true if the signature is valid, false otherwise.
 /// See: <https://developers.facebook.com/docs/graph-api/webhooks/getting-started#verification-requests>
@@ -2241,6 +2332,7 @@ pub fn verify_whatsapp_signature(app_secret: &str, body: &[u8], signature_header
 }
 
 /// POST /whatsapp — incoming message webhook
+#[cfg(feature = "channel-whatsapp-cloud")]
 async fn handle_whatsapp_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2381,7 +2473,20 @@ async fn handle_whatsapp_message(
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
 
+#[cfg(not(feature = "channel-whatsapp-cloud"))]
+async fn handle_whatsapp_message(
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
+    _body: Bytes,
+) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "WhatsApp not compiled in"})),
+    )
+}
+
 /// POST /linq — incoming message webhook (iMessage/RCS/SMS via Linq)
+#[cfg(feature = "channel-linq")]
 async fn handle_linq_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2523,7 +2628,20 @@ async fn handle_linq_webhook(
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
 
+#[cfg(not(feature = "channel-linq"))]
+async fn handle_linq_webhook(
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
+    _body: Bytes,
+) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "Linq not compiled in"})),
+    )
+}
+
 /// GET /wati — WATI webhook verification (echoes hub.challenge)
+#[cfg(feature = "channel-wati")]
 async fn handle_wati_verify(
     State(state): State<AppState>,
     Query(params): Query<WatiVerifyQuery>,
@@ -2546,6 +2664,14 @@ async fn handle_wati_verify(
     (StatusCode::BAD_REQUEST, "Missing hub.challenge".to_string())
 }
 
+#[cfg(not(feature = "channel-wati"))]
+async fn handle_wati_verify(
+    State(_state): State<AppState>,
+    Query(_params): Query<WatiVerifyQuery>,
+) -> impl IntoResponse {
+    (StatusCode::NOT_FOUND, "WATI not compiled in".to_string())
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct WatiVerifyQuery {
     #[serde(rename = "hub.challenge")]
@@ -2553,6 +2679,7 @@ pub struct WatiVerifyQuery {
 }
 
 /// POST /wati — incoming WATI WhatsApp message webhook
+#[cfg(feature = "channel-wati")]
 async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     let Some(ref wati) = state.wati else {
         return (
@@ -2660,7 +2787,16 @@ async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
 
+#[cfg(not(feature = "channel-wati"))]
+async fn handle_wati_webhook(State(_state): State<AppState>, _body: Bytes) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "WATI not compiled in"})),
+    )
+}
+
 /// POST /nextcloud-talk — incoming message webhook (Nextcloud Talk bot API)
+#[cfg(feature = "channel-nextcloud")]
 async fn handle_nextcloud_talk_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2804,11 +2940,25 @@ async fn handle_nextcloud_talk_webhook(
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
 
+#[cfg(not(feature = "channel-nextcloud"))]
+async fn handle_nextcloud_talk_webhook(
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
+    _body: Bytes,
+) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "Nextcloud Talk not compiled in"})),
+    )
+}
+
 /// Maximum request body size for the Gmail webhook endpoint (1 MB).
 /// Google Pub/Sub messages are typically under 10 KB.
+#[cfg(feature = "channel-email")]
 const GMAIL_WEBHOOK_MAX_BODY: usize = 1024 * 1024;
 
 /// POST /webhook/gmail — incoming Gmail Pub/Sub push notification
+#[cfg(feature = "channel-email")]
 async fn handle_gmail_push_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2892,6 +3042,18 @@ async fn handle_gmail_push_webhook(
 
     // Acknowledge immediately — Google Pub/Sub requires a 2xx within ~10s
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
+}
+
+#[cfg(not(feature = "channel-email"))]
+async fn handle_gmail_push_webhook(
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
+    _body: Bytes,
+) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "Gmail push not compiled in"})),
+    )
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3719,6 +3881,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "channel-whatsapp-cloud")]
     fn whatsapp_memory_key_includes_sender_and_message_id() {
         let msg = ChannelMessage {
             id: "wamid-123".into(),
@@ -4403,6 +4566,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "channel-nextcloud")]
     async fn nextcloud_talk_webhook_rejects_invalid_signature() {
         let provider_impl = Arc::new(MockModelProvider::default());
         let model_provider: Arc<dyn ModelProvider> = provider_impl.clone();
@@ -4526,6 +4690,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "channel-nextcloud")]
     async fn nextcloud_talk_webhook_returns_before_llm_call_completes() {
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let provider_impl = Arc::new(SlowProvider {

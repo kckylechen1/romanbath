@@ -15,7 +15,7 @@
 
 ## 📖 About
 
-**罗马大浴场 (Roman Bath)** is a sleek, dark-themed UI for AI character chat. It connects to the **[ZeroClaw](zeroclaw/) Gateway** for streaming chat, character cards, TTS, and image generation. Roman Bath is the frontend; ZeroClaw handles models, prompts, and lorebooks server-side.
+**罗马大浴场 (Roman Bath)** is a sleek, dark-themed UI for AI character chat. It connects to the **[ZeroClaw](zeroclaw/) Gateway** for streaming chat and character cards. Roman Bath is the frontend; ZeroClaw handles models, prompts, and lorebooks server-side.
 
 ### ✨ Features
 
@@ -23,10 +23,10 @@
 - 🌐 **Multi-language UI** — English, 简体中文, 繁體中文
 - 💬 **Streaming chat** — SSE via `POST /api/chat`
 - 👤 **Character management** — import, create, edit, export cards (`~/.zeroclaw/characters/`)
-- 👥 **Group chat** — multiple characters in one thread
-- 🔊 **TTS & image gen** — via ZeroClaw gateway endpoints
 - ⚙️ **Generation tuning** — temperature, top-p, penalties, scene mode
 - 📱 **Responsive** — desktop and mobile
+
+Optional surfaces such as image generation, TTS, voice input, group chat, bookmarks, affect readouts, and Studio inspectors are disabled by default and must be enabled explicitly with `VITE_ENABLE_*` flags.
 
 ---
 
@@ -49,7 +49,8 @@ Optional environment file (repo root):
 
 ```bash
 cp .env.example .env
-# Default gateway port is 42617 — change VITE_ZEROCLAW_PORT if needed
+# Default gateway port is 42617 — change VITE_ZEROCLAW_PORT if needed.
+# Optional product surfaces are disabled by default in .env.example.
 ```
 
 ### Run (recommended)
@@ -71,7 +72,7 @@ Open **http://127.0.0.1:5173** in your browser. On first launch the frontend aut
 
 ```bash
 # Terminal 1 — gateway
-cd zeroclaw && cargo run -- gateway start -p 42617
+cd zeroclaw && cargo run --no-default-features --features gateway,agent-runtime -- gateway start -p 42617
 
 # Terminal 2 — frontend only
 cd frontend && npm run dev
@@ -108,6 +109,14 @@ Conversations are stored in **browser localStorage** (`romanbath_chat_history_v1
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VITE_ZEROCLAW_PORT` | `42617` | Gateway port for Vite dev proxy |
+| `ZEROCLAW_CARGO_FEATURES` | `gateway,agent-runtime` | Cargo features used by `frontend/scripts/dev-full.mjs` for the gateway |
+| `VITE_ENABLE_IMAGE_GEN` | `false` | Show image generation actions and modal |
+| `VITE_ENABLE_TTS` | `false` | Show TTS settings and read-aloud actions |
+| `VITE_ENABLE_VOICE_INPUT` | `false` | Show microphone input |
+| `VITE_ENABLE_GROUP_CHAT` | `false` | Show group chat manager |
+| `VITE_ENABLE_STUDIO` | `false` | Show context/tree/memory Studio rail |
+| `VITE_ENABLE_AFFECT` | `false` | Show affect readouts and avatar mood glow |
+| `VITE_ENABLE_BOOKMARKS` | `false` | Show bookmark checkpoint controls |
 
 ---
 
@@ -117,7 +126,7 @@ Conversations are stored in **browser localStorage** (`romanbath_chat_history_v1
 2. **Select a character** — click a contact in the left panel
 3. **Chat** — type and send; Enter sends, Shift+Enter newline (IME-safe for Chinese)
 4. **Tune generation** — Settings → Generation (temperature, max tokens, scene mode, …)
-5. **Group chats** — add multiple characters and switch activation modes
+5. **Opt in to extras only when needed** — set the matching `VITE_ENABLE_*` flag and restart Vite
 
 ---
 
@@ -126,7 +135,7 @@ Conversations are stored in **browser localStorage** (`romanbath_chat_history_v1
 | Layer | Stack |
 |-------|--------|
 | Frontend | React 19, TypeScript, Vite, Tailwind (CDN), Lucide |
-| Backend | ZeroClaw Gateway (Rust) — chat, characters, TTS, image-gen |
+| Backend | ZeroClaw Gateway (Rust) — chat, characters, lorebooks |
 | Cards | SillyTavern V2 format via `zeroclaw-cards` |
 
 ---
@@ -139,14 +148,13 @@ romanbath/
 │   ├── src/
 │   │   ├── components/       # CharacterList, MessageBubble, SettingsPanel, …
 │   │   ├── services/
-│   │   │   ├── zeroclawService.ts   # Gateway client (chat, characters, TTS)
+│   │   │   ├── zeroclawService.ts   # Gateway client (chat, characters, optional extras)
 │   │   │   ├── chatService.ts       # localStorage chat history
 │   │   │   └── …
 │   │   └── App.tsx
 │   └── scripts/dev-full.mjs  # npm start — gateway + vite
 ├── zeroclaw/                 # ZeroClaw (Rust) — gateway & runtime
 ├── characters/               # Example character cards
-├── backend/SillyTavern/      # Legacy submodule (optional, not used by default)
 └── .env.example
 ```
 
@@ -166,7 +174,7 @@ Gateway API (dev proxy forwards `/api`, `/health`, `/pair`):
 
 - `GET /api/characters` — list cards
 - `POST /api/chat` — SSE streaming chat
-- `POST /api/tts`, `POST /api/image-gen` — media
+- Optional media endpoints remain in ZeroClaw but are not surfaced by the default Roman Bath UI
 
 ---
 

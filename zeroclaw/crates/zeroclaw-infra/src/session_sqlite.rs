@@ -5,12 +5,13 @@
 //! Designed as the default backend, replacing JSONL for new installations.
 
 use crate::session_backend::{
-    SessionBackend, SessionContext, SessionMetadata, SessionQuery, SessionState,
+    ConversationNode, SessionBackend, SessionContext, SessionMetadata, SessionQuery, SessionState,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use parking_lot::Mutex;
 use rusqlite::{Connection, params};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use zeroclaw_api::model_provider::ChatMessage;
 
@@ -175,6 +176,70 @@ impl SqliteSessionBackend {
              ON session_metadata(sender_id)",
             [],
         );
+
+        // Migration: conversation-tree columns (companion branching model).
+        // All nullable and additive — purely linear rows leave them NULL, so
+        // `load()`'s `ORDER BY id ASC` stays byte-identical and every existing
+        // channel/CLI/cron session is unaffected. See
+        // `session_backend::ConversationNode`. The tree's identity is the
+        // client-minted `msg_id` (the autoincrement `id` is kept only as the
+        // FTS rowid and sibling tie-break).
+        for (column, ddl) in [
+            ("msg_id", "ALTER TABLE sessions ADD COLUMN msg_id TEXT"),
+            (
+                "parent_id",
+                "ALTER TABLE sessions ADD COLUMN parent_id TEXT",
+            ),
+            (
+                "author_id",
+                "ALTER TABLE sessions ADD COLUMN author_id TEXT",
+            ),
+            (
+                "node_status",
+                "ALTER TABLE sessions ADD COLUMN node_status TEXT",
+            ),
+            (
+                "node_meta",
+                "ALTER TABLE sessions ADD COLUMN node_meta TEXT",
+            ),
+        ] {
+            let present: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('sessions') WHERE name = ?1",
+                    params![column],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+            if !present {
+                let _ = conn.execute(ddl, []);
+            }
+        }
+        // UNIQUE over (session_key, msg_id): SQLite treats NULLs as distinct, so
+        // the many NULL-msg_id linear rows don't collide; real tree nodes can't
+        // duplicate a client id within a session.
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_msgid \
+             ON sessions(session_key, msg_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_tree \
+             ON sessions(session_key, parent_id)",
+            [],
+        );
+        let has_active_leaf: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('session_metadata') WHERE name = 'active_leaf'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_active_leaf {
+            let _ = conn.execute(
+                "ALTER TABLE session_metadata ADD COLUMN active_leaf TEXT",
+                [],
+            );
+        }
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -368,10 +433,10 @@ impl SessionBackend for SqliteSessionBackend {
         )
         .map_err(std::io::Error::other)?;
 
-        // NOTE: FTS index becomes stale here (no UPDATE trigger, only
-        // INSERT/DELETE triggers). This is acceptable — update_last is
-        // used for transient streaming snapshots. The final content will
-        // be correct in the sessions table for load().
+        // FTS stays in sync: the `sessions_au` AFTER UPDATE trigger re-indexes
+        // the row on every UPDATE (not just INSERT/DELETE). update_last is used
+        // for transient streaming snapshots; the final content is correct both
+        // in the sessions table (load()) and in the FTS index (search()).
 
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
@@ -869,6 +934,373 @@ impl SessionBackend for SqliteSessionBackend {
         )
         .map_err(std::io::Error::other)?;
         Ok(())
+    }
+
+    // ── Conversation-tree overrides (companion branching) ─────────────
+
+    fn append_node(&self, session_key: &str, node: &ConversationNode) -> std::io::Result<()> {
+        let conn = self.conn.lock();
+        let now = node
+            .created_at
+            .map(|d| d.to_rfc3339())
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
+        let meta_str = node.meta.as_ref().map(std::string::ToString::to_string);
+        conn.execute(
+            "INSERT INTO sessions
+                (session_key, role, content, created_at, msg_id, parent_id, author_id, node_status, node_meta)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                session_key, node.role, node.content, now, node.msg_id,
+                node.parent_id, node.author_id, node.status, meta_str
+            ],
+        )
+        .map_err(std::io::Error::other)?;
+        conn.execute(
+            "INSERT INTO session_metadata (session_key, created_at, last_activity, message_count)
+             VALUES (?1, ?2, ?3, 1)
+             ON CONFLICT(session_key) DO UPDATE SET
+                last_activity = excluded.last_activity,
+                message_count = message_count + 1",
+            params![session_key, now, now],
+        )
+        .map_err(std::io::Error::other)?;
+        Ok(())
+    }
+
+    fn update_node(&self, session_key: &str, node: &ConversationNode) -> std::io::Result<bool> {
+        let conn = self.conn.lock();
+        let meta_str = node.meta.as_ref().map(std::string::ToString::to_string);
+        // Targets the specific node by msg_id (not the tail like update_last),
+        // so streaming updates land on the right tree node. The UPDATE fires
+        // sessions_au, keeping FTS in sync (same as update_last).
+        conn.execute(
+            "UPDATE sessions SET role = ?1, content = ?2, node_status = ?3, node_meta = ?4
+             WHERE session_key = ?5 AND msg_id = ?6",
+            params![
+                node.role,
+                node.content,
+                node.status,
+                meta_str,
+                session_key,
+                node.msg_id
+            ],
+        )
+        .map_err(std::io::Error::other)?;
+        let mut changed = conn.changes() > 0;
+        // Legacy fallback: a purely-linear row has msg_id IS NULL, so the
+        // msg_id match above never fires. load_tree() surfaces such rows as
+        // `lin-{rowid}`; resolve back to the rowid and update by id. Attempted
+        // ONLY on a real miss and ONLY against NULL-msg_id rows, so a genuine
+        // client id literally equal to "lin-7" stays matched by the msg_id path
+        // and is never shadowed by this fallback.
+        if !changed && let Some(rowid) = parse_lin_rowid(&node.msg_id) {
+            conn.execute(
+                "UPDATE sessions SET role = ?1, content = ?2, node_status = ?3, node_meta = ?4
+                 WHERE session_key = ?5 AND id = ?6 AND msg_id IS NULL",
+                params![
+                    node.role,
+                    node.content,
+                    node.status,
+                    meta_str,
+                    session_key,
+                    rowid
+                ],
+            )
+            .map_err(std::io::Error::other)?;
+            changed = conn.changes() > 0;
+        }
+        if changed {
+            let now = Utc::now().to_rfc3339();
+            let _ = conn.execute(
+                "UPDATE session_metadata SET last_activity = ?1 WHERE session_key = ?2",
+                params![now, session_key],
+            );
+        }
+        Ok(changed)
+    }
+
+    fn load_tree(&self, session_key: &str) -> Vec<ConversationNode> {
+        let conn = self.conn.lock();
+        let mut stmt = match conn.prepare(
+            "SELECT id, role, content, created_at, msg_id, parent_id, author_id, node_status, node_meta
+             FROM sessions WHERE session_key = ?1 ORDER BY id ASC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = match stmt.query_map(params![session_key], |row| {
+            let id: i64 = row.get(0)?;
+            let role: String = row.get(1)?;
+            let content: String = row.get(2)?;
+            let created_raw: Option<String> = row.get(3)?;
+            let msg_id: Option<String> = row.get(4)?;
+            let parent_id: Option<String> = row.get(5)?;
+            let author_id: Option<String> = row.get(6)?;
+            let status: Option<String> = row.get(7)?;
+            let meta_raw: Option<String> = row.get(8)?;
+            Ok((
+                id,
+                role,
+                content,
+                created_raw,
+                msg_id,
+                parent_id,
+                author_id,
+                status,
+                meta_raw,
+            ))
+        }) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+
+        // Legacy purely-linear rows have NULL tree columns; synthesize a chain
+        // (lin-{rowid}, parent = previous) so tree queries are coherent for
+        // pre-tree sessions too.
+        let mut prev_synth: Option<String> = None;
+        let mut out = Vec::new();
+        for r in rows.flatten() {
+            let (
+                id,
+                role,
+                content,
+                created_raw,
+                msg_id_opt,
+                parent_opt,
+                author_id,
+                status,
+                meta_raw,
+            ) = r;
+            let created_at = created_raw
+                .as_deref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+            let (msg_id, parent_id) = match msg_id_opt {
+                Some(mid) => (mid, parent_opt),
+                None => (format!("lin-{id}"), prev_synth.clone()),
+            };
+            prev_synth = Some(msg_id.clone());
+            let meta = meta_raw.and_then(|s| serde_json::from_str(&s).ok());
+            out.push(ConversationNode {
+                msg_id,
+                parent_id,
+                role,
+                content,
+                author_id,
+                status,
+                meta,
+                created_at,
+            });
+        }
+        out
+    }
+
+    fn load_active_path(&self, session_key: &str) -> Vec<ChatMessage> {
+        let leaf = self.get_active_leaf(session_key);
+        flatten_active_path(&self.load_tree(session_key), leaf.as_deref())
+    }
+
+    fn load_path(&self, session_key: &str, leaf_id: &str) -> Vec<ChatMessage> {
+        flatten_active_path(&self.load_tree(session_key), Some(leaf_id))
+    }
+
+    fn get_active_leaf(&self, session_key: &str) -> Option<String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT active_leaf FROM session_metadata WHERE session_key = ?1",
+            params![session_key],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    fn set_active_leaf(&self, session_key: &str, msg_id: &str) -> std::io::Result<()> {
+        let conn = self.conn.lock();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO session_metadata (session_key, created_at, last_activity, message_count, active_leaf)
+             VALUES (?1, ?2, ?3, 0, ?4)
+             ON CONFLICT(session_key) DO UPDATE SET active_leaf = excluded.active_leaf",
+            params![session_key, now, now, msg_id],
+        )
+        .map_err(std::io::Error::other)?;
+        Ok(())
+    }
+
+    fn conversation_tip(&self, session_key: &str) -> Option<String> {
+        let tree = self.load_tree(session_key);
+        let by_id: HashMap<&str, &ConversationNode> =
+            tree.iter().map(|n| (n.msg_id.as_str(), n)).collect();
+        // Trust the stored active leaf ONLY if it still exists in the tree —
+        // mirror flatten_active_path's read-side guard. A dangling active_leaf
+        // (deleted node, client desync) must fall back to the deepest leaf, or
+        // the next turn would attach under a dangling parent and orphan history.
+        if let Some(leaf) = self.get_active_leaf(session_key)
+            && by_id.contains_key(leaf.as_str())
+        {
+            return Some(leaf);
+        }
+        deepest_leaf(&tree, &by_id)
+    }
+
+    fn delete_subtree(&self, session_key: &str, msg_id: &str) -> std::io::Result<Vec<String>> {
+        let tree = self.load_tree(session_key);
+        let existing: HashSet<&str> = tree.iter().map(|n| n.msg_id.as_str()).collect();
+        if !existing.contains(msg_id) {
+            return Ok(Vec::new());
+        }
+        // BFS: the node plus every descendant.
+        let mut removed = vec![msg_id.to_string()];
+        let mut i = 0;
+        while i < removed.len() {
+            let cur = removed[i].clone();
+            for n in &tree {
+                if n.parent_id.as_deref() == Some(cur.as_str()) {
+                    removed.push(n.msg_id.clone());
+                }
+            }
+            i += 1;
+        }
+        {
+            let conn = self.conn.lock();
+            // Atomic: a crash between two DELETEs must not leave an orphaned
+            // descendant (its parent row already gone) that then resurfaces as a
+            // NEW root via deepest_leaf on reload. Wrap the whole subtree removal
+            // + message_count fixup in one transaction — all-or-nothing. If BEGIN
+            // somehow fails we fall through unwrapped (never worse than before).
+            let in_tx = conn.execute_batch("BEGIN").is_ok();
+            for id in &removed {
+                let deleted = conn
+                    .execute(
+                        "DELETE FROM sessions WHERE session_key = ?1 AND msg_id = ?2",
+                        params![session_key, id],
+                    )
+                    .unwrap_or(0);
+                // Legacy fallback (mirror update_node): a NULL-msg_id linear row
+                // is surfaced as `lin-{rowid}` and never matched by the msg_id
+                // DELETE, so it would silently survive. Resolve back to the rowid
+                // and delete by id — only on a real miss, only against NULL rows.
+                if deleted == 0
+                    && let Some(rowid) = parse_lin_rowid(id)
+                {
+                    let _ = conn.execute(
+                        "DELETE FROM sessions WHERE session_key = ?1 AND id = ?2 AND msg_id IS NULL",
+                        params![session_key, rowid],
+                    );
+                }
+            }
+            let cnt: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE session_key = ?1",
+                    params![session_key],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let _ = conn.execute(
+                "UPDATE session_metadata SET message_count = ?1 WHERE session_key = ?2",
+                params![cnt, session_key],
+            );
+            if in_tx {
+                let _ = conn.execute_batch("COMMIT");
+            }
+        }
+        Ok(removed)
+    }
+}
+
+/// Resolve a synthesized legacy id back to its sqlite rowid. load_tree()
+/// surfaces purely-linear (NULL-msg_id) rows as `lin-{rowid}`; the write ops
+/// (update_node/delete_subtree) match on msg_id, which never hits a NULL row, so
+/// they need this fallback to act on legacy history. Strictly `^lin-(\d+)$` —
+/// any non-digit suffix (or a real client id that merely starts with "lin-")
+/// returns None so the msg_id path is never shadowed.
+fn parse_lin_rowid(msg_id: &str) -> Option<i64> {
+    let suffix = msg_id.strip_prefix("lin-")?;
+    if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse::<i64>().ok()
+}
+
+/// Flatten a conversation tree to the active root→leaf path as a message list
+/// — the exact context that gets seeded into the model. Mirrors the frontend
+/// `useMessageTree` rule: use the explicit active leaf if present, else descend
+/// to the most-recently-created child at each step (the "deepest leaf").
+fn flatten_active_path(nodes: &[ConversationNode], active_leaf: Option<&str>) -> Vec<ChatMessage> {
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    let by_id: HashMap<&str, &ConversationNode> =
+        nodes.iter().map(|n| (n.msg_id.as_str(), n)).collect();
+
+    let leaf_id: Option<String> = active_leaf
+        .filter(|l| by_id.contains_key(*l))
+        .map(std::string::ToString::to_string)
+        .or_else(|| deepest_leaf(nodes, &by_id));
+
+    let Some(mut cur) = leaf_id else {
+        return Vec::new();
+    };
+
+    // pathToRoot with a cycle guard (defensive — a malformed parent chain must
+    // not loop forever).
+    let mut path: Vec<&ConversationNode> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some(node) = by_id.get(cur.as_str()) {
+        if !seen.insert(cur.clone()) {
+            break;
+        }
+        path.push(node);
+        match &node.parent_id {
+            Some(p) => cur = p.clone(),
+            None => break,
+        }
+    }
+    path.reverse();
+    path.into_iter()
+        .map(|n| ChatMessage {
+            role: n.role.clone(),
+            content: n.content.clone(),
+        })
+        .collect()
+}
+
+/// The leaf reached by starting at the most-recent root and descending to the
+/// most-recently-created child each step. Input is ordered by rowid ASC, so the
+/// LAST child/root in iteration order is the most recent (rowid is monotonic
+/// with insertion).
+fn deepest_leaf(
+    nodes: &[ConversationNode],
+    by_id: &HashMap<&str, &ConversationNode>,
+) -> Option<String> {
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut roots: Vec<&str> = Vec::new();
+    for n in nodes {
+        match &n.parent_id {
+            Some(p) if by_id.contains_key(p.as_str()) => {
+                children
+                    .entry(p.as_str())
+                    .or_default()
+                    .push(n.msg_id.as_str());
+            }
+            _ => roots.push(n.msg_id.as_str()),
+        }
+    }
+    // No root means every node's parent is itself in the tree — a cycle (only
+    // reachable via a malformed/hostile client; current ops can't create one
+    // now that parent refs are validated). Degrade gracefully to the most
+    // recent node by input order rather than returning None (which would make
+    // flatten_active_path read the whole session as empty, permanently).
+    let mut cur = match roots.last() {
+        Some(r) => *r,
+        None => return nodes.last().map(|n| n.msg_id.clone()),
+    };
+    loop {
+        match children.get(cur).and_then(|c| c.last().copied()) {
+            Some(child) => cur = child,
+            None => return Some(cur.to_string()),
+        }
     }
 }
 
@@ -1443,6 +1875,277 @@ mod tests {
         assert!(meta.room_id.is_none());
     }
 
+    // ── conversation-tree (companion branching) tests ───────────────
+
+    fn node(msg_id: &str, parent: Option<&str>, role: &str, content: &str) -> ConversationNode {
+        ConversationNode {
+            msg_id: msg_id.into(),
+            parent_id: parent.map(Into::into),
+            role: role.into(),
+            content: content.into(),
+            author_id: None,
+            status: None,
+            meta: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn linear_load_byte_identical_after_tree_migration() {
+        // The whole safety premise: adding tree columns must not change the
+        // linear read path one byte.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend.append("s", &ChatMessage::user("one")).unwrap();
+        backend.append("s", &ChatMessage::assistant("two")).unwrap();
+
+        let linear = backend.load("s");
+        assert_eq!(linear.len(), 2);
+        assert_eq!(linear[0].content, "one");
+        assert_eq!(linear[1].content, "two");
+
+        // A linear session has exactly one path; the tree view of it equals load().
+        let path = backend.load_active_path("s");
+        assert_eq!(
+            path.iter().map(|m| m.content.clone()).collect::<Vec<_>>(),
+            vec!["one".to_string(), "two".to_string()]
+        );
+        // load_tree synthesizes a coherent 2-node chain for the legacy rows.
+        let tree = backend.load_tree("s");
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree[1].parent_id.as_deref(), Some(tree[0].msg_id.as_str()));
+    }
+
+    #[test]
+    fn tree_active_path_follows_selected_leaf_and_defaults_to_deepest() {
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        // root user → two assistant swipes (siblings) → continue under swipe B.
+        backend
+            .append_node("c", &node("u1", None, "user", "hi"))
+            .unwrap();
+        backend
+            .append_node("c", &node("aA", Some("u1"), "assistant", "reply A"))
+            .unwrap();
+        backend
+            .append_node("c", &node("aB", Some("u1"), "assistant", "reply B"))
+            .unwrap();
+        backend
+            .append_node("c", &node("u2", Some("aB"), "user", "go on"))
+            .unwrap();
+
+        // No active leaf set → deepest leaf = most-recent descendant = u2 under aB.
+        let deepest = backend.load_active_path("c");
+        assert_eq!(
+            deepest
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>(),
+            vec!["hi".to_string(), "reply B".to_string(), "go on".to_string()]
+        );
+
+        // Explicitly select swipe A → path is u1 → aA, ignoring the aB subtree.
+        backend.set_active_leaf("c", "aA").unwrap();
+        let selected = backend.load_active_path("c");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>(),
+            vec!["hi".to_string(), "reply A".to_string()]
+        );
+
+        // load_path can fetch any leaf regardless of the active selection.
+        let via_b = backend.load_path("c", "u2");
+        assert_eq!(via_b.len(), 3);
+    }
+
+    #[test]
+    fn update_node_targets_by_msg_id_and_syncs_fts() {
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend
+            .append_node("c", &node("u1", None, "user", "question"))
+            .unwrap();
+        backend
+            .append_node("c", &node("a1", Some("u1"), "assistant", "draft"))
+            .unwrap();
+
+        // Stream-finalize the assistant node by msg_id.
+        let mut finalized = node("a1", Some("u1"), "assistant", "polished final answer");
+        finalized.status = Some("complete".into());
+        assert!(backend.update_node("c", &finalized).unwrap());
+        assert!(
+            !backend
+                .update_node("c", &node("nope", None, "assistant", "x"))
+                .unwrap()
+        );
+
+        let tree = backend.load_tree("c");
+        let a1 = tree.iter().find(|n| n.msg_id == "a1").unwrap();
+        assert_eq!(a1.content, "polished final answer");
+        assert_eq!(a1.status.as_deref(), Some("complete"));
+
+        // FTS reflects the update (the new word matches, the old does not):
+        // the UPDATE fires sessions_au, re-indexing the row.
+        let hit = backend.search(&SessionQuery {
+            keyword: Some("polished".into()),
+            limit: Some(10),
+        });
+        assert_eq!(hit.len(), 1);
+        let stale = backend.search(&SessionQuery {
+            keyword: Some("draft".into()),
+            limit: Some(10),
+        });
+        assert!(stale.is_empty());
+    }
+
+    #[test]
+    fn delete_subtree_removes_node_and_descendants_only() {
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend
+            .append_node("c", &node("u1", None, "user", "hi"))
+            .unwrap();
+        backend
+            .append_node("c", &node("aA", Some("u1"), "assistant", "A"))
+            .unwrap();
+        backend
+            .append_node("c", &node("aB", Some("u1"), "assistant", "B"))
+            .unwrap();
+        backend
+            .append_node("c", &node("u2", Some("aB"), "user", "under B"))
+            .unwrap();
+
+        // Delete swipe B's subtree (aB + u2); swipe A and the root survive.
+        let removed = backend.delete_subtree("c", "aB").unwrap();
+        assert_eq!(
+            removed.iter().cloned().collect::<HashSet<_>>(),
+            ["aB".to_string(), "u2".to_string()].into_iter().collect()
+        );
+
+        let surviving: HashSet<String> = backend
+            .load_tree("c")
+            .into_iter()
+            .map(|n| n.msg_id)
+            .collect();
+        assert_eq!(
+            surviving,
+            ["u1".to_string(), "aA".to_string()].into_iter().collect()
+        );
+
+        // Deleting a non-existent node is a no-op.
+        assert!(backend.delete_subtree("c", "ghost").unwrap().is_empty());
+    }
+
+    #[test]
+    fn conversation_tip_ignores_dangling_active_leaf() {
+        // The data-loss guard: a stale/dangling active_leaf (e.g. a deleted node
+        // or client desync) must NOT be trusted as the attach point — it would
+        // orphan history. conversation_tip falls back to the real deepest leaf,
+        // and node_exists reports the dangling ref as absent.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend
+            .append_node("c", &node("u1", None, "user", "hi"))
+            .unwrap();
+        backend
+            .append_node("c", &node("a1", Some("u1"), "assistant", "hello"))
+            .unwrap();
+
+        // Point active_leaf at a node that doesn't exist.
+        backend.set_active_leaf("c", "ghost").unwrap();
+        assert!(!backend.node_exists("c", "ghost"));
+        // Tip ignores the dangling leaf and returns the real deepest leaf.
+        assert_eq!(backend.conversation_tip("c").as_deref(), Some("a1"));
+        // So a new turn still attaches to real history (no orphaning).
+        backend
+            .append_node(
+                "c",
+                &node(
+                    "u2",
+                    backend.conversation_tip("c").as_deref(),
+                    "user",
+                    "again",
+                ),
+            )
+            .unwrap();
+        let path = backend.load_active_path("c");
+        assert_eq!(
+            path.len(),
+            3,
+            "full history preserved despite the dangling leaf"
+        );
+    }
+
+    #[test]
+    fn deepest_leaf_degrades_gracefully_on_cycle() {
+        // A poisoned tree (every node's parent in-tree → no root → a cycle) must
+        // not read as a permanently-empty session. We can't create a cycle via
+        // the validated ops, so construct one directly in the table.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        {
+            let conn = backend.conn.lock();
+            let now = Utc::now().to_rfc3339();
+            // a→b and b→a: both parents resolve in-tree, leaving zero roots.
+            conn.execute(
+                "INSERT INTO sessions (session_key, role, content, created_at, msg_id, parent_id) VALUES ('c','user','x',?1,'a','b')",
+                params![now],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (session_key, role, content, created_at, msg_id, parent_id) VALUES ('c','assistant','y',?1,'b','a')",
+                params![now],
+            ).unwrap();
+        }
+        // Degrades to the most-recent node rather than returning None/empty.
+        assert!(backend.conversation_tip("c").is_some());
+    }
+
+    #[test]
+    fn new_tree_turn_attaches_to_legacy_linear_tip_preserving_history() {
+        // The migration hazard: a session created before the tree existed has
+        // linear rows (NULL msg_id). A new tree turn must attach to that
+        // chain's tip via conversation_tip, or load_active_path would orphan
+        // the legacy history behind a second root and drop it on resume.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        // Legacy linear history (the old append path).
+        backend
+            .append("c", &ChatMessage::user("legacy one"))
+            .unwrap();
+        backend
+            .append("c", &ChatMessage::assistant("legacy two"))
+            .unwrap();
+
+        // New turn attaches at the resolved tip.
+        let tip = backend.conversation_tip("c");
+        assert!(tip.is_some(), "tip resolves to the legacy chain's tail");
+        backend
+            .append_node("c", &node("u_new", tip.as_deref(), "user", "new question"))
+            .unwrap();
+        backend
+            .append_node(
+                "c",
+                &node("a_new", Some("u_new"), "assistant", "new answer"),
+            )
+            .unwrap();
+
+        // Full history survives, in order — nothing orphaned.
+        let path = backend.load_active_path("c");
+        assert_eq!(
+            path.iter().map(|m| m.content.clone()).collect::<Vec<_>>(),
+            vec![
+                "legacy one".to_string(),
+                "legacy two".to_string(),
+                "new question".to_string(),
+                "new answer".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn get_session_metadata_matches_list() {
         let tmp = TempDir::new().unwrap();
@@ -1460,5 +2163,162 @@ mod tests {
         assert_eq!(single.name, from_list.name);
         assert_eq!(single.created_at, from_list.created_at);
         assert_eq!(single.last_activity, from_list.last_activity);
+    }
+
+    fn session_row_count(backend: &SqliteSessionBackend, session_key: &str) -> i64 {
+        let conn = backend.conn.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE session_key = ?1",
+            params![session_key],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn delete_subtree_removes_legacy_linear_rows() {
+        // BI-2: legacy rows have msg_id IS NULL, so the msg_id-only DELETE never
+        // matched them — delete_subtree returned a populated removed-list while
+        // deleting NOTHING (false success). The rowid fallback must actually
+        // delete the synthesized lin-* subtree.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        // Build via the LINEAR append path -> every row has msg_id = NULL.
+        backend.append("c", &ChatMessage::user("one")).unwrap();
+        backend.append("c", &ChatMessage::assistant("two")).unwrap();
+        backend.append("c", &ChatMessage::user("three")).unwrap();
+        backend
+            .append("c", &ChatMessage::assistant("four"))
+            .unwrap();
+        assert_eq!(session_row_count(&backend, "c"), 4);
+
+        // load_tree synthesizes the lin-{rowid} ids + parent chain.
+        let tree = backend.load_tree("c");
+        assert_eq!(tree.len(), 4);
+        assert!(
+            parse_lin_rowid(&tree[1].msg_id).is_some(),
+            "legacy ids surface as lin-*"
+        );
+        // Delete the 2nd (non-leaf) node's subtree: it + every descendant.
+        let target = tree[1].msg_id.clone();
+        let expected: HashSet<String> = tree[1..].iter().map(|n| n.msg_id.clone()).collect();
+
+        let removed = backend.delete_subtree("c", &target).unwrap();
+        assert_eq!(removed.into_iter().collect::<HashSet<_>>(), expected);
+        // The actual rows are gone: count dropped by the 3-node subtree.
+        assert_eq!(session_row_count(&backend, "c"), 1);
+    }
+
+    #[test]
+    fn update_node_updates_legacy_linear_row() {
+        // BI-2: update_node on a synthesized lin-* id must reach the NULL-msg_id
+        // legacy row (via the rowid fallback) AND fire sessions_au so FTS stays
+        // in sync.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend
+            .append("c", &ChatMessage::user("alpha question"))
+            .unwrap();
+        backend
+            .append("c", &ChatMessage::assistant("beta draft"))
+            .unwrap();
+
+        let tree = backend.load_tree("c");
+        let lin_id = tree[1].msg_id.clone();
+        assert!(
+            parse_lin_rowid(&lin_id).is_some(),
+            "legacy row surfaces as lin-*"
+        );
+        let updated = node(
+            &lin_id,
+            tree[1].parent_id.as_deref(),
+            "assistant",
+            "gamma revised",
+        );
+        assert!(backend.update_node("c", &updated).unwrap());
+
+        let tree2 = backend.load_tree("c");
+        let n = tree2.iter().find(|n| n.msg_id == lin_id).unwrap();
+        assert_eq!(n.content, "gamma revised");
+
+        // FTS reflects the update: the new word matches, the replaced one does not.
+        let hit = backend.search(&SessionQuery {
+            keyword: Some("gamma".into()),
+            limit: Some(10),
+        });
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].key, "c");
+        let stale = backend.search(&SessionQuery {
+            keyword: Some("beta".into()),
+            limit: Some(10),
+        });
+        assert!(stale.is_empty());
+    }
+
+    #[test]
+    fn update_node_real_msgid_not_shadowed_by_lin_fallback() {
+        // The ordering invariant: a REAL client msg_id literally equal to
+        // "lin-7" must be matched by the msg_id path, never shadowed by the
+        // rowid fallback onto a different NULL-msg_id row at rowid 7.
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        // A real tree node whose literal msg_id IS the string "lin-7" (rowid 1).
+        backend
+            .append_node("c", &node("lin-7", None, "user", "real lin-7 content"))
+            .unwrap();
+        // Six linear (NULL-msg_id) rows -> the 6th lands at rowid 7.
+        for i in 2..=6 {
+            backend
+                .append("c", &ChatMessage::user(format!("filler {i}")))
+                .unwrap();
+        }
+        backend
+            .append("c", &ChatMessage::user("untouched legacy seven"))
+            .unwrap();
+        // Confirm the rowid-7 row is the NULL legacy row we expect.
+        {
+            let conn = backend.conn.lock();
+            let (mid, content): (Option<String>, String) = conn
+                .query_row(
+                    "SELECT msg_id, content FROM sessions WHERE id = 7",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert!(mid.is_none());
+            assert_eq!(content, "untouched legacy seven");
+        }
+
+        // Update by the real msg_id "lin-7": must hit the real node, NOT rowid 7.
+        assert!(
+            backend
+                .update_node("c", &node("lin-7", None, "user", "updated real content"))
+                .unwrap()
+        );
+
+        let conn = backend.conn.lock();
+        let real: String = conn
+            .query_row(
+                "SELECT content FROM sessions WHERE session_key = 'c' AND msg_id = 'lin-7'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            real, "updated real content",
+            "msg_id path updated the real node"
+        );
+        let legacy7: String = conn
+            .query_row(
+                "SELECT content FROM sessions WHERE id = 7 AND msg_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            legacy7, "untouched legacy seven",
+            "rowid-7 row was NOT shadowed"
+        );
     }
 }
