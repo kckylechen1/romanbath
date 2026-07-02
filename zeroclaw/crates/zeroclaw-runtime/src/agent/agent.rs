@@ -524,12 +524,9 @@ impl Agent {
         match zeroclaw_memory::create_memory(&none_cfg, Path::new("."), None) {
             Ok(mem) => self.memory = Arc::from(mem),
             Err(e) => {
-                ::zeroclaw_log::record!(
-                    WARN,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({"error": format!("{e:#}")})),
-                    "Failed to disable agent memory"
+                // Fail-closed: create_memory("none") is Ok in practice; panicking here beats silently leaking across characters.
+                panic!(
+                    "disable_memory: none-backend swap failed ({e:#}); refusing to leave agent-scoped memory in place"
                 );
             }
         }
