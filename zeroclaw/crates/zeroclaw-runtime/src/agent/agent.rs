@@ -677,6 +677,16 @@ impl Agent {
         self.prompt_builder = std::mem::take(&mut self.prompt_builder).add_section(Box::new(
             crate::agent::prompt::CustomSection::new(name, content),
         ));
+        let should_refresh_system = matches!(
+            self.history.first(),
+            Some(ConversationMessage::Chat(message)) if message.role == "system"
+        );
+        if should_refresh_system
+            && let Ok(system_prompt) = self.build_system_prompt()
+            && let Some(ConversationMessage::Chat(message)) = self.history.first_mut()
+        {
+            message.content = system_prompt;
+        }
     }
 
     /// Hydrate the agent with a full `ConversationMessage` history (e.g. restored
@@ -3761,6 +3771,68 @@ mod tests {
             matches!(&history[2], ConversationMessage::Chat(m) if m.role == "assistant" && m.content == "hi there")
         );
         assert_eq!(history.len(), 3);
+    }
+
+    fn make_agent_for_system_prompt_test() -> Agent {
+        let model_provider = Box::new(MockModelProvider {
+            responses: Mutex::new(vec![]),
+        });
+
+        let memory_cfg = zeroclaw_config::schema::MemoryConfig {
+            backend: "none".into(),
+            ..zeroclaw_config::schema::MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> = Arc::from(
+            zeroclaw_memory::create_memory(&memory_cfg, std::path::Path::new("/tmp"), None)
+                .expect("memory creation should succeed with valid config"),
+        );
+
+        let observer: Arc<dyn Observer> = Arc::from(crate::observability::NoopObserver {});
+        Agent::builder()
+            .model_provider(model_provider)
+            .tools(vec![Box::new(MockTool)])
+            .memory(mem)
+            .observer(observer)
+            .tool_dispatcher(Box::new(NativeToolDispatcher))
+            .workspace_dir(std::path::PathBuf::from("/tmp"))
+            .build()
+            .expect("agent builder should succeed with valid config")
+    }
+
+    #[test]
+    fn custom_section_added_after_seed_reaches_frozen_system_prompt() {
+        let mut agent = make_agent_for_system_prompt_test();
+        agent.seed_history(&[ChatMessage::user("hi")]);
+        let len_before = agent.history().len();
+
+        agent.add_custom_system_section("character_card", "CARD_MARKER_XYZ");
+
+        let history = agent.history();
+        assert!(
+            matches!(&history[0], ConversationMessage::Chat(m) if m.role == "system" && m.content.contains("CARD_MARKER_XYZ"))
+        );
+        assert_eq!(history.len(), len_before);
+    }
+
+    #[test]
+    fn custom_section_added_before_seed_still_reaches_system_prompt() {
+        let mut agent = make_agent_for_system_prompt_test();
+        agent.add_custom_system_section("character_card", "CARD_MARKER_XYZ");
+        agent.seed_history(&[ChatMessage::user("hi")]);
+
+        let history = agent.history();
+        assert!(
+            matches!(&history[0], ConversationMessage::Chat(m) if m.role == "system" && m.content.contains("CARD_MARKER_XYZ"))
+        );
+    }
+
+    #[test]
+    fn custom_section_on_empty_history_defers_prompt_build() {
+        let mut agent = make_agent_for_system_prompt_test();
+
+        agent.add_custom_system_section("character_card", "CARD_MARKER_XYZ");
+
+        assert!(agent.history().is_empty());
     }
 
     #[test]
