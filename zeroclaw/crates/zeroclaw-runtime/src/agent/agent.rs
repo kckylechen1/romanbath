@@ -507,6 +507,10 @@ impl Agent {
         &self.history
     }
 
+    pub fn set_temperature(&mut self, temperature: f64) {
+        self.temperature = temperature;
+    }
+
     pub fn clear_history(&mut self) {
         self.history.clear();
     }
@@ -3833,6 +3837,15 @@ mod tests {
         agent.add_custom_system_section("character_card", "CARD_MARKER_XYZ");
 
         assert!(agent.history().is_empty());
+    }
+
+    #[test]
+    fn set_temperature_overrides_config_value() {
+        let mut agent = make_agent_for_system_prompt_test();
+
+        agent.set_temperature(0.123);
+
+        assert_eq!(agent.temperature, 0.123);
     }
 
     #[test]

@@ -114,6 +114,9 @@ struct ConnectParams {
     /// `user_description`. Any thin client (web, native) sends it here.
     #[serde(default)]
     user_description: Option<String>,
+    /// Session-level sampling override; mirrors the SSE path's `request_temperature`.
+    #[serde(default)]
+    temperature: Option<f64>,
 }
 
 /// The sub-protocol we support for the chat WebSocket.
@@ -515,6 +518,7 @@ async fn handle_socket(
     let mut character_mode: Option<String> = None;
     let mut user_name: Option<String> = None;
     let mut user_description: Option<String> = None;
+    let mut request_temperature: Option<f64> = None;
 
     if let Some(first) = receiver.next().await {
         match first {
@@ -538,6 +542,7 @@ async fn handle_socket(
                         if cp.cwd.is_some() {
                             requested_cwd = cp.cwd;
                         }
+                        request_temperature = cp.temperature;
                         if cp.character_name.is_some() {
                             character_name = cp.character_name;
                             character_mode = cp.character_mode;
@@ -640,6 +645,9 @@ async fn handle_socket(
                 return;
             }
         };
+    if let Some(t) = request_temperature {
+        agent.set_temperature(t);
+    }
     agent.set_memory_session_id(Some(memory_session_id));
     if !stored_messages.is_empty() {
         agent.seed_history(&stored_messages);
@@ -2630,6 +2638,16 @@ mod tests {
     fn extract_ws_token_returns_none_when_empty() {
         let headers = HeaderMap::new();
         assert_eq!(extract_ws_token(&headers, None), None);
+    }
+
+    #[test]
+    fn connect_params_parse_temperature() {
+        let parsed: ConnectParams =
+            serde_json::from_str(r#"{"type":"connect","temperature":0.5}"#).unwrap();
+        assert_eq!(parsed.temperature, Some(0.5));
+
+        let parsed: ConnectParams = serde_json::from_str(r#"{"type":"connect"}"#).unwrap();
+        assert_eq!(parsed.temperature, None);
     }
 
     #[test]
