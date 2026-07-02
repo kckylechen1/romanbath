@@ -671,6 +671,7 @@ async fn handle_socket(
     // the context inspector. Captured here (assembled once per session) and
     // pushed to the client as a context_meta frame below.
     let mut resolved_system_prompt: Option<String> = None;
+    let mut session_card: Option<zeroclaw_cards::CharacterCard> = None;
     let companion_persona: zeroclaw_affect::CompanionPersona =
         if let Some(ref char_name) = character_name {
             match inject_character_card(
@@ -681,8 +682,9 @@ async fn handle_socket(
                 user_description.as_deref(),
                 &memory_context,
             ) {
-                Ok((Some(first_mes), companion, full_prompt)) => {
+                Ok((Some(first_mes), companion, full_prompt, card)) => {
                     resolved_system_prompt = Some(full_prompt);
+                    session_card = Some(card);
                     // Only greet on a brand-new session. On a resumed session
                     // (stable client session_id) re-sending first_mes would
                     // replay the opening line as a fresh bot turn on every
@@ -701,8 +703,9 @@ async fn handle_socket(
                     }
                     companion.unwrap_or_default()
                 }
-                Ok((None, companion, full_prompt)) => {
+                Ok((None, companion, full_prompt, card)) => {
                     resolved_system_prompt = Some(full_prompt);
+                    session_card = Some(card);
                     companion.unwrap_or_default()
                 }
                 Err(e) => {
@@ -807,6 +810,7 @@ async fn handle_socket(
                         &ws_memory,
                         &agent_alias,
                         &companion_persona,
+                        session_card.as_ref(),
                         &content,
                         &session_key,
                         character_name.clone(),
@@ -1099,6 +1103,7 @@ async fn handle_socket(
                     &ws_memory,
                     &agent_alias,
                     &companion_persona,
+                    session_card.as_ref(),
                     &content,
                     &session_key,
                     character_name.clone(),
@@ -1518,6 +1523,7 @@ fn build_character_prompt_components(
     String,
     Option<String>,
     Option<zeroclaw_affect::CompanionPersona>,
+    zeroclaw_cards::CharacterCard,
 )> {
     let mgr = zeroclaw_cards::CardManager::default()?;
     let card = mgr
@@ -1573,7 +1579,7 @@ fn build_character_prompt_components(
         Some(rendered)
     };
 
-    Ok((full_prompt, first_mes, companion))
+    Ok((full_prompt, first_mes, companion, card))
 }
 
 fn inject_character_card(
@@ -1587,8 +1593,9 @@ fn inject_character_card(
     Option<String>,
     Option<zeroclaw_affect::CompanionPersona>,
     String,
+    zeroclaw_cards::CharacterCard,
 )> {
-    let (full_prompt, first_mes, companion) = build_character_prompt_components(
+    let (full_prompt, first_mes, companion, card) = build_character_prompt_components(
         character_name,
         mode,
         user_name,
@@ -1596,7 +1603,16 @@ fn inject_character_card(
         memory_context,
     )?;
     agent.add_custom_system_section("character_card", full_prompt.clone());
-    Ok((first_mes, companion, full_prompt))
+    Ok((first_mes, companion, full_prompt, card))
+}
+
+fn lorebook_turn_block(card: &zeroclaw_cards::CharacterCard, scan_text: &str) -> String {
+    let lore_parts = card.lorebook_keyword_blocks(scan_text);
+    if lore_parts.is_empty() {
+        String::new()
+    } else {
+        format!("[World info]\n{}", lore_parts.join("\n"))
+    }
 }
 
 /// Parse CompanionPersona from character card extensions.companion.
@@ -1749,6 +1765,7 @@ async fn process_chat_message(
     ws_memory: &Option<Arc<dyn zeroclaw_memory::Memory>>,
     agent_alias: &str,
     companion_persona: &zeroclaw_affect::CompanionPersona,
+    session_card: Option<&zeroclaw_cards::CharacterCard>,
     content: &str,
     session_key: &str,
     character_name: Option<String>,
@@ -1830,8 +1847,36 @@ async fn process_chat_message(
     // recall_block is moved into the prompt prefix below.
     let recalled_memories = recall_block.clone();
 
+    let lorebook_block = if let Some(card) = session_card {
+        let mut recent_messages = state
+            .session_backend
+            .as_ref()
+            .map(|backend| backend.load_active_path(session_key))
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .take(6)
+            .collect::<Vec<_>>();
+        recent_messages.reverse();
+
+        let mut scan_text = recent_messages
+            .into_iter()
+            .map(|message| format!("{}: {}", message.role, message.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !scan_text.is_empty() {
+            scan_text.push('\n');
+        }
+        scan_text.push_str("user: ");
+        scan_text.push_str(content);
+
+        lorebook_turn_block(card, &scan_text)
+    } else {
+        String::new()
+    };
+
     let (affect_hint, affect_state) = compute_affect(content, companion_persona);
-    let prefix_parts: Vec<String> = [recall_block, affect_hint]
+    let prefix_parts: Vec<String> = [lorebook_block, recall_block, affect_hint]
         .into_iter()
         .filter(|s| !s.is_empty())
         .collect();
@@ -2476,6 +2521,67 @@ mod tests {
     use super::*;
     use axum::http::HeaderMap;
 
+    fn make_keyword_lorebook_card() -> zeroclaw_cards::CharacterCard {
+        zeroclaw_cards::CharacterCard {
+            spec: "chara_card_v2".into(),
+            spec_version: "2.0".into(),
+            data: zeroclaw_cards::CharacterData {
+                name: "Daniel".into(),
+                description: "A bartender.".into(),
+                personality: String::new(),
+                scenario: String::new(),
+                first_mes: String::new(),
+                mes_example: String::new(),
+                system_prompt: String::new(),
+                post_history_instructions: String::new(),
+                alternate_greetings: vec![],
+                tags: vec![],
+                creator: String::new(),
+                creator_notes: String::new(),
+                character_version: String::new(),
+                character_book: Some(zeroclaw_cards::CharacterBook {
+                    name: "DragonLore".into(),
+                    description: String::new(),
+                    entries: vec![
+                        zeroclaw_cards::CharacterBookEntry {
+                            id: String::new(),
+                            keys: vec!["dragon".into()],
+                            content: "DRAGON_LORE".into(),
+                            enabled: true,
+                            selective: false,
+                            secondary_keys: vec![],
+                            constant: false,
+                            position: "before_char".into(),
+                            token_budget: None,
+                            priority: None,
+                            recursive: false,
+                        },
+                        zeroclaw_cards::CharacterBookEntry {
+                            id: String::new(),
+                            keys: vec![],
+                            content: "CONSTANT_LORE".into(),
+                            enabled: true,
+                            selective: false,
+                            secondary_keys: vec![],
+                            constant: true,
+                            position: "before_char".into(),
+                            token_budget: None,
+                            priority: None,
+                            recursive: false,
+                        },
+                    ],
+                }),
+                nickname: String::new(),
+                group_only_greetings: Vec::new(),
+                source: Vec::new(),
+                assets: Vec::new(),
+                extensions: serde_json::Value::Object(serde_json::Map::new()),
+                creation_date: String::new(),
+                modification_date: String::new(),
+            },
+        }
+    }
+
     #[test]
     fn extract_ws_token_from_authorization_header() {
         let mut headers = HeaderMap::new();
@@ -2524,6 +2630,17 @@ mod tests {
     fn extract_ws_token_returns_none_when_empty() {
         let headers = HeaderMap::new();
         assert_eq!(extract_ws_token(&headers, None), None);
+    }
+
+    #[test]
+    fn lorebook_turn_block_formats_world_info() {
+        let card = make_keyword_lorebook_card();
+
+        assert_eq!(
+            lorebook_turn_block(&card, "a dragon appears"),
+            "[World info]\nDRAGON_LORE"
+        );
+        assert_eq!(lorebook_turn_block(&card, "nothing relevant"), "");
     }
 
     #[test]
