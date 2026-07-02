@@ -1949,6 +1949,16 @@ async fn process_chat_message(
                                 let _ = sender.send(Message::Text(err.to_string().into())).await;
                                 continue;
                             }
+                            // Cap mirrors validate_message_frame; mid-turn steering is content-only so the size guard is the relevant portion.
+                            if content.len() > crate::MAX_BODY_SIZE {
+                                let err = serde_json::json!({
+                                    "type": "error",
+                                    "message": "Message exceeds the maximum size",
+                                    "code": "CONTENT_TOO_LARGE"
+                                });
+                                let _ = sender.send(Message::Text(err.to_string().into())).await;
+                                continue;
+                            }
                             match steering_tx.try_send(content) {
                                 Ok(()) => {}
                                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
