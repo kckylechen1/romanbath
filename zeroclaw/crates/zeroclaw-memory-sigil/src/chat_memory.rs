@@ -3,7 +3,7 @@
 // Provides ChatMemoryStore that partitions memories by character_name,
 // with save/recall/inject operations for the chat pipeline.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -11,6 +11,8 @@ use crate::memory_crud::{self, MemoryError};
 use crate::noise::{is_noise_text, should_skip_query};
 use crate::scorer;
 use crate::types::{MemoryEntry, SearchResult};
+
+const AFFECT_STATE_ID: &str = "affect-state";
 
 /// Manages chat memory storage, partitioned by character_name.
 pub struct ChatMemoryStore {
@@ -51,6 +53,19 @@ impl ChatMemoryStore {
         role: &str,
         content: &str,
     ) -> Result<Option<String>, MemoryError> {
+        self.save_chat_memory_with_affect(character_name, user_name, role, content, None)
+    }
+
+    /// Save a chat message as a memory entry, optionally tagging the assistant
+    /// exchange with the affect perceived from the user's turn.
+    pub fn save_chat_memory_with_affect(
+        &self,
+        character_name: &str,
+        user_name: &str,
+        role: &str,
+        content: &str,
+        affect: Option<&serde_json::Value>,
+    ) -> Result<Option<String>, MemoryError> {
         // Scrub think tags first so they don't pollute the noise checks or DB
         let cleaned_content = crate::noise::scrub_think_tags(content);
 
@@ -73,6 +88,17 @@ impl ChatMemoryStore {
         entities.extend(extract_mentions(&cleaned_content));
 
         let path = format!("/chat/{character_name}/memories/{role}");
+        let metadata = match affect {
+            Some(affect) => serde_json::json!({
+                "role": role,
+                "user_name": user_name,
+                "affect": affect,
+            }),
+            None => serde_json::json!({
+                "role": role,
+                "user_name": user_name,
+            }),
+        };
 
         let entry = MemoryEntry {
             id,
@@ -90,10 +116,7 @@ impl ChatMemoryStore {
             access_count: 0,
             last_access: None,
             retention_policy: None,
-            metadata: serde_json::json!({
-                "role": role,
-                "user_name": user_name,
-            }),
+            metadata,
             recall_count: 0,
             query_diversity: 0,
             tier: "raw".to_string(),
@@ -102,6 +125,57 @@ impl ChatMemoryStore {
         let entry_id = entry.id.clone();
         memory_crud::upsert(&mut conn, &entry)?;
         Ok(Some(entry_id))
+    }
+
+    /// Load the reserved per-character affect snapshot row.
+    pub fn load_affect_state(
+        &self,
+        character_name: &str,
+    ) -> Result<Option<serde_json::Value>, MemoryError> {
+        let conn = self.open(character_name)?;
+        let metadata_json: Option<String> = conn
+            .query_row(
+                "SELECT metadata FROM memories WHERE id = ?1",
+                [AFFECT_STATE_ID],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        metadata_json
+            .map(|json| serde_json::from_str(&json).map_err(MemoryError::from))
+            .transpose()
+    }
+
+    /// Save the reserved per-character affect snapshot row outside memory recall.
+    pub fn save_affect_state(
+        &self,
+        character_name: &str,
+        payload: &serde_json::Value,
+    ) -> Result<(), MemoryError> {
+        let mut conn = self.open_mut(character_name)?;
+        let entry = MemoryEntry {
+            id: AFFECT_STATE_ID.to_string(),
+            path: format!("/chat/{character_name}/affect/state"),
+            summary: "companion affect state".to_string(),
+            text: String::new(),
+            importance: 0.5,
+            timestamp: memory_crud::now_utc_iso(),
+            category: "preference".to_string(),
+            keywords: vec![],
+            entities: vec![],
+            source: "auto".to_string(),
+            scope: "user".to_string(),
+            archived: false,
+            access_count: 0,
+            last_access: None,
+            retention_policy: None,
+            metadata: payload.clone(),
+            recall_count: 0,
+            query_diversity: 0,
+            tier: "raw".to_string(),
+        };
+
+        memory_crud::upsert(&mut conn, &entry)
     }
 
     /// Search for memories relevant to a query.
@@ -324,6 +398,10 @@ impl ChatMemoryStore {
                     *ent = new_name.to_string();
                 }
             }
+            memory_crud::upsert(&mut conn, &entry)?;
+        }
+        if let Some(mut entry) = memory_crud::get_by_id(&conn, AFFECT_STATE_ID)? {
+            entry.path = entry.path.replacen(&old_seg, &new_seg, 1);
             memory_crud::upsert(&mut conn, &entry)?;
         }
         Ok(())
@@ -762,6 +840,98 @@ mod tests {
         store
             .rename_character("never_existed", "still_nothing")
             .unwrap();
+    }
+
+    #[test]
+    fn affect_state_upserts_and_stays_invisible() {
+        let (_dir, store) = temp_store();
+        let p1 = serde_json::json!({"version": 1, "bond": {"closeness": 0.2}});
+        let p2 = serde_json::json!({"version": 1, "bond": {"closeness": 0.4}});
+
+        store.save_affect_state("aff", &p1).unwrap();
+        store.save_affect_state("aff", &p2).unwrap();
+
+        assert_eq!(store.load_affect_state("aff").unwrap(), Some(p2));
+
+        let conn = crate::schema::open(&store.db_path_for("aff")).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE id = 'affect-state'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        assert!(
+            !store
+                .list_memories("aff", 200)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.id == AFFECT_STATE_ID)
+        );
+        assert!(
+            store
+                .recall_memories("aff", "companion affect state", 5)
+                .unwrap()
+                .is_empty(),
+            "reserved affect row must not leak through recall"
+        );
+        assert!(
+            store
+                .inject_memories_into_prompt("aff", "User: companion affect state")
+                .is_empty(),
+            "reserved affect row must not leak through prompt injection"
+        );
+    }
+
+    #[test]
+    fn affect_state_survives_character_rename() {
+        let (_dir, store) = temp_store();
+        let payload = serde_json::json!({"version": 1, "bond": {"trust": 0.61}});
+
+        store.save_affect_state("old_char", &payload).unwrap();
+        store.rename_character("old_char", "new_char").unwrap();
+
+        assert_eq!(store.load_affect_state("new_char").unwrap(), Some(payload));
+        assert!(store.load_affect_state("old_char").unwrap().is_none());
+    }
+
+    #[test]
+    fn assistant_memory_carries_affect_tag() {
+        let (_dir, store) = temp_store();
+        let affect = serde_json::json!({"valence": -0.5});
+
+        let tagged_id = store
+            .save_chat_memory_with_affect(
+                "tagged",
+                "Alice",
+                "assistant",
+                "I hear how heavy this feels, and I will keep the context steady.",
+                Some(&affect),
+            )
+            .unwrap()
+            .expect("assistant row saved");
+        let plain_id = store
+            .save_chat_memory(
+                "tagged",
+                "Alice",
+                "assistant",
+                "I will remember this context for our next turn.",
+            )
+            .unwrap()
+            .expect("assistant row saved");
+
+        let conn = crate::schema::open(&store.db_path_for("tagged")).unwrap();
+        let tagged = memory_crud::get_by_id(&conn, &tagged_id)
+            .unwrap()
+            .expect("tagged row exists");
+        let plain = memory_crud::get_by_id(&conn, &plain_id)
+            .unwrap()
+            .expect("plain row exists");
+
+        assert_eq!(tagged.metadata["affect"]["valence"], -0.5);
+        assert!(plain.metadata.get("affect").is_none());
     }
 
     #[test]

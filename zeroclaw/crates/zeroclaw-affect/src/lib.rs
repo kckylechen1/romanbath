@@ -44,7 +44,9 @@ pub mod persona;
 pub mod state;
 
 pub use appraisal::{EmpathyStrategy, appraise, select_strategy};
-pub use memory::{RelationshipMemory, TimestampedAffect};
+pub use memory::{
+    AffectSnapshot, BondStage, RelationshipBond, RelationshipMemory, TimestampedAffect,
+};
 pub use perception::{AffectEstimator, ConversationContext, HeuristicEstimator, UserSignals};
 pub use persona::{Archetype, CompanionPersona, ExpressedStance};
 pub use state::{AffectState, UserEmotion};

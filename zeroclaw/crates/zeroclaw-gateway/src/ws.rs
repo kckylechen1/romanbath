@@ -649,6 +649,12 @@ async fn handle_socket(
         agent.set_temperature(t);
     }
     agent.set_memory_session_id(Some(memory_session_id));
+    if character_name.is_some() {
+        // Character sessions are sigil-exclusive (see memory-collision analysis):
+        // native load_context/auto_save would double-inject and leak across
+        // characters via the agent-scoped brain.db.
+        agent.disable_memory();
+    }
     if !stored_messages.is_empty() {
         agent.seed_history(&stored_messages);
     }
@@ -671,6 +677,26 @@ async fn handle_socket(
     } else {
         String::new()
     };
+    let mut affect_snapshot: Option<zeroclaw_affect::AffectSnapshot> =
+        if let Some(char_name) = character_name.clone() {
+            let data_dir = config.data_dir.clone();
+            let mut snapshot = tokio::task::spawn_blocking(move || {
+                let mem_store =
+                    zeroclaw_memory_sigil::ChatMemoryStore::new(&data_dir.join("chat_memory"));
+                mem_store
+                    .load_affect_state(&char_name)
+                    .ok()
+                    .flatten()
+                    .and_then(|v| zeroclaw_affect::AffectSnapshot::from_json(&v))
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+            snapshot.apply_idle_decay(chrono::Utc::now().timestamp_millis());
+            Some(snapshot)
+        } else {
+            None
+        };
 
     // Companion persona extracted from the character card's
     // extensions.companion. Falls back to Default (Nurturing) when
@@ -819,6 +845,7 @@ async fn handle_socket(
                         &agent_alias,
                         &companion_persona,
                         session_card.as_ref(),
+                        affect_snapshot.as_mut(),
                         &content,
                         &session_key,
                         character_name.clone(),
@@ -1112,6 +1139,7 @@ async fn handle_socket(
                     &agent_alias,
                     &companion_persona,
                     session_card.as_ref(),
+                    affect_snapshot.as_mut(),
                     &content,
                     &session_key,
                     character_name.clone(),
@@ -1281,6 +1309,12 @@ fn detect_character_conflict(
     } else {
         None
     }
+}
+
+/// Native consolidation runs only for committed turns on NO-CARD sessions —
+/// character sessions are sigil-exclusive.
+fn should_consolidate_native(is_alternate: bool, auto_save: bool, has_character: bool) -> bool {
+    !is_alternate && auto_save && !has_character
 }
 
 /// Reject a client `message` frame whose content or node ids would poison the
@@ -1731,10 +1765,14 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
 ///
 /// Both are gated on the same confidence floor: below it we return neither,
 /// so a flat "ok" neither injects an affect hint nor jitters the glow — the
-/// avatar stays at its warm default.
+/// avatar stays at its warm default. Low-confidence committed turns are weak
+/// evidence of calm, not zero evidence: they relax only the latest stored
+/// spike toward baseline, without growing trajectory or bond state.
 fn compute_affect(
     user_message: &str,
     persona: &zeroclaw_affect::CompanionPersona,
+    mut snapshot: Option<&mut zeroclaw_affect::AffectSnapshot>,
+    is_alternate: bool,
 ) -> (String, Option<zeroclaw_affect::AffectState>) {
     use chrono::Timelike;
     use zeroclaw_affect::{
@@ -1752,10 +1790,35 @@ fn compute_affect(
     let (affect, stance) = perceive_and_appraise(&HeuristicEstimator, &ctx, &signals, persona);
 
     if affect.confidence < 0.35 {
+        if let Some(snap) = snapshot.as_deref_mut()
+            && !is_alternate
+        {
+            snap.relationship.decay_latest(0.15);
+            snap.updated_at_ms = chrono::Utc::now().timestamp_millis();
+        }
         return (String::new(), None);
     }
 
-    (stance.to_prompt_hint(), Some(affect))
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if let Some(snap) = snapshot.as_deref_mut()
+        && !is_alternate
+    {
+        snap.record_turn(now_ms, &affect);
+    }
+
+    let mut hint = stance.to_prompt_hint();
+    if let Some(snap) = snapshot {
+        if let Some(mood_hint) = snap.mood_hint() {
+            hint.push('\n');
+            hint.push_str(&mood_hint);
+        }
+        if let Some(bond_hint) = snap.bond_hint() {
+            hint.push('\n');
+            hint.push_str(&bond_hint);
+        }
+    }
+
+    (hint, Some(affect))
 }
 
 /// Process a single chat message through the agent and send the response.
@@ -1774,6 +1837,7 @@ async fn process_chat_message(
     agent_alias: &str,
     companion_persona: &zeroclaw_affect::CompanionPersona,
     session_card: Option<&zeroclaw_cards::CharacterCard>,
+    mut affect_snapshot: Option<&mut zeroclaw_affect::AffectSnapshot>,
     content: &str,
     session_key: &str,
     character_name: Option<String>,
@@ -1883,7 +1947,15 @@ async fn process_chat_message(
         String::new()
     };
 
-    let (affect_hint, affect_state) = compute_affect(content, companion_persona);
+    let (affect_hint, affect_state) = compute_affect(
+        content,
+        companion_persona,
+        affect_snapshot.as_deref_mut(),
+        is_alternate,
+    );
+    let affect_json = affect_state
+        .as_ref()
+        .and_then(|state| serde_json::to_value(state).ok());
     let prefix_parts: Vec<String> = [lorebook_block, recall_block, affect_hint]
         .into_iter()
         .filter(|s| !s.is_empty())
@@ -2194,17 +2266,28 @@ async fn process_chat_message(
                 let response = outcome.response.clone();
                 let data_dir = state.config.read().data_dir.clone();
                 let cn = cn.clone();
+                let affect_json = affect_json.clone();
+                let affect_snapshot_json = affect_snapshot.as_ref().map(|snap| snap.to_json());
                 tokio::task::spawn_blocking(move || {
                     let mem_store = zeroclaw_memory_sigil::ChatMemoryStore::new(
                         &std::path::PathBuf::from(&data_dir).join("chat_memory"),
                     );
-                    let _ = mem_store.save_chat_memory(&cn, &uname, "assistant", &response);
+                    let _ = mem_store.save_chat_memory_with_affect(
+                        &cn,
+                        &uname,
+                        "assistant",
+                        &response,
+                        affect_json.as_ref(),
+                    );
+                    if let Some(payload) = affect_snapshot_json {
+                        let _ = mem_store.save_affect_state(&cn, &payload);
+                    }
                 });
             }
 
             // Fire-and-forget memory consolidation so facts from WS sessions
             // are extracted to long-term memory (Daily + Core categories).
-            if !is_alternate && state.auto_save {
+            if should_consolidate_native(is_alternate, state.auto_save, character_name.is_some()) {
                 if let Some(mem) = ws_memory.clone() {
                     let model_provider = state.model_provider.clone();
                     let model = state.model.clone();
@@ -2300,7 +2383,17 @@ async fn process_chat_message(
                 None,
             );
 
-            let done = serde_json::json!({
+            let mood_json = affect_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.relationship.mood_baseline.as_ref())
+                .map(|mood| {
+                    serde_json::json!({
+                        "valence": mood.valence,
+                        "arousal": mood.arousal,
+                        "label": mood.label,
+                    })
+                });
+            let mut done = serde_json::json!({
                 "type": "done",
                 "full_response": outcome.response,
                 "input_tokens": total_input_tokens,
@@ -2323,6 +2416,9 @@ async fn process_chat_message(
                 // context_meta frame at connect.
                 "recalled_memories": recalled_memories,
             });
+            if let Some(mood) = mood_json {
+                done["mood"] = mood;
+            }
             let _ = sender.send(Message::Text(done.to_string().into())).await;
 
             // Set session state to idle
@@ -2648,6 +2744,90 @@ mod tests {
 
         let parsed: ConnectParams = serde_json::from_str(r#"{"type":"connect"}"#).unwrap();
         assert_eq!(parsed.temperature, None);
+    }
+
+    fn affect_state(valence: f32, arousal: f32, confidence: f32) -> zeroclaw_affect::AffectState {
+        zeroclaw_affect::AffectState {
+            valence,
+            arousal,
+            label: zeroclaw_affect::AffectState::classify(valence, arousal),
+            confidence,
+        }
+    }
+
+    #[test]
+    fn compute_affect_alternate_does_not_mutate_snapshot() {
+        let persona = zeroclaw_affect::CompanionPersona::default();
+        let mut snapshot = zeroclaw_affect::AffectSnapshot::default();
+
+        let (_, alternate_affect) = compute_affect(
+            "I'm so stressed and anxious about everything",
+            &persona,
+            Some(&mut snapshot),
+            true,
+        );
+        assert!(alternate_affect.is_some());
+        assert_eq!(snapshot.bond.interaction_count, 0);
+        assert!(snapshot.relationship.trajectory.is_empty());
+
+        let (_, committed_affect) = compute_affect(
+            "I'm so stressed and anxious about everything",
+            &persona,
+            Some(&mut snapshot),
+            false,
+        );
+        assert!(committed_affect.is_some());
+        assert_eq!(snapshot.bond.interaction_count, 1);
+        assert_eq!(snapshot.relationship.trajectory.len(), 1);
+    }
+
+    #[test]
+    fn compute_affect_composes_mood_and_bond_hints() {
+        let persona = zeroclaw_affect::CompanionPersona::default();
+        let mut snapshot = zeroclaw_affect::AffectSnapshot::default();
+        snapshot.bond.closeness = 0.5;
+        snapshot.bond.interaction_count = 30;
+        snapshot.bond.days_interacted = 30;
+        for i in 0..6 {
+            snapshot
+                .relationship
+                .record(i, affect_state(-0.6, 0.2, 0.7));
+        }
+
+        let (hint, affect) = compute_affect(
+            "I'm so stressed and anxious about everything",
+            &persona,
+            Some(&mut snapshot),
+            false,
+        );
+
+        assert!(affect.is_some());
+        assert!(hint.contains("[affect]"));
+        assert!(hint.contains("[mood]"));
+        assert!(hint.contains("[bond]"));
+    }
+
+    #[test]
+    fn compute_affect_low_confidence_relaxes_without_recording() {
+        let persona = zeroclaw_affect::CompanionPersona::default();
+        let mut snapshot = zeroclaw_affect::AffectSnapshot::default();
+        for i in 0..10 {
+            snapshot.relationship.record(i, affect_state(0.0, 0.2, 0.7));
+        }
+        snapshot
+            .relationship
+            .record(10, affect_state(-0.9, 0.9, 0.9));
+
+        assert_eq!(snapshot.bond.interaction_count, 0);
+        assert_eq!(snapshot.relationship.trajectory.len(), 11);
+
+        let (hint, affect) = compute_affect("ok", &persona, Some(&mut snapshot), false);
+
+        assert_eq!(hint, "");
+        assert!(affect.is_none());
+        assert_eq!(snapshot.bond.interaction_count, 0);
+        assert_eq!(snapshot.relationship.trajectory.len(), 11);
+        assert!(snapshot.relationship.latest().unwrap().valence > -0.9);
     }
 
     #[test]
@@ -3473,6 +3653,14 @@ mod tests {
         let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": ""});
         let session = Some("Aria".to_string());
         assert!(detect_character_conflict(&parsed, &session).is_none());
+    }
+
+    #[test]
+    fn native_consolidation_truth_table() {
+        assert!(should_consolidate_native(false, true, false));
+        assert!(!should_consolidate_native(false, true, true));
+        assert!(!should_consolidate_native(true, true, false));
+        assert!(!should_consolidate_native(false, false, false));
     }
 
     #[test]
