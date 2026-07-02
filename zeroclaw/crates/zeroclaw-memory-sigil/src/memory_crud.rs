@@ -7,6 +7,7 @@ use chrono::Utc;
 use rusqlite::{Connection, params, params_from_iter};
 use std::collections::HashMap;
 
+use crate::scorer;
 use crate::types::{MemoryCategory, MemoryEntry, MemoryScope, MemorySource};
 
 // ─── Error Type ──────────────────────────────────────────────────────────────
@@ -78,6 +79,26 @@ const ENTRY_COLUMNS: &str = r#"id,path,summary,text,importance,timestamp,categor
 
 fn join_fts_terms(terms: &[String]) -> String {
     terms.join(" ")
+}
+
+fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(embedding.len() * 4);
+    for value in embedding {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn deserialize_embedding(blob: &[u8]) -> Option<Vec<f32>> {
+    if !blob.len().is_multiple_of(4) {
+        return None;
+    }
+
+    Some(
+        blob.chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect(),
+    )
 }
 
 pub(crate) fn fts_terms_from_json(json: &str) -> String {
@@ -323,6 +344,139 @@ pub fn search_fts(
         .drain(..)
         .map(|(id, s)| (id, (s / max_score).clamp(0.0, 1.0)))
         .collect())
+}
+
+// ─── EMBEDDING CACHE ────────────────────────────────────────────────────────
+
+/// Store an embedding vector in the cache as little-endian f32 bytes.
+pub fn store_embedding(
+    conn: &Connection,
+    id: &str,
+    model: &str,
+    embedding: &[f32],
+) -> Result<(), MemoryError> {
+    conn.execute(
+        "INSERT OR REPLACE INTO embedding_cache (id, embedding, model, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![id, serialize_embedding(embedding), model, now_utc_iso()],
+    )?;
+    Ok(())
+}
+
+/// Load a cached embedding vector and model string.
+pub fn load_embedding(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
+    let mut stmt = conn.prepare("SELECT model, embedding FROM embedding_cache WHERE id = ?1")?;
+    let mut rows = stmt.query(params![id])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+
+    let model: String = row.get(0)?;
+    let blob: Vec<u8> = row.get(1)?;
+    Ok(deserialize_embedding(&blob).map(|embedding| (model, embedding)))
+}
+
+/// Return newest non-archived memories that do not have cached embeddings.
+pub fn entries_missing_embeddings(
+    conn: &Connection,
+    path_prefix: Option<&str>,
+    limit: usize,
+) -> Result<Vec<(String, String)>, MemoryError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let path_like = path_prefix.map(|p| format!("{p}%"));
+    let sql = if path_like.is_some() {
+        "SELECT m.id, m.text
+         FROM memories m
+         LEFT JOIN embedding_cache e ON e.id = m.id
+         WHERE m.archived = 0
+           AND e.id IS NULL
+           AND m.path LIKE ?1
+         ORDER BY m.timestamp DESC
+         LIMIT ?2"
+    } else {
+        "SELECT m.id, m.text
+         FROM memories m
+         LEFT JOIN embedding_cache e ON e.id = m.id
+         WHERE m.archived = 0
+           AND e.id IS NULL
+         ORDER BY m.timestamp DESC
+         LIMIT ?1"
+    };
+    let mut stmt = conn.prepare(sql)?;
+
+    let rows = if let Some(ref pl) = path_like {
+        stmt.query_map(params![pl, limit as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map(params![limit as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+    };
+
+    Ok(rows)
+}
+
+/// Exact brute-force vector search over cached embeddings.
+pub fn search_vec_brute(
+    conn: &Connection,
+    query_vec: &[f32],
+    top_k: usize,
+    path_prefix: Option<&str>,
+) -> Result<HashMap<String, f64>, MemoryError> {
+    if top_k == 0 {
+        return Ok(HashMap::new());
+    }
+
+    let path_like = path_prefix.map(|p| format!("{p}%"));
+    let sql = if path_like.is_some() {
+        "SELECT e.id, e.embedding
+         FROM embedding_cache e
+         JOIN memories m ON m.id = e.id
+         WHERE m.archived = 0
+           AND m.path LIKE ?1"
+    } else {
+        "SELECT e.id, e.embedding
+         FROM embedding_cache e
+         JOIN memories m ON m.id = e.id
+         WHERE m.archived = 0"
+    };
+    let mut stmt = conn.prepare(sql)?;
+
+    let rows = if let Some(ref pl) = path_like {
+        stmt.query_map(params![pl], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut scored = Vec::new();
+    for (id, blob) in rows {
+        let Some(embedding) = deserialize_embedding(&blob) else {
+            continue;
+        };
+        let score = scorer::cosine_similarity(query_vec, &embedding);
+        if score > 0.0 {
+            scored.push((id, score));
+        }
+    }
+
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored.truncate(top_k);
+    Ok(scored.into_iter().collect())
 }
 
 // ─── FETCH BY IDS ────────────────────────────────────────────────────────────
@@ -709,6 +863,48 @@ mod crud_tests {
             .expect("Chinese query should hit the saved memory");
 
         assert!(score.is_finite(), "FTS score should be finite: {score}");
+    }
+
+    #[test]
+    fn embedding_blob_round_trip() {
+        let conn = setup();
+
+        store_embedding(&conn, "embed-1", "test-model", &[0.25, -1.5, 3.0]).unwrap();
+        let (model, embedding) = load_embedding(&conn, "embed-1")
+            .unwrap()
+            .expect("embedding should exist");
+
+        assert_eq!(model, "test-model");
+        assert_eq!(embedding, vec![0.25, -1.5, 3.0]);
+    }
+
+    #[test]
+    fn missing_embeddings_work_list() {
+        let mut conn = setup();
+        let mut embedded = test_memory("embedded");
+        embedded.text = "embedded memory".to_string();
+        let mut missing = test_memory("missing");
+        missing.text = "missing embedding memory".to_string();
+        upsert(&mut conn, &embedded).unwrap();
+        upsert(&mut conn, &missing).unwrap();
+        store_embedding(&conn, "embedded", "test-model", &[1.0, 0.0]).unwrap();
+
+        let missing_rows =
+            entries_missing_embeddings(&conn, Some("/chat/test_char/memories"), 10).unwrap();
+
+        assert_eq!(missing_rows, vec![("missing".to_string(), missing.text)]);
+        assert!(
+            entries_missing_embeddings(&conn, Some("/chat/test_char/memories"), 0)
+                .unwrap()
+                .is_empty(),
+            "limit 0 returns no work"
+        );
+        assert!(
+            entries_missing_embeddings(&conn, Some("/chat/other/memories"), 10)
+                .unwrap()
+                .is_empty(),
+            "non-matching path_prefix returns no work"
+        );
     }
 
     #[test]

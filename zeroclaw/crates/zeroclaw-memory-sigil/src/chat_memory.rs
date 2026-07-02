@@ -4,7 +4,7 @@
 // with save/recall/inject operations for the chat pipeline.
 
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::memory_crud::{self, MemoryError};
@@ -111,6 +111,17 @@ impl ChatMemoryStore {
         query: &str,
         top_k: usize,
     ) -> Result<Vec<SearchResult>, MemoryError> {
+        self.recall_memories_with_vector(character_name, query, None, top_k)
+    }
+
+    /// Search for memories relevant to a query, optionally unioning vector hits.
+    pub fn recall_memories_with_vector(
+        &self,
+        character_name: &str,
+        query: &str,
+        query_vec: Option<&[f32]>,
+        top_k: usize,
+    ) -> Result<Vec<SearchResult>, MemoryError> {
         if should_skip_query(query) {
             return Ok(vec![]);
         }
@@ -124,12 +135,27 @@ impl ChatMemoryStore {
 
         let path_prefix = format!("/chat/{character_name}/memories");
         let fts_scores = memory_crud::search_fts(&conn, query, top_k * 2, Some(&path_prefix))?;
+        let vec_scores = if let Some(qv) = query_vec {
+            memory_crud::search_vec_brute(&conn, qv, top_k * 2, Some(&path_prefix))?
+        } else {
+            HashMap::new()
+        };
 
-        if fts_scores.is_empty() {
+        if fts_scores.is_empty() && vec_scores.is_empty() {
+            return Ok(vec![]);
+        }
+        if query_vec.is_none() && fts_scores.is_empty() {
             return Ok(vec![]);
         }
 
-        let ids: Vec<String> = fts_scores.keys().cloned().collect();
+        let ids: Vec<String> = if query_vec.is_some() {
+            let mut seen: HashSet<String> = HashSet::new();
+            seen.extend(fts_scores.keys().cloned());
+            seen.extend(vec_scores.keys().cloned());
+            seen.into_iter().collect()
+        } else {
+            fts_scores.keys().cloned().collect()
+        };
         let entries = memory_crud::fetch_by_ids(&conn, &ids)?;
 
         // Compute symbolic scores
@@ -143,12 +169,18 @@ impl ChatMemoryStore {
         // Build hybrid scores
         let entries_ref: HashMap<String, &MemoryEntry> =
             entries.iter().map(|(k, v)| (k.clone(), v)).collect();
-        let weights = scorer::HybridWeights::default();
+        let weights = if query_vec.is_some() {
+            scorer::HybridWeights {
+                use_rrf: true,
+                ..Default::default()
+            }
+        } else {
+            scorer::HybridWeights::default()
+        };
         let access_times = memory_crud::get_access_times(&conn, &ids).unwrap_or_default();
-        let empty_vec_scores: HashMap<String, f64> = HashMap::new();
         let scores = scorer::hybrid_score(
             &entries_ref,
-            &empty_vec_scores,
+            &vec_scores,
             &fts_scores,
             &symbolic_scores,
             &weights,
@@ -310,10 +342,26 @@ impl ChatMemoryStore {
         character_name: &str,
         conversation_text: &str,
     ) -> String {
-        self.inject_memories_into_prompt_with(
+        self.inject_memories_into_prompt_with_vector_options(
             character_name,
             conversation_text,
             pattern_injection_enabled(),
+            None,
+        )
+    }
+
+    /// Inject relevant memories into a prompt using an optional query vector.
+    pub fn inject_memories_into_prompt_with_vector(
+        &self,
+        character_name: &str,
+        conversation_text: &str,
+        query_vec: Option<&[f32]>,
+    ) -> String {
+        self.inject_memories_into_prompt_with_vector_options(
+            character_name,
+            conversation_text,
+            pattern_injection_enabled(),
+            query_vec,
         )
     }
 
@@ -325,6 +373,21 @@ impl ChatMemoryStore {
         conversation_text: &str,
         inject_patterns: bool,
     ) -> String {
+        self.inject_memories_into_prompt_with_vector_options(
+            character_name,
+            conversation_text,
+            inject_patterns,
+            None,
+        )
+    }
+
+    fn inject_memories_into_prompt_with_vector_options(
+        &self,
+        character_name: &str,
+        conversation_text: &str,
+        inject_patterns: bool,
+        query_vec: Option<&[f32]>,
+    ) -> String {
         // Use the last user message as the recall query
         let query = extract_last_user_message(conversation_text);
         let query = match query {
@@ -332,18 +395,12 @@ impl ChatMemoryStore {
             None => return String::new(),
         };
 
-        let memories_block = match self.recall_memories(character_name, &query, 5) {
-            Ok(results) if results.is_empty() => String::new(),
-            Ok(results) => {
-                let mut lines = vec!["[Relevant memories from past conversations]".to_string()];
-                for r in &results {
-                    let ts = &r.entry.timestamp[..10.min(r.entry.timestamp.len())];
-                    lines.push(format!("- ({}, {}) {}", ts, r.entry.category, r.entry.text));
-                }
-                lines.join("\n")
-            }
-            Err(_) => String::new(),
-        };
+        let memories_block =
+            match self.recall_memories_with_vector(character_name, &query, query_vec, 5) {
+                Ok(results) if results.is_empty() => String::new(),
+                Ok(results) => format_memories_block(&results),
+                Err(_) => String::new(),
+            };
 
         // Slice 3c: learned patterns are an OPTIONAL appendix, off by default.
         // When off, `pattern_block` is empty and the return value is
@@ -461,6 +518,15 @@ fn extract_last_user_message(conversation_text: &str) -> Option<String> {
     last_user
 }
 
+fn format_memories_block(results: &[SearchResult]) -> String {
+    let mut lines = vec!["[Relevant memories from past conversations]".to_string()];
+    for r in results {
+        let ts = &r.entry.timestamp[..10.min(r.entry.timestamp.len())];
+        lines.push(format!("- ({}, {}) {}", ts, r.entry.category, r.entry.text));
+    }
+    lines.join("\n")
+}
+
 // ─── Continuity projection helpers (Slice 3) ────────────────────────────────
 
 /// Read a `counters.<key>` i64 from a memory's metadata, defaulting to 0.
@@ -503,6 +569,11 @@ mod tests {
         (dir, store)
     }
 
+    fn store_test_embedding(store: &ChatMemoryStore, character: &str, id: &str, embedding: &[f32]) {
+        let conn = crate::schema::open(&store.db_path_for(character)).unwrap();
+        memory_crud::store_embedding(&conn, id, "test-model", embedding).unwrap();
+    }
+
     #[test]
     fn save_and_recall() {
         let (_dir, store) = temp_store();
@@ -523,6 +594,108 @@ mod tests {
             .recall_memories("test_char", "prefer dark mode everything", 5)
             .unwrap();
         assert!(!memories.is_empty(), "Should recall saved memory");
+    }
+
+    #[test]
+    fn vector_channel_surfaces_semantic_matches_without_keywords() {
+        let (_dir, store) = temp_store();
+        let character = "vec_semantic";
+        let a_id = store
+            .save_chat_memory(character, "Alice", "user", "工作压力很大想辞职")
+            .unwrap()
+            .expect("memory A should be stored");
+        let b_id = store
+            .save_chat_memory(character, "Alice", "user", "今天天气不错")
+            .unwrap()
+            .expect("memory B should be stored");
+        store_test_embedding(&store, character, &a_id, &[1.0, 0.0, 0.0, 0.0]);
+        store_test_embedding(&store, character, &b_id, &[0.0, 1.0, 0.0, 0.0]);
+
+        let query = "被老板批评了";
+        let control = store.recall_memories(character, query, 5).unwrap();
+        assert!(
+            control.is_empty(),
+            "legacy recall should remain FTS-gated for zero-overlap query"
+        );
+
+        let qv = [1.0, 0.0, 0.0, 0.0];
+        let results = store
+            .recall_memories_with_vector(character, query, Some(&qv), 5)
+            .unwrap();
+
+        assert!(!results.is_empty(), "vector path should return memory A");
+        assert_eq!(results[0].entry.id, a_id);
+        assert!(
+            !results.iter().any(|r| r.entry.id == b_id),
+            "orthogonal memory B should not be surfaced"
+        );
+    }
+
+    #[test]
+    fn dual_channel_hit_outranks_fts_only() {
+        let (_dir, store) = temp_store();
+        let character = "dual_channel";
+        let a_id = store
+            .save_chat_memory(
+                character,
+                "Alice",
+                "user",
+                "shared zephyrcucumber token belongs to alpha memory",
+            )
+            .unwrap()
+            .expect("memory A should be stored");
+        let b_id = store
+            .save_chat_memory(
+                character,
+                "Alice",
+                "user",
+                "shared zephyrcucumber token belongs to beta memory",
+            )
+            .unwrap()
+            .expect("memory B should be stored");
+        store_test_embedding(&store, character, &a_id, &[1.0, 0.0, 0.0, 0.0]);
+        store_test_embedding(&store, character, &b_id, &[0.0, 1.0, 0.0, 0.0]);
+
+        let qv = [1.0, 0.0, 0.0, 0.0];
+        let results = store
+            .recall_memories_with_vector(character, "shared zephyrcucumber token", Some(&qv), 5)
+            .unwrap();
+
+        let a_score = results
+            .iter()
+            .find(|r| r.entry.id == a_id)
+            .expect("A should be recalled")
+            .score
+            .final_score;
+        let b_score = results
+            .iter()
+            .find(|r| r.entry.id == b_id)
+            .expect("B should be recalled")
+            .score
+            .final_score;
+
+        assert!(
+            a_score > b_score,
+            "dual-channel A should outrank FTS-only B: A={a_score} B={b_score}"
+        );
+    }
+
+    #[test]
+    fn none_vector_path_byte_identical() {
+        let (_dir, store) = temp_store();
+        let character = "legacy_none_vector";
+        let id = store
+            .save_chat_memory(character, "Alice", "user", "工作压力很大想辞职")
+            .unwrap()
+            .expect("memory should be stored");
+        store_test_embedding(&store, character, &id, &[1.0, 0.0, 0.0, 0.0]);
+
+        let results = store.recall_memories(character, "被老板批评了", 5).unwrap();
+
+        assert!(
+            results.is_empty(),
+            "legacy recall must not read embedding_cache when query_vec is None"
+        );
     }
 
     #[test]

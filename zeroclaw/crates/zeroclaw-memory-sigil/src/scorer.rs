@@ -45,7 +45,10 @@ pub fn normalize(v: f64) -> f64 {
 
 /// Cosine similarity between two equal-length f32 slices.
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    debug_assert_eq!(a.len(), b.len(), "vector dimension mismatch");
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+
     let mut dot = 0.0_f64;
     let mut mag_a = 0.0_f64;
     let mut mag_b = 0.0_f64;
@@ -338,6 +341,11 @@ mod tests {
         let a = vec![1.0_f32, 0.0];
         let b = vec![0.0_f32, 1.0];
         assert!(cosine_similarity(&a, &b).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cosine_dimension_mismatch_scores_zero() {
+        assert_eq!(cosine_similarity(&[1.0, 0.0], &[1.0, 0.0, 0.0]), 0.0);
     }
 
     #[test]
