@@ -21,7 +21,7 @@ dist-ssr
 .agent/claude-code-runs/
 zeroclaw/.agent/claude-code-runs/
 
-# Python bytecode
+# Python bytecode (helper scripts)
 __pycache__/
 *.pyc
 

@@ -10,22 +10,26 @@ import {
   deleteBookmark,
   createBookmark,
   ChatBookmark,
-} from '../services/bookmarkService';
-import { selectNextCharacter, updateGroupChat } from '../services/groupChatService';
-import { createNewChatFileName } from '../services/chatService';
-import { useToast } from '../components/Toast';
-import { useLanguage } from '../i18n';
-import { useSpeechRecognition } from './useSpeechRecognition';
-import { generateId } from '../utils/id';
-import { appFeatures } from '../config/features';
-import { useCharacterManagement } from './useCharacterManagement';
-import { useChatPersistence } from './useChatPersistence';
-import { useChatGeneration } from './useChatGeneration';
-import { useMessageActions } from './useMessageActions';
-import { useChatPush } from './useChatPush';
-import { confirm as confirmDialog, prompt as promptDialog } from '../services/dialogService';
-import { indexMessages, pathToRoot } from './useMessageTree';
-import type { StudioTab } from '../components/StudioRail';
+} from "../services/bookmarkService";
+import {
+  selectNextCharacter,
+  updateGroupChat,
+} from "../services/groupChatService";
+import { createNewChatFileName } from "../services/chatService";
+import { useToast } from "../components/Toast";
+import { useLanguage } from "../i18n";
+import { useSpeechRecognition } from "./useSpeechRecognition";
+import { generateId } from "../utils/id";
+import { appFeatures } from "../config/features";
+import { useCharacterManagement } from "./useCharacterManagement";
+import { useChatPersistence } from "./useChatPersistence";
+import { useChatGeneration } from "./useChatGeneration";
+import { useMessageActions } from "./useMessageActions";
+import { useChatPush } from "./useChatPush";
+import { confirm as confirmDialog, prompt as promptDialog } from "../services/dialogService";
+import { indexMessages, pathToRoot } from "./useMessageTree";
+import type { StudioTab } from "../components/StudioRail";
+import { useUIStore } from "../store/uiStore";
 
 export const useAppLogic = () => {
   const { t, language, setLanguage } = useLanguage();
@@ -70,29 +74,17 @@ export const useAppLogic = () => {
     [messageTree, activeLeafId]
   );
 
-  // ==================== UI STATE ====================
-  const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
+  // ==================== UI STATE (via zustand) ====================
+  const ui = useUIStore();
   // ==================== STUDIO RAIL STATE ====================
-  // The right-rail "Studio" drawer (Context / Tree / Memory inspector). Shares
-  // the right edge with Settings, so the App keeps them mutually exclusive.
   const [studioOpen, setStudioOpen] = useState(false);
   const [studioTab, setStudioTab] = useState<StudioTab>('context');
 
   // ==================== BOOKMARK STATE ====================
   const [bookmarks, setBookmarks] = useState<ChatBookmark[]>([]);
-  const [showBookmarks, setShowBookmarks] = useState(false);
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   // ==================== GROUP CHAT STATE ====================
   const [activeGroup, setActiveGroup] = useState<GroupChat | null>(null);
-  const [showGroupManager, setShowGroupManager] = useState(false);
-
-  // ==================== IMAGE GENERATION STATE ====================
-  const [showImageGen, setShowImageGen] = useState(false);
-  const [imageGenPrompt, setImageGenPrompt] = useState<string | undefined>(undefined);
 
   // ==================== TOKEN COUNT ====================
   const [tokenCount, setTokenCount] = useState(0);
@@ -248,8 +240,8 @@ export const useAppLogic = () => {
     if (!ok) return;
 
     setMessages(bookmark.messages);
-    setShowBookmarks(false);
-    toast.success('Restored from bookmark');
+    ui.setShowBookmarks(false);
+    toast.success("Restored from bookmark");
   };
 
   const handleDeleteBookmark = async (bookmarkId: string, e: React.MouseEvent) => {
@@ -277,7 +269,7 @@ export const useAppLogic = () => {
     }
 
     setActiveGroup(group);
-    setShowGroupManager(false);
+    ui.setShowGroupManager(false);
 
     const newFileName = createNewChatFileName(`Group-${group.name}`);
     chatPersistence.setCurrentChatFileName(newFileName);
@@ -315,12 +307,12 @@ export const useAppLogic = () => {
   // ==================== IMAGE GENERATION ====================
   const handleGenerateImage = (prompt: string) => {
     if (!appFeatures.imageGeneration) {
-      toast.error('Image generation is disabled in this build');
+      toast.error("Image generation is disabled in this build");
       return;
     }
 
-    setImageGenPrompt(prompt);
-    setShowImageGen(true);
+    ui.setImageGenPrompt(prompt);
+    ui.setShowImageGen(true);
   };
 
   // ==================== CLEAR CHAT ====================
@@ -379,14 +371,14 @@ export const useAppLogic = () => {
     toggleVoiceInput,
 
     // UI
-    leftSidebarOpen,
-    setLeftSidebarOpen,
-    rightSidebarOpen,
-    setRightSidebarOpen,
-    mobileMenuOpen,
-    setMobileMenuOpen,
-    mobileSettingsOpen,
-    setMobileSettingsOpen,
+    leftSidebarOpen: ui.leftSidebarOpen,
+    setLeftSidebarOpen: ui.setLeftSidebarOpen,
+    rightSidebarOpen: ui.rightSidebarOpen,
+    setRightSidebarOpen: ui.setRightSidebarOpen,
+    mobileMenuOpen: ui.mobileMenuOpen,
+    setMobileMenuOpen: ui.setMobileMenuOpen,
+    mobileSettingsOpen: ui.mobileSettingsOpen,
+    setMobileSettingsOpen: ui.setMobileSettingsOpen,
     studioOpen,
     setStudioOpen,
     studioTab,
@@ -408,21 +400,21 @@ export const useAppLogic = () => {
 
     // Bookmarks
     bookmarks,
-    showBookmarks,
-    setShowBookmarks,
-    showMoreMenu,
-    setShowMoreMenu,
+    showBookmarks: ui.showBookmarks,
+    setShowBookmarks: ui.setShowBookmarks,
+    showMoreMenu: ui.showMoreMenu,
+    setShowMoreMenu: ui.setShowMoreMenu,
 
     // Group chat
     activeGroup,
-    showGroupManager,
-    setShowGroupManager,
+    showGroupManager: ui.showGroupManager,
+    setShowGroupManager: ui.setShowGroupManager,
 
     // Image gen
-    showImageGen,
-    setShowImageGen,
-    imageGenPrompt,
-    setImageGenPrompt,
+    showImageGen: ui.showImageGen,
+    setShowImageGen: ui.setShowImageGen,
+    imageGenPrompt: ui.imageGenPrompt,
+    setImageGenPrompt: ui.setImageGenPrompt,
 
     // Token count
     tokenCount,
