@@ -107,25 +107,25 @@ pub async fn handle_image_gen(
 }
 
 pub async fn handle_serve_image(
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     if id.contains('/') || id.contains("..") || id.contains('\\') {
         return (StatusCode::BAD_REQUEST, "Invalid image id").into_response();
     }
 
-    let home = directories::UserDirs::new()
-        .map(|d| d.home_dir().to_path_buf())
-        .unwrap_or_default();
-    let path = home.join(".zeroclaw").join("data").join("images").join(&id);
+    // Serve from the SAME directory the generator writes to — the configured
+    // data_dir — not a hardcoded ~/.zeroclaw path. With a customized data_dir or
+    // ZEROCLAW_CONFIG_DIR the generator wrote elsewhere, so the old hardcoded
+    // read 404'd every generated image.
+    let images_dir = state.config.read().data_dir.join("images");
+    let path = images_dir.join(&id);
 
     if !path.exists() {
         return (StatusCode::NOT_FOUND, "Image not found").into_response();
     }
 
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
     let content_type = match ext {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -207,7 +207,7 @@ async fn generate_xai_image(
     };
 
     let mime = zeroclaw_tools::xai_common::image_mime_type(&image_bytes);
-    let ext = match &mime[..] {
+    let ext = match mime {
         "image/png" => "png",
         "image/jpeg" => "jpg",
         "image/webp" => "webp",
@@ -221,8 +221,7 @@ async fn generate_xai_image(
 
     let filename = format!("{}.{}", Uuid::new_v4(), ext);
     let file_path = images_dir.join(&filename);
-    std::fs::write(&file_path, &image_bytes)
-        .map_err(|e| format!("Failed to write image: {e}"))?;
+    std::fs::write(&file_path, &image_bytes).map_err(|e| format!("Failed to write image: {e}"))?;
 
     Ok(format!("/api/images/{filename}"))
 }

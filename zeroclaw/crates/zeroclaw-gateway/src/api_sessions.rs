@@ -16,8 +16,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::require_auth;
 use crate::AppState;
+use crate::api::require_auth;
 use zeroclaw_infra::session_backend::ConversationNode;
 
 #[derive(Debug, Serialize)]
@@ -190,6 +190,31 @@ pub async fn handle_sessions_migrate(
         .map(|n| n.msg_id)
         .collect();
 
+    // Validate every parent reference up-front — before any append — so a bad
+    // parent rejects the whole batch atomically. Otherwise a list like
+    // [A(root), B(parent=A), C(parent=unknown)] would append A and B, then 400
+    // on C, leaving a partial write the client's error path can't see.
+    {
+        let mut will_exist = existing.clone();
+        for node in &body.nodes {
+            if let Some(ref parent_id) = node.parent_id {
+                if !will_exist.contains(parent_id) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "Node {} references parent {} that is neither already persisted nor earlier in this request",
+                                node.id, parent_id
+                            ),
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+            will_exist.insert(node.id.clone());
+        }
+    }
+
     let mut known_ids = existing.clone();
     let mut inserted = 0usize;
     let mut skipped = 0usize;
@@ -198,20 +223,6 @@ pub async fn handle_sessions_migrate(
         if known_ids.contains(&node.id) {
             skipped += 1;
             continue;
-        }
-        if let Some(ref parent_id) = node.parent_id {
-            if !known_ids.contains(parent_id) {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": format!(
-                            "Node {} references parent {} that is neither already persisted nor earlier in this request",
-                            node.id, parent_id
-                        ),
-                    })),
-                )
-                    .into_response();
-            }
         }
 
         let created_at = node.timestamp.as_ref().and_then(|ts| {

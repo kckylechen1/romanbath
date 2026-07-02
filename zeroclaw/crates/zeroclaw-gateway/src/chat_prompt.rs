@@ -623,10 +623,8 @@ mod tests {
 
     #[test]
     fn read_first_existing_text_returns_first_readable() {
-        let dir = std::env::temp_dir().join(format!(
-            "zeroclaw_chat_prompt_test_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("zeroclaw_chat_prompt_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let p1 = dir.join("missing.txt");
         let p2 = dir.join("present.txt");

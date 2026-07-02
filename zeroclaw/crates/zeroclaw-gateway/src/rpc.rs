@@ -1,9 +1,9 @@
-use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::core::RpcResult;
-use serde::{Deserialize, Serialize};
-use ts_rs::TS;
-use std::sync::Arc;
+use jsonrpsee::proc_macros::rpc;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use ts_rs::TS;
 use zeroclaw_config::schema::Config;
 use zeroclaw_infra::session_backend::SessionBackend;
 
@@ -122,14 +122,20 @@ impl RpcApiServer for RpcServerImpl {
     async fn session_migrate(&self, req: MigrateRequest) -> RpcResult<MigrateResult> {
         use zeroclaw_infra::session_backend::ConversationNode;
 
-        let backend = self
-            .state
-            .session_backend
-            .as_ref()
-            .ok_or_else(|| jsonrpsee::types::ErrorObject::owned(-32000, "Session persistence is disabled", None::<()>))?;
+        let backend = self.state.session_backend.as_ref().ok_or_else(|| {
+            jsonrpsee::types::ErrorObject::owned(
+                -32000,
+                "Session persistence is disabled",
+                None::<()>,
+            )
+        })?;
 
         if req.session_key.trim().is_empty() {
-            return Err(jsonrpsee::types::ErrorObject::owned(-32602, "session_key must not be empty", None::<()>));
+            return Err(jsonrpsee::types::ErrorObject::owned(
+                -32602,
+                "session_key must not be empty",
+                None::<()>,
+            ));
         }
 
         let existing: std::collections::HashSet<String> = backend
@@ -174,9 +180,13 @@ impl RpcApiServer for RpcServerImpl {
                 created_at,
             };
 
-            backend
-                .append_node(&req.session_key, &conv)
-                .map_err(|e| jsonrpsee::types::ErrorObject::owned(-32603, format!("Append failed: {e}"), None::<()>))?;
+            backend.append_node(&req.session_key, &conv).map_err(|e| {
+                jsonrpsee::types::ErrorObject::owned(
+                    -32603,
+                    format!("Append failed: {e}"),
+                    None::<()>,
+                )
+            })?;
 
             known_ids.insert(node.id.clone());
             inserted += 1;

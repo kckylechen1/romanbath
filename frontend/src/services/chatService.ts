@@ -434,13 +434,30 @@ export async function migrateCharacterToServer(
 ): Promise<{ inserted: number; skipped: number } | null> {
   if (messages.length === 0) return null;
   const sessionKey = sessionKeyForCharacter(characterName);
-  const nodes = messages.map((msg) => ({
-    id: msg.id,
-    parent_id: msg.parentId ?? null,
-    role: msg.role === Role.Model ? 'assistant' : 'user',
-    content: msg.content,
-    timestamp: new Date(msg.timestamp).toISOString(),
-  }));
+  // The server rejects empty-content nodes (they aren't meaningful conversation
+  // tree nodes), which would fail the WHOLE batch and leave the chat unsynced
+  // forever. Splice empty messages out of the parent chain instead: skip them,
+  // and re-point their children to the nearest non-empty ancestor so the tree
+  // stays connected. A chat with no empty messages produces an identical list.
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const skip = new Set(
+    messages.filter((m) => m.content.trim().length === 0).map((m) => m.id)
+  );
+  const resolveParent = (parentId: string | null): string | null => {
+    let p = parentId;
+    while (p && skip.has(p)) p = byId.get(p)?.parentId ?? null;
+    return p;
+  };
+  const nodes = messages
+    .filter((m) => !skip.has(m.id))
+    .map((msg) => ({
+      id: msg.id,
+      parent_id: resolveParent(msg.parentId ?? null),
+      role: msg.role === Role.Model ? 'assistant' : 'user',
+      content: msg.content,
+      timestamp: new Date(msg.timestamp).toISOString(),
+    }));
+  if (nodes.length === 0) return null;
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const token = getToken();

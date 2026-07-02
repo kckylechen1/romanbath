@@ -3304,7 +3304,8 @@ mod tests {
 
     #[test]
     fn detect_character_conflict_returns_none_when_no_session_character() {
-        let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": "Aria"});
+        let parsed =
+            serde_json::json!({"type": "message", "content": "hi", "character_name": "Aria"});
         assert!(detect_character_conflict(&parsed, &None).is_none());
     }
 
@@ -3317,14 +3318,16 @@ mod tests {
 
     #[test]
     fn detect_character_conflict_returns_none_when_same_character() {
-        let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": "Aria"});
+        let parsed =
+            serde_json::json!({"type": "message", "content": "hi", "character_name": "Aria"});
         let session = Some("Aria".to_string());
         assert!(detect_character_conflict(&parsed, &session).is_none());
     }
 
     #[test]
     fn detect_character_conflict_returns_some_when_different() {
-        let parsed = serde_json::json!({"type": "message", "content": "hi", "character_name": "Bria"});
+        let parsed =
+            serde_json::json!({"type": "message", "content": "hi", "character_name": "Bria"});
         let session = Some("Aria".to_string());
         let got = detect_character_conflict(&parsed, &session);
         assert_eq!(got, Some(("Aria".to_string(), "Bria".to_string())));

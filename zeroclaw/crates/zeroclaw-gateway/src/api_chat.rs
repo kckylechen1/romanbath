@@ -27,8 +27,8 @@ use std::convert::Infallible;
 use zeroclaw_api::model_provider::{ModelProvider, StreamOptions};
 use zeroclaw_memory_sigil::ChatMemoryStore;
 
-pub use crate::chat_prompt::{ChatRequest, RequestLorebookEntry};
 use crate::chat_prompt::build_messages;
+pub use crate::chat_prompt::{ChatRequest, RequestLorebookEntry};
 
 #[derive(Debug, Serialize)]
 pub struct ChatResponse {

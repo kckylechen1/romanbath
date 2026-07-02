@@ -124,17 +124,15 @@ impl CardManager {
         let safe_name = sanitize_filename(&card.data.name);
         let json_path = self.cards_dir.join(format!("{safe_name}.json"));
 
-        if json_path.exists() {
-            if let Ok(existing_bytes) = fs::read(&json_path) {
-                if let Ok(existing_card) = serde_json::from_slice::<CharacterCard>(&existing_bytes) {
-                    if existing_card.data.name != card.data.name {
-                        return Err(CardError::AlreadyExists(format!(
-                            "A different character '{}' already occupies this slot",
-                            existing_card.data.name
-                        )));
-                    }
-                }
-            }
+        if json_path.exists()
+            && let Ok(existing_bytes) = fs::read(&json_path)
+            && let Ok(existing_card) = serde_json::from_slice::<CharacterCard>(&existing_bytes)
+            && existing_card.data.name != card.data.name
+        {
+            return Err(CardError::AlreadyExists(format!(
+                "A different character '{}' already occupies this slot",
+                existing_card.data.name
+            )));
         }
 
         let preserved_creation = if json_path.exists() {
@@ -218,12 +216,11 @@ impl CardManager {
             .and_then(|m| m.modified())
             .unwrap_or(UNIX_EPOCH);
 
-        if let Some(cache) = self.cache.lock().ok() {
-            if let Some(cached) = cache.get(&safe_name) {
-                if cached.mtime == mtime {
-                    return Ok(cached.card.clone());
-                }
-            }
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached) = cache.get(&safe_name)
+            && cached.mtime == mtime
+        {
+            return Ok(cached.card.clone());
         }
 
         let bytes = fs::read(&json_path)?;
