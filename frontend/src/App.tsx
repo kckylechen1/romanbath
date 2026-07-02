@@ -101,12 +101,14 @@ const AppContent: React.FC = () => {
   };
 
   // Global hotkeys: ⌘K command palette, ⌘\ toggle left sidebar, ⌘. toggle
-  // settings, ⌘J toggle Studio. These are chord bindings, so they're safe to
-  // fire even when an input has focus — the browser doesn't bind them by default.
+  // settings, ⌘J toggle Studio. These fire even when an input has focus, so we
+  // only match the bare mod+key chord — bailing on Shift/Alt keeps us clear of
+  // the browser's own Ctrl+Shift+J (Chrome console) / Ctrl+Shift+K (Firefox
+  // console) devtools bindings.
   useEffect(() => {
     const isMod = (e: KeyboardEvent): boolean => e.metaKey || e.ctrlKey;
     const onKey = (e: KeyboardEvent): void => {
-      if (!isMod(e)) return;
+      if (!isMod(e) || e.shiftKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === 'k') {
         e.preventDefault();

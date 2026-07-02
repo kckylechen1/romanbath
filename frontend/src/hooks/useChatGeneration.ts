@@ -82,6 +82,10 @@ export const useChatGeneration = (
   // to mergeServerNodes so a delete that didn't reach the server can't be
   // resurrected by a later hydration (survives reload). See tombstoneStore.
   const tombstonesRef = useRef<Set<string>>(new Set());
+  // Resolves once this chat's tombstones have loaded from IDB. Hydration awaits
+  // it before merging a server snapshot, so a fast local gateway can't win the
+  // race against a cold IDB read and resurrect a deleted branch.
+  const tombstonesReadyRef = useRef<Promise<void>>(Promise.resolve());
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const wsChatRef = useRef<WsChatConnection | null>(null);
@@ -194,9 +198,18 @@ export const useChatGeneration = (
     // resurrecting deleted nodes (IndexedDB read; usually resolves before the
     // server snapshot arrives over the network).
     tombstonesRef.current = new Set();
-    void getTombstones(selectedCharacter.id, currentChatFileName ?? 'default').then((ids) => {
-      tombstonesRef.current = new Set(ids);
-    });
+    tombstonesReadyRef.current = getTombstones(
+      selectedCharacter.id,
+      currentChatFileName ?? 'default'
+    )
+      .then((ids) => {
+        tombstonesRef.current = new Set(ids);
+      })
+      .catch(() => {
+        // IDB read failed — proceed with an empty tombstone set (best-effort,
+        // same as before this ref existed). Keep the promise resolved so
+        // hydration doesn't stall waiting on a rejected read.
+      });
   }, [selectedCharacter.id, currentChatFileName]);
 
   // Connect-on-load: open the persistent socket when a chat WITH HISTORY is
@@ -221,9 +234,12 @@ export const useChatGeneration = (
       onDone: () => {},
       onError: () => {},
       onAffect: (affect) => setCurrentAffect(affect),
-      onHistory: (nodes, activeLeaf) => {
+      onHistory: async (nodes, activeLeaf) => {
         if (hydratedChatsRef.current.has(chatKey)) return;
         hydratedChatsRef.current.add(chatKey);
+        // Ensure this chat's tombstones are loaded before the union-merge, or a
+        // deleted subtree can slip back in on a cold IDB + fast local gateway.
+        await tombstonesReadyRef.current;
         // X3 (re-enabled in inc 3b): adopt the server's active_leaf on FIRST
         // hydration. Regenerate/swipe/delete are now server-synced (alternate
         // turns + delete frames), so the server's active_leaf is no longer
@@ -348,12 +364,15 @@ export const useChatGeneration = (
         setIsTyping(false);
       },
       onAffect: (affect) => setCurrentAffect(affect),
-      onHistory: (nodes) => {
+      onHistory: async (nodes) => {
         // Reconcile with the server-authoritative tree ONCE per chat
         // (cross-device / fresh client). Union by id keeps local nodes.
         const chatKey = `${selectedCharacter.id}:${currentChatFileName ?? 'default'}`;
         if (hydratedChatsRef.current.has(chatKey)) return;
         hydratedChatsRef.current.add(chatKey);
+        // Await tombstones before the merge (see the load-path onHistory above)
+        // so a deleted subtree isn't resurrected on a cold IDB read.
+        await tombstonesReadyRef.current;
         setMessages((prev) => mergeServerNodes(prev, nodes, tombstonesRef.current));
       },
       onNodeEdited: applyNodeEdited,
